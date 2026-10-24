@@ -364,9 +364,10 @@ What the patch changes:
   which skip what Veda has not by what they need
   ([Python on Veda](../../documentation/PYTHON.md#the-port)).
   `config.site` answers configure's run-time checks.
-* **sqlite**: none; built from the amalgamation, with its unix-none VFS,
-  which locks no files (Veda's file system cannot arbitrate locks between
-  processes yet).
+* **sqlite**: none; built from the amalgamation, with its unix VFS, which
+  locks a database's file as on Linux, and without the write-ahead log
+  (`SQLITE_OMIT_WAL`), whose index is a shared mapping that writes its
+  file, which Veda's files do not take.
 * The others: none.
 
 ## Crates

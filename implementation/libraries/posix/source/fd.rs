@@ -216,8 +216,9 @@ pub fn replace(fd: i32, desc: Arc<Description>, cloexec: bool) -> Result<(), isi
         }
         t.slots[i].replace(Slot { desc, cloexec })
     };
-    // Closing may talk to a service: not under the lock.
-    drop(old);
+    if let Some(old) = old {
+        close(old);
+    }
     Ok(())
 }
 
@@ -227,8 +228,18 @@ pub fn remove(fd: i32) -> Result<(), isize> {
         let mut t = TABLE.lock();
         usize::try_from(fd).ok().and_then(|i| t.slots.get_mut(i)).and_then(|s| s.take()).ok_or(EBADF)?
     };
-    drop(old);
+    close(old);
     Ok(())
+}
+
+/// Closes a descriptor taken out of the table: as POSIX has it, the
+/// process's record locks on a file go as it closes any descriptor of the
+/// file ([`crate::lock::closed`]); its description closes with its last
+/// descriptor. Closing may talk to a service: never under the table's lock.
+fn close(slot: Slot) {
+    if let Object::File(f) = &slot.desc.object {
+        crate::lock::closed(f);
+    }
 }
 
 /// The descriptor `fd` was met not ready (`EAGAIN`), or emptied or filled
@@ -258,7 +269,7 @@ pub fn remove_range(first: usize, last: usize) {
         let end = t.slots.len().min(last.saturating_add(1));
         (first.min(end)..end).filter_map(|i| t.slots[i].take()).collect()
     };
-    drop(old);
+    old.into_iter().for_each(close);
 }
 
 /// Sets close-on-exec on every descriptor in `first..=last`.

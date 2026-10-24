@@ -261,12 +261,12 @@ says which each is:
   (`target/` keeps Veda's programs with their symbols).
 - **POSIX.** C programs and programs on the standard library run on musl,
   whose system calls go to `posix` (`implementation/libraries/posix`), a
-  POSIX layer in Rust: files are the VFS's, pipes and terminals kernel
-  sockets, network sockets `netd`'s, Unix domain sockets named by the VFS,
-  `epoll` a kernel port, memory files VMOs, `timerfd` an event its thread
-  signals, and threads kernel threads; `posix_spawn` starts processes (see
-  [C on Veda](C.md)). Python is such a program too, CPython with its
-  modules built in ([Python on Veda](PYTHON.md)).
+  POSIX layer in Rust: files and their locks are the VFS's, pipes and
+  terminals kernel sockets, network sockets `netd`'s, Unix domain sockets
+  named by the VFS, `epoll` a kernel port, memory files VMOs, `timerfd` an
+  event its thread signals, and threads kernel threads; `posix_spawn`
+  starts processes (see [C on Veda](C.md)). Python is such a program too,
+  CPython with its modules built in ([Python on Veda](PYTHON.md)).
 - **Services** register by name with the registry in `init`, and clients
   connect by name; a connection to a service not registered yet waits for
   it (up to 64 per process). Protocols are declared with `ipc`'s macros,
@@ -433,6 +433,17 @@ every other device to Linux in [the driver VM](DRIVERVM.md).
   the VFS while the socket is open. The VFS passes a socket its connections
   and datagrams through an inbox channel; a connection's bytes then go
   between the two programs, past the VFS.
+- **Locks.** The VFS arbitrates advisory locks between processes, as
+  Linux keeps them (`file::lock`, `vfs_core::locks`): `flock`'s, held by
+  an open file description, and locks on bytes, held by a process (POSIX's
+  record locks) or by an open file description (OFD locks). A process owns
+  its locks by a secret that the VFS drew for its connection
+  (`vfs::lock_owner`), and they go as that connection closes, as the
+  process ends; it takes them away itself as it closes a descriptor of the
+  file, as POSIX has it, the VFS not knowing which process holds a
+  connection. A request that would wait for ever is refused (`Deadlock`),
+  as Linux finds that; one that waits has a channel of its own, on which
+  the VFS says when it is granted.
 - **Limits.** A path is at most 4096 bytes (`MAX_PATH`), and a move that
   would take one beyond it is refused. Files grow only while memory is
   left for the rest of the system, and in `/home` while they fit on its

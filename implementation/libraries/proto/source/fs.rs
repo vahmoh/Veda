@@ -44,6 +44,14 @@
 //! back ([`vfs::Client::take_back`]): the browser lends its network
 //! process the folder of a page the user opens, while a page it has open
 //! needs it.
+//!
+//! **Locks.** The VFS arbitrates advisory locks between processes, as
+//! Linux does ([`file::Client::lock`]): `flock`'s, on a whole file, held by
+//! an open file; and locks on bytes, held by a process (POSIX's record
+//! locks, `fcntl`'s) or by an open file (Linux's OFD locks), which are in
+//! one another's way but not in `flock`'s. A process names itself as an
+//! owner by a secret only it has ([`vfs::Client::lock_owner`]); its locks
+//! go as it ends, an open file's as its last connection closes.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -75,8 +83,13 @@ enumeration! {
         /// The socket there is of another type (a stream socket's
         /// connection to a datagram socket).
         WrongType = 15,
-        /// The socket's queue is full: try again later.
+        /// The socket's queue is full, or a lock is in the way of the one
+        /// asked for: try again later.
         Busy = 16,
+        /// Waiting for the lock asked for would wait for ever: its holder
+        /// waits, directly or through others, for a lock the one asking
+        /// holds ([`file::Client::lock`]).
+        Deadlock = 17,
     }
 }
 
@@ -99,6 +112,7 @@ impl core::fmt::Display for FsError {
             FsError::Refused => "connection refused",
             FsError::WrongType => "wrong type of socket",
             FsError::Busy => "busy, try again",
+            FsError::Deadlock => "waiting for the lock would wait for ever",
         })
     }
 }
@@ -357,6 +371,74 @@ message! {
     }
 }
 
+/// What a lock is ([`LockRange::kind`]).
+pub mod lock_kind {
+    /// None: what unlocking asks for.
+    pub const NONE: u32 = 0;
+    /// Shared (`flock`'s `LOCK_SH`, `fcntl`'s `F_RDLCK`): others may hold
+    /// shared locks there too.
+    pub const SHARED: u32 = 1;
+    /// Exclusive (`LOCK_EX`, `F_WRLCK`): no one else may hold a lock there.
+    pub const EXCLUSIVE: u32 = 2;
+}
+
+/// The last byte a lock holds at most, the largest offset POSIX has: a
+/// lock to it goes on to the end of the file, wherever that comes (POSIX's
+/// `l_len` of 0).
+pub const LOCK_END: u64 = i64::MAX as u64;
+
+/// The bytes of the secret that names a process as the owner of locks
+/// ([`vfs::Client::lock_owner`]).
+pub const LOCK_OWNER_SIZE: usize = 16;
+
+message! {
+    /// A lock's kind and bytes ([`file::Client::lock`]).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub struct LockRange {
+        /// [`lock_kind`].
+        pub kind: u32,
+        /// Its first byte and its last, both held: 0 and [`LOCK_END`] for
+        /// the whole file, however long it grows.
+        pub start: u64,
+        pub end: u64,
+    }
+}
+
+message! {
+    /// A lock in another's way ([`file::Client::test_lock`]).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub struct LockHolder {
+        pub lock: LockRange,
+        /// The process that holds it, by the kernel object id it gave
+        /// ([`vfs::Client::lock_owner`]); none for an open file's.
+        pub process: Option<u64>,
+    }
+}
+
+message! {
+    /// What a lock request did ([`file::Client::lock`]).
+    #[derive(Debug)]
+    pub struct LockOutcome {
+        /// The lock waits to be granted: the VFS writes on this channel
+        /// once it is, or once it never will be ([`lock_event`]), and
+        /// forgets the request as the channel closes. None: done.
+        pub waiting: Option<Channel>,
+        /// Its owner, a process, holds locks on the file's bytes now: what
+        /// it takes away as it closes the file ([`file::Client::lock`]).
+        pub held: bool,
+    }
+}
+
+/// The event the VFS writes on a lock request's channel
+/// ([`LockOutcome::waiting`]).
+pub mod lock_event {
+    /// The lock was granted (`Ok`, saying as [`super::LockOutcome::held`]
+    /// does whether its owner holds locks on the file's bytes) or never
+    /// will be (`Err`: `Deadlock`; `BadFd` when its open file, or the file
+    /// itself, closed first). Payload: `Result<bool, FsError>`.
+    pub const DONE: u32 = 1;
+}
+
 protocol! {
     /// File system service.
     pub mod vfs = "vfs" {
@@ -499,6 +581,16 @@ protocol! {
         /// browser takes back the folder it lent its network process once
         /// no page it has open needs it.
         27 => fn take_back(loan: Bytes) -> Result<(), FsError>;
+        /// The secret ([`LOCK_OWNER_SIZE`] random bytes) by which this
+        /// connection's process owns locks on files' bytes, as POSIX's
+        /// record locks belong to a process ([`file::Client::lock`]): the
+        /// same each time. Only those it gives it to have it; its locks
+        /// go, and its requests waiting for one with them, as this
+        /// connection closes, as a process's do as it ends: a process asks
+        /// on the connection that lasts as long as it does. `koid` is its
+        /// kernel object id, as it says, which [`file::Client::test_lock`]
+        /// tells others of its locks (the first given stays).
+        28 => fn lock_owner(koid: u64) -> Result<Bytes, FsError>;
         /// Gives the shared memory object at `from` the name `to` as well,
         /// both in `/dev/shm` (as `link` does on Linux): `Exists` if `to`
         /// is taken. Nothing else has links (`Invalid`). A program
@@ -581,6 +673,45 @@ protocol! {
         /// a file whose bytes are the file system's own, which a mapping
         /// copies, and for a range past its last page.
         12 => fn pages(offset: u64, len: u64) -> Result<Vmo, FsError>;
+        /// Locks bytes of the file, or unlocks them (`lock.kind` of
+        /// `lock_kind::NONE`), as Linux's advisory locks are, for one of
+        /// three owners:
+        ///
+        /// * `whole`: this open file, with `flock`'s lock on the whole file
+        ///   (`lock`'s bytes count for nothing), which locks on bytes are
+        ///   not in the way of. One of the other kind that it holds goes
+        ///   first, as on Linux, even when the new one is not granted;
+        /// * `owner` empty: this open file, with a lock on `lock`'s bytes
+        ///   (Linux's OFD locks);
+        /// * `owner` a process's secret ([`vfs::Client::lock_owner`]): that
+        ///   process, with a lock on `lock`'s bytes, as POSIX's record
+        ///   locks are. POSIX has a process's locks on a file go when it
+        ///   closes any descriptor of the file: the process unlocks the
+        ///   whole file itself as it closes one, as the VFS cannot tell
+        ///   which process holds a connection.
+        ///
+        /// One owner's locks on bytes replace each other where they meet,
+        /// and merge with its locks of the same kind beside them. A shared
+        /// lock (on a file open to read) is in the way of other owners'
+        /// exclusive ones, an exclusive lock (on a file open to write) of
+        /// all theirs, `flock`'s in the same way (on a file open either
+        /// way). A lock in the way fails the request with `Busy`, or with
+        /// `wait` has it wait to be granted ([`LockOutcome::waiting`]). A
+        /// process's request that would wait for ever fails with
+        /// `Deadlock`, where Linux finds that: its lock's holder waits for
+        /// a lock the process holds, or for one of a process that does,
+        /// and so on, a few processes deep (an open file's waits are not
+        /// followed). `TooMany` when the VFS holds as many locks as it can,
+        /// `BadFd` for a lock that the open file's access does not allow.
+        13 => fn lock(owner: Bytes, whole: bool, lock: LockRange, wait: bool) -> Result<LockOutcome, FsError>;
+        /// The first lock on the file's bytes that is in the way of `lock`,
+        /// shared or exclusive, for `owner` (as [`file::Client::lock`] has
+        /// it), as POSIX's `F_GETLK` finds it: locks are kept each owner's
+        /// together, by their first bytes, owners in the order they first
+        /// locked the file. For `lock_kind::NONE` (Linux's `F_OFD_GETLK`
+        /// of `F_UNLCK`), the first of `owner`'s own among `lock`'s bytes.
+        /// None: no such lock.
+        14 => fn test_lock(owner: Bytes, lock: LockRange) -> Result<Option<LockHolder>, FsError>;
         /// The memory of a shared memory object (`/dev/shm`), to map as it
         /// is, shared with every process that maps it: a handle that can
         /// write it if the file was opened to write, its memory made to

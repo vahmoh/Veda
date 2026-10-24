@@ -15,6 +15,7 @@
 //! | pipes, `socketpair`, the terminal | socket endpoints ([`stream`], [`socket`], [`tty`]) |
 //! | TCP and UDP sockets, names | the network service: a channel per socket ([`inet`], [`socket`]), its resolver ([`resolve`]) |
 //! | Unix domain sockets | socket nodes of the VFS, which hand them connections and datagrams; socket endpoints and channels between the programs ([`unix`]) |
+//! | advisory locks (`flock`, `fcntl`'s, `lockf`) | the VFS, which arbitrates them between processes ([`lock`]) |
 //! | `epoll`, `eventfd` | a port per epoll instance ([`epoll`]); a counter of the layer's with an event ([`eventfd`]) |
 //! | `timerfd` | a timer of the layer's with an event, which a thread of the layer's signals as it expires ([`timerfd`]) |
 //! | `mmap` | the kernel's private memory, or a VMO per mapping ([`mem`]) |
@@ -72,6 +73,7 @@ mod inet;
 mod inherit;
 mod io;
 mod linux;
+mod lock;
 mod log;
 mod mem;
 mod memfd;

@@ -43,11 +43,13 @@ pub mod errno {
     pub const EROFS: isize = linux_raw_sys::errno::EROFS as isize;
     pub const EPIPE: isize = linux_raw_sys::errno::EPIPE as isize;
     pub const ERANGE: isize = linux_raw_sys::errno::ERANGE as isize;
+    pub const EDEADLK: isize = linux_raw_sys::errno::EDEADLK as isize;
     pub const ENAMETOOLONG: isize = linux_raw_sys::errno::ENAMETOOLONG as isize;
     pub const ENOLCK: isize = linux_raw_sys::errno::ENOLCK as isize;
     pub const ENOSYS: isize = linux_raw_sys::errno::ENOSYS as isize;
     pub const ENOTEMPTY: isize = linux_raw_sys::errno::ENOTEMPTY as isize;
     pub const ELOOP: isize = linux_raw_sys::errno::ELOOP as isize;
+    pub const EOVERFLOW: isize = linux_raw_sys::errno::EOVERFLOW as isize;
     pub const EILSEQ: isize = linux_raw_sys::errno::EILSEQ as isize;
     pub const ENOTSOCK: isize = linux_raw_sys::errno::ENOTSOCK as isize;
     pub const EOPNOTSUPP: isize = linux_raw_sys::errno::EOPNOTSUPP as isize;
@@ -157,6 +159,10 @@ pub mod fcntl {
     pub const GETLK: u32 = linux_raw_sys::general::F_GETLK;
     pub const SETLK: u32 = linux_raw_sys::general::F_SETLK;
     pub const SETLKW: u32 = linux_raw_sys::general::F_SETLKW;
+    /// Record locks held by the open file description (OFD locks).
+    pub const OFD_GETLK: u32 = linux_raw_sys::general::F_OFD_GETLK;
+    pub const OFD_SETLK: u32 = linux_raw_sys::general::F_OFD_SETLK;
+    pub const OFD_SETLKW: u32 = linux_raw_sys::general::F_OFD_SETLKW;
     pub const SETOWN: u32 = linux_raw_sys::general::F_SETOWN;
     pub const GETOWN: u32 = linux_raw_sys::general::F_GETOWN;
     pub const SETOWN_EX: u32 = linux_raw_sys::general::F_SETOWN_EX;
@@ -185,6 +191,8 @@ pub mod flock {
     pub const EX: u32 = linux_raw_sys::general::LOCK_EX;
     pub const NB: u32 = linux_raw_sys::general::LOCK_NB;
     pub const UN: u32 = linux_raw_sys::general::LOCK_UN;
+    /// Mandatory locks, which Linux no longer has, and ignores.
+    pub const MAND: u32 = linux_raw_sys::general::LOCK_MAND;
 }
 
 /// `sync_file_range` flags.

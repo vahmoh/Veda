@@ -33,6 +33,7 @@ pub fn fs(e: FsError) -> isize {
         FsError::Refused => ECONNREFUSED,
         FsError::WrongType => EPROTOTYPE,
         FsError::Busy => EAGAIN,
+        FsError::Deadlock => EDEADLK,
     }
 }
 

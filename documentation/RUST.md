@@ -176,9 +176,11 @@ Rust programs share the limits of C programs
   abstract names (`SocketAddr::from_abstract_name`) are not in the
   standard library for Veda, which sees a socket bound to one as unnamed
   (the C library has them, for `libc`'s calls).
-- **No links, permissions or file locks**: `fs::hard_link` (but between
-  `/dev/shm`'s shared memory objects) and `symlink` fail, permissions are
-  not kept, and `File::lock` and the like fail with `Unsupported`.
+- **No links or permissions, nor `File::lock`**: `fs::hard_link` (but
+  between `/dev/shm`'s shared memory objects) and `symlink` fail,
+  permissions are not kept, and `File::lock` and the like fail with
+  `Unsupported`: the standard library for Veda does not use the C
+  library's locks (`flock`) yet, which C programs have.
 - **Thread names** are the standard library's alone: panics and
   `thread::current` show them, the system does not.
 
@@ -220,7 +222,7 @@ CMake (for LLVM) and Python 3 (for `x.py`) are among the toolchain's
 - **`verification/rust/stdlib.rs`** checks the standard library, from
   files, threads, processes and pipes to sockets (Unix domain, TCP and
   UDP, shared with child processes, and the host's servers through QEMU),
-  names, panics, backtraces and a deep stack, and that file locks,
+  names, panics, backtraces and a deep stack, and that `File::lock`,
   `pre_exec` and `exec` fail. `cargo automation build` compiles it
   twice into `/system/tests/rust`: position-independent (`stdlib`) and at
   a fixed address (`stdlib-fixed`).

@@ -662,7 +662,9 @@ What needs files works within those places:
   File System API's writes) go in `/tmp/browser`, its `TMPDIR`.
 * **Its databases** (IndexedDB, local storage, ITP's) commit with `fsync`
   as on Linux: a confined connection's `sync` returns at once, and the
-  VFS saves what changed within seconds, as it saves everything.
+  VFS saves what changed within seconds, as it saves everything. SQLite
+  locks their files, as on Linux, and keeps a rollback journal: Veda's
+  SQLite has no write-ahead log ([C on Veda](C.md#limits)).
 
 It first makes the directories on the way to its places (which the
 sandbox lets it look at but not change), then checks that what it gave

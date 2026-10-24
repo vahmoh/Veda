@@ -87,8 +87,8 @@ pub fn open_resolved(r: &Resolved, flags: u32) -> Result<alloc::sync::Arc<Descri
             return Err(EISDIR);
         }
         match error::ipc(vfs::with(|c| c.open_file(r.path.clone(), vfs_flags(flags)))?) {
-            Ok((channel, _)) => {
-                return Ok(Description::new(Object::File(VfsFile::opened(channel, r.path.clone())), flags));
+            Ok((channel, st)) => {
+                return Ok(Description::new(Object::File(VfsFile::opened(channel, r.path.clone(), &st)), flags));
             }
             // A directory can be opened for reading (to list it, to stat
             // it, as a base for *at calls).
@@ -355,8 +355,8 @@ pub unsafe fn truncate(name: usize, len: i64) -> SysResult {
     let len = u64::try_from(len).map_err(|_| EINVAL)?;
     // SAFETY: the program passed a string.
     let r = vfs::resolve_at(at::FDCWD, unsafe { user::cstr(name)? })?;
-    let (channel, _) = error::ipc(vfs::with(|c| c.open_file(r.path.clone(), open_flags::WRITE))?)?;
-    VfsFile::opened(channel, r.path).truncate(len)?;
+    let (channel, st) = error::ipc(vfs::with(|c| c.open_file(r.path.clone(), open_flags::WRITE))?)?;
+    VfsFile::opened(channel, r.path, &st).truncate(len)?;
     Ok(0)
 }
 

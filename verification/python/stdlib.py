@@ -12,8 +12,8 @@ and the empty input as its standard input: `python3 stdlib.py`, or
 `python3 stdlib.py host ADDRESS TCP-PORT UDP-PORT` to reach the host
 machine's servers too (see `check_host`).
 
-What Veda does not have (fork, file locks, dynamic loading...) is checked
-too: it must fail as documentation/PYTHON.md says.
+What Veda does not have (fork, dynamic loading...) is checked too: it must
+fail as documentation/PYTHON.md says.
 """
 
 import errno
@@ -708,6 +708,10 @@ def check_sqlite():
         ensure(connection.execute("SELECT json_extract('{\"a\": [1, 2]}', '$.a[1]'), sqrt(16)").fetchone() == (2, 4.0),
                "JSON and the mathematical functions")
         connection.execute("CREATE VIRTUAL TABLE boxes USING rtree(id, x0, x1)")
+        # No write-ahead log: its index would be a shared mapping that
+        # writes the file, which Veda's files do not take.
+        mode = connection.execute("PRAGMA journal_mode = wal").fetchone()
+        ensure(mode == ("delete",), f"journal_mode = wal gave {mode}")
         connection.close()
     import dbm.sqlite3
 
@@ -716,6 +720,42 @@ def check_sqlite():
             db[b"key"] = b"value"
         with dbm.open(os.path.join(tmp, "db"), "r") as db:
             ensure(db[b"key"] == b"value", "dbm.sqlite3")
+
+
+def check_sqlite_processes():
+    import sqlite3
+
+    # Another process's connection to the database: it writes a row, or
+    # says why it cannot, and counts the rows.
+    code = (
+        "import sqlite3, sys\n"
+        "c = sqlite3.connect(sys.argv[1], timeout=0)\n"
+        "try:\n"
+        "    with c:\n"
+        "        c.execute(\"INSERT INTO notes VALUES ('child')\")\n"
+        "except sqlite3.OperationalError as e:\n"
+        "    print(e)\n"
+        "else:\n"
+        "    print('written')\n"
+        "print(c.execute('SELECT count(*) FROM notes').fetchone()[0])\n"
+        "c.close()\n"
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "shared.db")
+        connection = sqlite3.connect(path, timeout=0, autocommit=True)
+        connection.execute("CREATE TABLE notes (body TEXT)")
+        # While this process writes, the other reads what was there, and
+        # cannot write: SQLite locks the database's file.
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute("INSERT INTO notes VALUES ('parent')")
+        r = python("-c", code, path)
+        ensure(r.stdout == "database is locked\n0\n", f"the other process said {r.stdout!r} {r.stderr!r}")
+        connection.execute("COMMIT")
+        r = python("-c", code, path)
+        ensure(r.stdout == "written\n2\n", f"then it said {r.stdout!r} {r.stderr!r}")
+        rows = connection.execute("SELECT body FROM notes ORDER BY rowid").fetchall()
+        ensure(rows == [("parent",), ("child",)], f"the table holds {rows}")
+        connection.close()
 
 
 def check_data_formats():
@@ -783,11 +823,38 @@ def check_memory():
 def check_file_locks():
     import fcntl
 
-    # Veda's file system cannot arbitrate locks between processes yet.
-    with tempfile.TemporaryFile() as f:
-        e = raises(OSError, fcntl.flock, f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        ensure(e.errno == errno.ENOLCK, f"flock failed with {e}")
-        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    # Another process's attempts, without waiting: flock's shared lock on
+    # the whole file, then lockf's exclusive locks on bytes 5 and 10 (each
+    # taken, or the error it met).
+    code = (
+        "import fcntl, sys\n"
+        "def attempt(lock, *args):\n"
+        "    try:\n"
+        "        lock(f, *args)\n"
+        "    except OSError as e:\n"
+        "        return e.errno\n"
+        "    return 0\n"
+        "with open(sys.argv[1], 'rb+') as f:\n"
+        "    print(attempt(fcntl.flock, fcntl.LOCK_SH | fcntl.LOCK_NB),\n"
+        "          attempt(fcntl.lockf, fcntl.LOCK_EX | fcntl.LOCK_NB, 1, 5),\n"
+        "          attempt(fcntl.lockf, fcntl.LOCK_EX | fcntl.LOCK_NB, 1, 10))\n"
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "locked")
+        with open(path, "wb+") as f:
+            # flock's lock, held by this open file, is in the way until it
+            # goes; lockf's (fcntl's record locks) are apart from it.
+            fcntl.flock(f, fcntl.LOCK_EX)
+            r = python("-c", code, path)
+            ensure(r.stdout == f"{errno.EAGAIN} 0 0\n", f"with flock's lock: {r.stdout!r} {r.stderr!r}")
+            fcntl.flock(f, fcntl.LOCK_UN)
+            # lockf's, held by this process, on bytes 0-9.
+            fcntl.lockf(f, fcntl.LOCK_EX | fcntl.LOCK_NB, 10)
+            r = python("-c", code, path)
+            ensure(r.stdout == f"0 {errno.EAGAIN} 0\n", f"with lockf's lock: {r.stdout!r} {r.stderr!r}")
+            # Closing the file lets them go.
+        r = python("-c", code, path)
+        ensure(r.stdout == "0 0 0\n", f"with neither: {r.stdout!r} {r.stderr!r}")
 
 
 def check_environments():
@@ -866,6 +933,7 @@ CHECKS = [
     ("hashes", check_hashes),
     ("compression", check_compression),
     ("sqlite", check_sqlite),
+    ("sqlite between processes", check_sqlite_processes),
     ("data formats", check_data_formats),
     ("memory", check_memory),
     ("file locks", check_file_locks),

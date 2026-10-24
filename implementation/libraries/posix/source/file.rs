@@ -7,12 +7,12 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use ipc::Bytes;
-use proto::fs::{FsError, MAX_IO, Stat, file, open_flags, seek};
+use proto::fs::{FsError, LockHolder, LockRange, MAX_IO, Stat, file, lock_event, open_flags, seek};
 use rt::object::{Channel, Vmo};
 use rt::sync::Mutex;
 
 use crate::error;
-use crate::linux::errno::{EINVAL, EIO, ENOMEM};
+use crate::linux::errno::{EINVAL, EIO, ENOLCK, ENOMEM};
 use crate::linux::{self, dt};
 use crate::path;
 use crate::vfs;
@@ -24,17 +24,65 @@ pub struct VfsFile {
     /// The path it was opened by, if this process opened it (it may have
     /// been renamed since): which file system it is on.
     path: Option<String>,
+    /// The file it is, by its file system's number and its inode
+    /// (`Stat::device`, `Stat::inode`): as it was opened, or as the VFS
+    /// says once asked.
+    identity: Mutex<Option<(u64, u64)>>,
+}
+
+/// What a request for a lock did ([`VfsFile::request_lock`]).
+pub enum Requested {
+    /// Done: whether its owner, a process, holds locks on the file's bytes
+    /// now.
+    Done(bool),
+    /// It waits: the VFS says on this channel what becomes of it
+    /// ([`await_lock`]).
+    Waiting(Channel),
 }
 
 impl VfsFile {
     /// A file this process was given (its path is not known).
     pub fn new(channel: Channel) -> VfsFile {
-        VfsFile { client: Mutex::new(file::Client::new(channel)), path: None }
+        VfsFile { client: Mutex::new(file::Client::new(channel)), path: None, identity: Mutex::new(None) }
     }
 
-    /// A file this process opened as `path`.
-    pub fn opened(channel: Channel, path: String) -> VfsFile {
-        VfsFile { client: Mutex::new(file::Client::new(channel)), path: Some(path) }
+    /// A file this process opened as `path`, which the VFS says `stat` of.
+    pub fn opened(channel: Channel, path: String, stat: &Stat) -> VfsFile {
+        let identity = Mutex::new(Some((stat.device, stat.inode)));
+        VfsFile { client: Mutex::new(file::Client::new(channel)), path: Some(path), identity }
+    }
+
+    /// The file it is: its file system's number and its inode, which no
+    /// other file has while the system runs.
+    pub fn identity(&self) -> Result<(u64, u64), isize> {
+        if let Some(identity) = *self.identity.lock() {
+            return Ok(identity);
+        }
+        let st = self.stat()?;
+        *self.identity.lock() = Some((st.device, st.inode));
+        Ok((st.device, st.inode))
+    }
+
+    /// Asks the VFS for a lock on the file, or to take one away
+    /// (`file::lock`, which says what `owner`, `whole` and `lock` mean):
+    /// with `wait`, a lock in the way has the request wait, which
+    /// [`await_lock`] waits for without holding the connection, which other
+    /// threads go on using meanwhile. `ENOLCK` when the VFS holds as many
+    /// locks, or waits, as it can.
+    pub fn request_lock(&self, owner: &[u8], whole: bool, lock: LockRange, wait: bool) -> Result<Requested, isize> {
+        let outcome = match self.client.lock().lock(Bytes(owner.to_vec()), whole, lock, wait) {
+            Ok(Err(FsError::TooMany)) => return Err(ENOLCK),
+            r => error::ipc(r)?,
+        };
+        Ok(match outcome.waiting {
+            Some(channel) => Requested::Waiting(channel),
+            None => Requested::Done(outcome.held),
+        })
+    }
+
+    /// The first lock in the way of `lock` for `owner` (`file::test_lock`).
+    pub fn test_lock(&self, owner: &[u8], lock: LockRange) -> Result<Option<LockHolder>, isize> {
+        error::ipc(self.client.lock().test_lock(Bytes(owner.to_vec()), lock))
     }
 
     /// The path the file was opened by, if this process opened it.
@@ -126,6 +174,19 @@ impl VfsFile {
     /// Another connection to this open file (for another process).
     pub fn duplicate(&self) -> Result<Channel, isize> {
         error::ipc(self.client.lock().duplicate())
+    }
+}
+
+/// Waits for a request for a lock that waits ([`Requested::Waiting`]) to be
+/// granted (whether its owner, a process, holds locks on the file's bytes
+/// then), or to fail: with `EDEADLK`, `EBADF` if the file closed first, or
+/// `ENOLCK` if the VFS had no room for the lock.
+pub fn await_lock(waiting: Channel) -> Result<bool, isize> {
+    let message = waiting.read_blocking(abi::DEADLINE_INFINITE).map_err(|_| EIO)?;
+    match ipc::decode_event::<Result<bool, FsError>>(message) {
+        Ok((lock_event::DONE, Err(FsError::TooMany))) => Err(ENOLCK),
+        Ok((lock_event::DONE, result)) => result.map_err(error::fs),
+        _ => Err(EIO),
     }
 }
 

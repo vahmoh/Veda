@@ -193,14 +193,15 @@ library expat
 # The amalgamation (`sqlite3`), compiled as one file: thread-safe, without
 # loadable extensions (Veda links statically), with full-text search
 # (FTS3, FTS4 and FTS5), R*Tree indexes and the mathematical functions, as
-# python.org's builds have them. It locks no files (its unix-none VFS):
-# Veda's file system cannot arbitrate POSIX locks between processes yet
-# (fcntl refuses them), so a database is one connection's to write at a
-# time.
+# python.org's builds have them. It locks a database's file, as on Linux
+# (its unix VFS), with the locks Veda's file system arbitrates between
+# processes; without the write-ahead log, whose index is a shared mapping
+# that writes its file, which Veda's files do not take: `PRAGMA
+# journal_mode = WAL` leaves the journal as it is.
 SQLITE_OPTIONS=(
 	-DSQLITE_THREADSAFE=1 -DSQLITE_OMIT_LOAD_EXTENSION=1 -DSQLITE_ENABLE_FTS3=1 -DSQLITE_ENABLE_FTS3_PARENTHESIS=1
 	-DSQLITE_ENABLE_FTS4=1 -DSQLITE_ENABLE_FTS5=1 -DSQLITE_ENABLE_RTREE=1 -DSQLITE_ENABLE_MATH_FUNCTIONS=1
-	-DHAVE_USLEEP=1 -DHAVE_FDATASYNC=1 -DSQLITE_DEFAULT_UNIX_VFS=\"unix-none\"
+	-DHAVE_USLEEP=1 -DHAVE_FDATASYNC=1 -DSQLITE_OMIT_WAL=1
 )
 stage_sqlite() {
 	local b=$BUILD/sqlite

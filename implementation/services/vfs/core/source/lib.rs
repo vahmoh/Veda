@@ -15,6 +15,9 @@
 //! * [`view`]: what a confined connection reaches (`vfs::confine`).
 //! * [`loans`]: places to read that a connection lends a confined one
 //!   (`vfs::lend`, `vfs::borrow`), and takes back (`vfs::take_back`).
+//! * [`locks`]: the advisory locks on files that the VFS arbitrates
+//!   between processes (`file::lock`), and the processes that own them
+//!   (`vfs::lock_owner`).
 //! * [`shm`]: `/dev/shm`, the shared memory objects, named and sized.
 
 #![no_std]
@@ -25,6 +28,7 @@ extern crate std;
 
 pub mod access;
 pub mod loans;
+pub mod locks;
 pub mod shm;
 pub mod snapshot;
 pub mod tree;
@@ -37,3 +41,21 @@ pub const HOME: &str = "home";
 pub const USER: &str = "user";
 /// Scratch space: `/tmp`.
 pub const TMP: &str = "tmp";
+
+/// Whether `a` and `b` are the same bytes, compared in a time that does not
+/// depend on where they differ: no answer about a secret tells how near a
+/// guess came.
+pub(crate) fn same(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bytes_are_the_same_or_not() {
+        assert!(same(&[1, 2, 3], &[1, 2, 3]) && same(&[], &[]));
+        assert!(!same(&[1, 2, 3], &[1, 2, 4]) && !same(&[1, 2, 3], &[1, 2]) && !same(&[0], &[]));
+    }
+}

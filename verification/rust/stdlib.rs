@@ -177,7 +177,8 @@ fn check_directories() -> Check {
 }
 
 fn check_file_locks() -> Check {
-    // Veda's files have no locks: the standard library says so.
+    // The standard library for Veda does not lock files yet (with the C
+    // library's `flock`): it says so.
     let f = io("open", File::open("notes.txt"))?;
     let lock = f.lock().map_err(|e| e.kind());
     ensure(lock == Err(io::ErrorKind::Unsupported), || format!("lock: {lock:?}"))

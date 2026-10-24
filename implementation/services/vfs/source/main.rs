@@ -76,6 +76,17 @@
 //! the user's home folder whole, nor what holds it. The VFS logs each
 //! place so lent, and so taken back.
 //!
+//! **Locks.** The VFS arbitrates advisory locks between processes, as
+//! Linux does (`file::lock`, `vfs_core::locks`): `flock`'s, held by open
+//! file descriptions, and locks on bytes, held by processes (POSIX's record
+//! locks) or by open file descriptions (OFD locks). An open file's go as
+//! its last connection closes; a process owns its locks by a secret drawn
+//! for the connection that speaks for it (`vfs::lock_owner`), and they go
+//! as that connection closes, as the process ends; all of a file's go when
+//! nothing has it open. A request that waits for a lock has a channel of
+//! its own, on which the VFS says when it is granted, and which counts as
+//! a connection of its program.
+//!
 //! **Limits.** No path is longer than `proto::fs::MAX_PATH`. A program
 //! holds a bounded number of connections, and all of them together stay
 //! within what the kernel waits on at once (`vfs_core::access`). Files grow
@@ -101,8 +112,9 @@ use core::cell::{Cell, RefCell};
 use abi::signals;
 use ipc::{Bytes, WaitSet};
 use proto::fs::{
-    DirEntry, DirPage, FsError, LOAN_SIZE, MAX_DATAGRAM, MAX_IO, MAX_PLACES, MAX_SOCKET_NAME, Place, SocketAddress,
-    SocketDatagram, SocketPeer, Space, Stat, device, file, open_flags, seek, socket_kind, vfs,
+    DirEntry, DirPage, FsError, LOAN_SIZE, LOCK_END, LOCK_OWNER_SIZE, LockHolder, LockOutcome, LockRange, MAX_DATAGRAM,
+    MAX_IO, MAX_PLACES, MAX_SOCKET_NAME, Place, SocketAddress, SocketDatagram, SocketPeer, Space, Stat, device, file,
+    lock_event, lock_kind, open_flags, seek, socket_kind, vfs,
 };
 use proto::init::ClientIdentity;
 use rt::object::{Channel, Handle, Vmo};
@@ -113,6 +125,7 @@ use persist::Store;
 use sockets::Sockets;
 use vfs_core::access::{self, Connections, PRIVATE};
 use vfs_core::loans::{Loans, TakenBack};
+use vfs_core::locks::{self, FileId, Locks, Outcome, Owner, Owners};
 use vfs_core::shm::Shm;
 use vfs_core::snapshot::{self, Samples};
 use vfs_core::tree::{self, Data, Kind, Node, NodeId, Tree};
@@ -158,6 +171,18 @@ enum Mount {
     Shm,
 }
 
+impl Mount {
+    /// The `Stat::device` of its files.
+    fn device(self) -> u64 {
+        match self {
+            Mount::System => device::SYSTEM,
+            Mount::Ram => device::RAM,
+            Mount::Dev => device::DEV,
+            Mount::Shm => device::SHM,
+        }
+    }
+}
+
 /// A descriptor of the `vfs::open` kind.
 struct OpenFile {
     mount: Mount,
@@ -174,9 +199,22 @@ enum Target {
     Memory(vfs_core::shm::Id),
 }
 
+impl Target {
+    /// The file, as its locks know it.
+    fn file(self) -> FileId {
+        match self {
+            Target::Node(m, node) => (m.device(), node),
+            Target::Dev(d) => (device::DEV, Dev::stat(Some(d)).inode),
+            Target::Memory(id) => (device::SHM, id),
+        }
+    }
+}
+
 /// An open file description (behind every connection of the `file` kind
 /// duplicated from one `open_file`).
 struct Description {
+    /// Its number, which its locks know it by (`Owner::Open`).
+    id: u64,
     target: Target,
     flags: u32,
     offset: u64,
@@ -185,6 +223,13 @@ struct Description {
     /// Its file's modification time may be set through it: not when a
     /// confined connection opened it in a place it only reads.
     may_touch: bool,
+}
+
+/// A request that waits for a lock: the VFS's end of its channel, and the
+/// program it counts as a connection of.
+struct LockWait {
+    channel: Channel,
+    program: u64,
 }
 
 type Shared = Rc<RefCell<Description>>;
@@ -246,6 +291,15 @@ struct Fs {
     /// it afresh, so that checking a write against the home disk does not
     /// walk all of `/home`.
     home_len: Cell<Option<usize>>,
+    /// The locks on files, and the requests waiting for one.
+    locks: Locks,
+    /// The processes that own locks (`vfs::lock_owner`).
+    owners: Owners,
+    /// The channels of the requests waiting for a lock, by their waiters'
+    /// numbers.
+    lock_waits: BTreeMap<u64, LockWait>,
+    /// The number of the next open file description.
+    next_open: u64,
 }
 
 impl Fs {
@@ -331,17 +385,61 @@ impl Fs {
         *self.open.entry((m, node)).or_default() += 1;
     }
 
-    /// Something that had `node` open closed it.
+    /// Something that had `node` open closed it. With the last, its locks
+    /// go.
     fn release(&mut self, m: Mount, node: NodeId) {
         let Some(n) = self.open.get_mut(&(m, node)) else { return };
         *n -= 1;
         if *n == 0 {
             self.open.remove(&(m, node));
+            self.locks.forget(Target::Node(m, node).file());
             if self.orphans.remove(&(m, node))
                 && let Ok(t) = self.tree_mut(m)
             {
                 t.forget(node);
             }
+        }
+    }
+
+    /// Gives waiter `waiter`, a request that waits for a lock, a channel,
+    /// counted as a connection of `program`: the client's end, on which the
+    /// VFS says what became of the request ([`Fs::tell_lock_waits`]). If it
+    /// cannot, the request waits no more.
+    fn lock_wait(&mut self, waiter: u64, program: u64) -> Result<Channel, FsError> {
+        let made = self.connections.admit(program).and_then(|()| {
+            Channel::create().map_err(|_| {
+                self.connections.release(program);
+                FsError::NoSpace
+            })
+        });
+        match made {
+            Ok((ours, theirs)) => {
+                self.lock_waits.insert(waiter, LockWait { channel: ours, program });
+                Ok(theirs)
+            }
+            Err(e) => {
+                self.locks.cancel(waiter);
+                Err(e)
+            }
+        }
+    }
+
+    /// The request of waiter `waiter` waits no more: its channel closes.
+    fn end_lock_wait(&mut self, waiter: u64) {
+        if let Some(wait) = self.lock_waits.remove(&waiter) {
+            self.connections.release(wait.program);
+        }
+    }
+
+    /// Says on their channels what became of the requests that waited for
+    /// locks (`lock_event::DONE`): each was granted, or never will be.
+    fn tell_lock_waits(&mut self) {
+        for notice in self.locks.notices() {
+            if let Some(wait) = self.lock_waits.get(&notice.waiter) {
+                // A client that gave up meanwhile is no longer there to tell.
+                let _ = ipc::send_event(&wait.channel, lock_event::DONE, notice.result);
+            }
+            self.end_lock_wait(notice.waiter);
         }
     }
 
@@ -1166,7 +1264,9 @@ impl vfs::Server for Session<'_> {
                     (Target::Node(m, node), self.fs.tree(m)?.stat(node)?)
                 }
             };
-            let desc = Rc::new(RefCell::new(Description { target, flags, offset: 0, owner, may_touch }));
+            self.fs.next_open += 1;
+            let id = self.fs.next_open;
+            let desc = Rc::new(RefCell::new(Description { id, target, flags, offset: 0, owner, may_touch }));
             let channel = self.connect_file(desc)?;
             match target {
                 Target::Node(m, node) => self.fs.hold(m, node),
@@ -1400,6 +1500,16 @@ impl vfs::Server for Session<'_> {
         let from = self.fs.sockets.peer(from, self.who.koid, koid);
         self.fs.sockets.send(id, SocketDatagram { from, data, rights, handles })
     }
+
+    fn lock_owner(&mut self, koid: u64) -> Result<Bytes, FsError> {
+        if let Some(secret) = self.fs.owners.secret(self.id) {
+            return Ok(Bytes(secret.to_vec()));
+        }
+        let mut secret = [0u8; LOCK_OWNER_SIZE];
+        rt::object::try_random_bytes(&mut secret).map_err(|_| FsError::Io)?;
+        self.fs.owners.add(self.id, koid, secret);
+        Ok(Bytes(secret.to_vec()))
+    }
 }
 
 impl Session<'_> {
@@ -1477,6 +1587,33 @@ impl FileSession<'_> {
     /// device.
     fn has_offset(&self) -> bool {
         !matches!(self.desc.borrow().target, Target::Dev(_))
+    }
+
+    /// The owner a lock request names: this open file (no secret), or the
+    /// process whose secret `secret` is (`Denied` for no one's).
+    fn lock_owner(&self, secret: &[u8]) -> Result<Owner, FsError> {
+        if secret.is_empty() {
+            return Ok(Owner::Open(self.desc.borrow().id));
+        }
+        self.fs.owners.find(secret).map(Owner::Process).ok_or(FsError::Denied)
+    }
+}
+
+/// The kind of lock `kind` (`lock_kind`) is: none for `NONE`.
+fn lock_kind(kind: u32) -> Result<Option<locks::Kind>, FsError> {
+    match kind {
+        lock_kind::NONE => Ok(None),
+        lock_kind::SHARED => Ok(Some(locks::Kind::Shared)),
+        lock_kind::EXCLUSIVE => Ok(Some(locks::Kind::Exclusive)),
+        _ => Err(FsError::Invalid),
+    }
+}
+
+/// `lock_kind`'s number for `kind`.
+fn lock_kind_number(kind: locks::Kind) -> u32 {
+    match kind {
+        locks::Kind::Shared => lock_kind::SHARED,
+        locks::Kind::Exclusive => lock_kind::EXCLUSIVE,
     }
 }
 
@@ -1625,6 +1762,47 @@ impl file::Server for FileSession<'_> {
         self.fs.changed();
         Ok(())
     }
+
+    fn lock(&mut self, owner: Bytes, whole: bool, lock: LockRange, wait: bool) -> Result<LockOutcome, FsError> {
+        let owner = self.lock_owner(&owner.0)?;
+        let kind = lock_kind(lock.kind)?;
+        let d = self.desc.borrow();
+        let (file, flags, program) = (d.target.file(), d.flags, d.owner);
+        drop(d);
+        // A lock on bytes needs the access its kind does, as POSIX has it:
+        // a shared one, to read; an exclusive one, to write.
+        let needs = match kind {
+            Some(locks::Kind::Shared) => open_flags::READ,
+            Some(locks::Kind::Exclusive) => open_flags::WRITE,
+            None => 0,
+        };
+        if !whole && flags & needs != needs {
+            return Err(FsError::BadFd);
+        }
+        let request = locks::Request { whole, kind, start: lock.start, end: lock.end };
+        let waiting = match self.fs.locks.lock(file, owner, request, wait)? {
+            Outcome::Done => None,
+            Outcome::Waiting(waiter) => Some(self.fs.lock_wait(waiter, program)?),
+        };
+        Ok(LockOutcome { waiting, held: self.fs.locks.holds(file, owner) })
+    }
+
+    fn test_lock(&mut self, owner: Bytes, lock: LockRange) -> Result<Option<LockHolder>, FsError> {
+        let owner = self.lock_owner(&owner.0)?;
+        let kind = lock_kind(lock.kind)?;
+        if lock.start > lock.end || lock.end > LOCK_END {
+            return Err(FsError::Invalid);
+        }
+        let file = self.desc.borrow().target.file();
+        let found = self.fs.locks.test(file, owner, kind, lock.start, lock.end);
+        Ok(found.map(|l| LockHolder {
+            lock: LockRange { kind: lock_kind_number(l.kind), start: l.start, end: l.end },
+            process: match l.owner {
+                Owner::Process(conn) => Some(self.fs.owners.koid(conn).unwrap_or(0)),
+                Owner::Open(_) => None,
+            },
+        }))
+    }
 }
 
 /// A writable tree with `/tmp` and an empty `/home`.
@@ -1683,6 +1861,10 @@ fn build(archive: &initrd::Archive<'static>, image: SystemImage, live: bool) -> 
         shm: Shm::new(rt::time::unix_time_ns),
         loans: Loans::new(),
         home_len: Cell::new(None),
+        locks: Locks::new(),
+        owners: Owners::new(),
+        lock_waits: BTreeMap::new(),
+        next_open: 0,
     }
 }
 
@@ -1726,6 +1908,7 @@ fn main() -> i32 {
         desc: Shared,
     }
     const FILE_KEY: u64 = 1 << 62;
+    const LOCK_WAIT_KEY: u64 = 1 << 61;
     let mut clients: BTreeMap<u64, Client> = BTreeMap::new();
     let mut files: BTreeMap<u64, FileConn> = BTreeMap::new();
     let mut next_id = 1u64;
@@ -1743,6 +1926,9 @@ fn main() -> i32 {
         }
         for (&id, f) in &files {
             ws.add(f.channel.raw(), signals::READABLE | signals::PEER_CLOSED, FILE_KEY | id);
+        }
+        for (&waiter, wait) in &fs.lock_waits {
+            ws.add(wait.channel.raw(), signals::PEER_CLOSED, LOCK_WAIT_KEY | waiter);
         }
         let Ok(ready) = ws.wait(fs.save_deadline()) else { continue };
         for (key, observed) in ready {
@@ -1778,14 +1964,24 @@ fn main() -> i32 {
                 {
                     let desc = conn.desc.borrow();
                     fs.connections.release(desc.owner);
-                    // The last connection closes the open file.
+                    // The last connection closes the open file, and its
+                    // locks go.
                     if Rc::strong_count(&conn.desc) == 1 {
+                        fs.locks.release(Owner::Open(desc.id));
                         match desc.target {
                             Target::Node(m, node) => fs.release(m, node),
                             Target::Memory(id) => fs.shm.release(id),
                             Target::Dev(_) => {}
                         }
                     }
+                }
+            } else if key & LOCK_WAIT_KEY != 0 {
+                // The client gave up a request that waits for a lock, or
+                // ended.
+                let waiter = key & !LOCK_WAIT_KEY;
+                if observed & signals::PEER_CLOSED != 0 {
+                    fs.locks.cancel(waiter);
+                    fs.end_lock_wait(waiter);
                 }
             } else {
                 let Some(client) = clients.get_mut(&key) else { continue };
@@ -1814,11 +2010,17 @@ fn main() -> i32 {
                 {
                     fs.connections.release(client.who.koid);
                     taken_back.extend(fs.loans.forget(key));
+                    // The locks of the process it spoke for go with it, as
+                    // they go as a process ends.
+                    fs.locks.release(Owner::Process(key));
+                    fs.owners.remove(key);
                     for f in client.fds.values() {
                         fs.release(f.mount, f.node);
                     }
                 }
             }
+            // Requests waiting for locks hear what became of them.
+            fs.tell_lock_waits();
             // The places taken back leave their borrowers' views before
             // anyone's next request.
             for back in taken_back.drain(..) {

@@ -8,7 +8,8 @@
  * inside Veda in a scratch directory, with its standard output on a pipe.
  *
  * `posix child MODE [ARGUMENT]` is the program run by the spawning checks
- * (`posix child sandbox`, sandboxed, checks its own); `posix host ADDRESS
+ * (`posix child sandbox`, sandboxed, checks its own, as `posix child locks
+ * WHAT` checks the locks its parent holds); `posix host ADDRESS
  * TCP-PORT UDP-PORT` runs the checks with the host machine's servers too
  * (see check_network). */
 
@@ -40,6 +41,7 @@
 #include <sys/auxv.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
+#include <sys/file.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
@@ -793,9 +795,10 @@ static void check_signals(void)
 	CHECK("setjmp/longjmp", jumped, "no jump");
 }
 
-/* Starts `program child MODE` with its output on a pipe; returns what it
-   wrote and stores its wait status. */
-static int spawn_child_with(const char *mode, const char *arg, char *out, size_t cap, int *status)
+/* Starts `program child MODE ARG` with its output on a pipe, and `given`
+   as its descriptor 3 unless it is -1; returns what it wrote and stores its
+   wait status. */
+static int spawn_child_given(const char *mode, const char *arg, int given, char *out, size_t cap, int *status)
 {
 	int p[2];
 	if (pipe(p))
@@ -804,6 +807,8 @@ static int spawn_child_with(const char *mode, const char *arg, char *out, size_t
 	posix_spawn_file_actions_init(&fa);
 	posix_spawn_file_actions_adddup2(&fa, p[1], 1);
 	posix_spawn_file_actions_addclose(&fa, p[0]);
+	if (given >= 0)
+		posix_spawn_file_actions_adddup2(&fa, given, 3);
 	char *argv[] = { "posix", "child", (char *)mode, (char *)arg, 0 };
 	char *envp[] = { "VEDA_TEST=from-parent", 0 };
 	pid_t pid;
@@ -822,6 +827,13 @@ static int spawn_child_with(const char *mode, const char *arg, char *out, size_t
 	out[n] = 0;
 	close(p[0]);
 	return waitpid(pid, status, 0) == pid ? 0 : -1;
+}
+
+/* Starts `program child MODE ARG` with its output on a pipe; returns what it
+   wrote and stores its wait status. */
+static int spawn_child_with(const char *mode, const char *arg, char *out, size_t cap, int *status)
+{
+	return spawn_child_given(mode, arg, -1, out, cap, status);
 }
 
 /* Runs `posix child MODE` with its standard output in OUT: 0, or -1. */
@@ -2721,10 +2733,229 @@ static void check_semaphores(void)
 	close(fd);
 }
 
+/* fcntl(fd, CMD) of a lock of TYPE on LEN bytes from START: 0, or the
+   errno it failed with. */
+static int lock_bytes(int fd, int cmd, short type, off_t start, off_t len)
+{
+	struct flock l = { .l_type = type, .l_whence = SEEK_SET, .l_start = start, .l_len = len };
+	return fcntl(fd, cmd, &l) == 0 ? 0 : errno;
+}
+
+/* What F_GETLK or F_OFD_GETLK (CMD) finds in the way of a lock of TYPE on
+   LEN bytes from START (a type of -1 if it failed). */
+static struct flock lock_in_the_way(int fd, int cmd, short type, off_t start, off_t len)
+{
+	struct flock l = { .l_type = type, .l_whence = SEEK_SET, .l_start = start, .l_len = len };
+	if (fcntl(fd, cmd, &l) != 0)
+		l.l_type = -1;
+	return l;
+}
+
+/* `posix child locks WHAT`: the locks its parent holds on locks.bin, seen
+   from another process, as check_file_locks describes them. */
+static int locks_child(const char *what)
+{
+	int fd = open("locks.bin", O_RDWR);
+	if (fd < 0 || !what)
+		return 99;
+	pid_t parent = getppid();
+	if (!strcmp(what, "held")) {
+		/* The parent's record lock on bytes 0-9. */
+		CHECK("locks: a record lock is in the way of another process's",
+		      lock_bytes(fd, F_SETLK, F_WRLCK, 0, 10) == EAGAIN && lock_bytes(fd, F_SETLK, F_RDLCK, 9, 1) == EAGAIN,
+		      "it took one");
+		struct flock l = lock_in_the_way(fd, F_GETLK, F_RDLCK, 5, 0);
+		CHECK("locks: F_GETLK finds it, and its process",
+		      l.l_type == F_WRLCK && l.l_whence == SEEK_SET && l.l_start == 0 && l.l_len == 10 && l.l_pid == parent,
+		      "type %d, %ld+%ld, process %d (the parent is %d)", l.l_type, (long)l.l_start, (long)l.l_len,
+		      (int)l.l_pid, (int)parent);
+		CHECK("locks: not in the way of bytes beside it",
+		      lock_bytes(fd, F_SETLK, F_WRLCK, 10, 10) == 0 && lock_bytes(fd, F_SETLK, F_UNLCK, 10, 10) == 0, "refused");
+		l = lock_in_the_way(fd, F_OFD_GETLK, F_RDLCK, 0, 1);
+		CHECK("locks: and in the way of OFD locks", lock_bytes(fd, F_OFD_SETLK, F_RDLCK, 3, 1) == EAGAIN &&
+		      l.l_type == F_WRLCK && l.l_pid == parent, "type %d, process %d", l.l_type, (int)l.l_pid);
+		CHECK("locks: but not of flock's", flock(fd, LOCK_EX | LOCK_NB) == 0 && flock(fd, LOCK_UN) == 0, "refused");
+		errno = 0;
+		int tested = lockf(fd, F_TEST, 10) == -1 && errno == EACCES;
+		errno = 0;
+		CHECK("locks: lockf finds it", tested && lockf(fd, F_TLOCK, 10) == -1 && (errno == EAGAIN || errno == EACCES),
+		      "F_TEST %d", tested);
+	} else if (!strcmp(what, "free")) {
+		struct flock l = lock_in_the_way(fd, F_GETLK, F_WRLCK, 0, 0);
+		CHECK("locks: closing any descriptor of the file took the parent's away",
+		      l.l_type == F_UNLCK && lock_bytes(fd, F_SETLK, F_WRLCK, 0, 0) == 0, "type %d", l.l_type);
+	} else if (!strcmp(what, "flock")) {
+		errno = 0;
+		CHECK("locks: a flock lock is in the way of another open file's",
+		      flock(fd, LOCK_SH | LOCK_NB) == -1 && errno == EWOULDBLOCK, "it took one");
+		CHECK("locks: but not of record locks", lock_bytes(fd, F_SETLK, F_WRLCK, 0, 0) == 0, "refused");
+	} else if (!strcmp(what, "inherited")) {
+		/* Descriptor 3 is the parent's open file, with its exclusive flock
+		   lock and its OFD lock on bytes 20-29. */
+		CHECK("locks: a descriptor passed on shares its open file's locks",
+		      flock(3, LOCK_EX | LOCK_NB) == 0 && lock_bytes(3, F_OFD_SETLK, F_WRLCK, 20, 10) == 0, "refused");
+		errno = 0;
+		int other = flock(fd, LOCK_EX | LOCK_NB) == -1 && errno == EWOULDBLOCK;
+		CHECK("locks: another open file does not", other && lock_bytes(fd, F_OFD_SETLK, F_RDLCK, 25, 1) == EAGAIN,
+		      "flock %d", other);
+		struct flock l = lock_in_the_way(fd, F_OFD_GETLK, F_RDLCK, 20, 1);
+		CHECK("locks: an open file's lock is no process's",
+		      l.l_type == F_WRLCK && l.l_start == 20 && l.l_len == 10 && l.l_pid == -1, "type %d, process %d",
+		      l.l_type, (int)l.l_pid);
+	} else if (!strcmp(what, "exit")) {
+		/* Locks it leaves held as it ends. */
+		return lock_bytes(fd, F_SETLK, F_WRLCK, 100, 1) == 0 && flock(fd, LOCK_EX | LOCK_NB) == 0 ? 0 : 1;
+	} else if (!strcmp(what, "deadlock")) {
+		/* The parent holds byte 0: the child takes byte 1, says so on
+		   descriptor 3, and waits for byte 0; it is granted once the
+		   parent lets it go, or refused if the parent asked for byte 1
+		   first, and then lets byte 1 go. */
+		if (lock_bytes(fd, F_SETLK, F_WRLCK, 1, 1) != 0 || write(3, "w", 1) != 1)
+			return 1;
+		int r = lock_bytes(fd, F_SETLKW, F_WRLCK, 0, 1);
+		if (r == EDEADLK)
+			lock_bytes(fd, F_SETLK, F_UNLCK, 1, 1);
+		printf("%s\n", r == 0 ? "granted" : r == EDEADLK ? "deadlock" : strerror(r));
+		return 0;
+	} else {
+		return 99;
+	}
+	return failures;
+}
+
+/* `posix child locks WHAT`, its output shown: whether it passed. */
+static int locks_seen(const char *what, int given)
+{
+	char out[4096];
+	int status = 0;
+	int r = spawn_child_given("locks", what, given, out, sizeof out, &status);
+	fputs(out, stdout);
+	return r == 0 && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+/* F_SETLKW waits while a lock is in the way, and refuses to wait for ever:
+   this process holds byte 0 of locks.bin (FD) and a child byte 1; the
+   child waits for byte 0, and this process, asking for byte 1, would wait
+   for the child, which waits for it (EDEADLK). Which of them asks last is
+   refused (the child, if its wait comes later than this one); the other's
+   wait then ends with its lock. */
+static void check_lock_deadlock(int fd)
+{
+	int out[2], ready[2];
+	if (pipe(out))
+		return;
+	if (pipe(ready)) {
+		close(out[0]);
+		close(out[1]);
+		return;
+	}
+	CHECK("locks: byte 0", lock_bytes(fd, F_SETLK, F_WRLCK, 0, 1) == 0, "%s", strerror(errno));
+	posix_spawn_file_actions_t fa;
+	posix_spawn_file_actions_init(&fa);
+	posix_spawn_file_actions_adddup2(&fa, out[1], 1);
+	posix_spawn_file_actions_adddup2(&fa, ready[1], 3);
+	posix_spawn_file_actions_addclose(&fa, out[0]);
+	posix_spawn_file_actions_addclose(&fa, ready[0]);
+	char *argv[] = { "posix", "child", "locks", "deadlock", 0 };
+	char *envp[] = { 0 };
+	pid_t pid;
+	int r = posix_spawn(&pid, program, &fa, 0, argv, envp);
+	posix_spawn_file_actions_destroy(&fa);
+	close(out[1]);
+	close(ready[1]);
+	char c = 0;
+	int waits = !r && read(ready[0], &c, 1) == 1 && c == 'w';
+	CHECK("locks: a child holds byte 1, and waits for byte 0", waits, "posix_spawn returned %d", r);
+	if (waits) {
+		/* Its request reaches the file system first, most likely. */
+		struct timespec pause = { 0, 200 * 1000 * 1000 };
+		nanosleep(&pause, 0);
+		int mine = lock_bytes(fd, F_SETLKW, F_WRLCK, 1, 1);
+		if (mine == EDEADLK)
+			lock_bytes(fd, F_SETLK, F_UNLCK, 0, 1);
+		char text[256];
+		read_all(out[0], text, sizeof text);
+		int ended = exited_well(pid);
+		CHECK("locks: F_SETLKW refuses to wait for ever (EDEADLK), and a wait ends with its lock",
+		      ended && ((mine == EDEADLK && !strcmp(text, "granted\n")) || (mine == 0 && !strcmp(text, "deadlock\n"))),
+		      "this process: %s; the child: '%s'", mine ? strerror(mine) : "granted", text);
+	}
+	close(out[0]);
+	close(ready[0]);
+	lock_bytes(fd, F_SETLK, F_UNLCK, 0, 0);
+}
+
+/* Advisory locks, which the VFS arbitrates between processes as Linux
+ * does: record locks, a process's (F_SETLK, F_SETLKW, F_GETLK, and lockf,
+ * which the C library makes of them), and flock's and OFD locks, an open
+ * file's; each seen from another process (`posix child locks WHAT`). */
+static void check_file_locks(void)
+{
+	int fd = open("locks.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
+	CHECK("locks: a file to lock", fd >= 0 && write(fd, "0123456789", 10) == 10, "%s", strerror(errno));
+	if (fd < 0)
+		return;
+	CHECK("locks: a record lock", lock_bytes(fd, F_SETLK, F_WRLCK, 0, 10) == 0, "%s", strerror(errno));
+	CHECK("locks: a record lock, seen from another process", locks_seen("held", -1), "the child failed");
+	/* A process's locks are never in its own way, whatever descriptor
+	   takes them, nor does a test find them; closing any descriptor of the
+	   file takes them all away. */
+	int fd2 = open("locks.bin", O_RDWR);
+	struct flock l = lock_in_the_way(fd2, F_GETLK, F_WRLCK, 0, 0);
+	CHECK("locks: a process's locks are not in its own way",
+	      fd2 >= 0 && l.l_type == F_UNLCK && lock_bytes(fd2, F_SETLK, F_WRLCK, 5, 10) == 0, "type %d", l.l_type);
+	close(fd2);
+	CHECK("locks: closing a descriptor takes the process's record locks away", locks_seen("free", -1),
+	      "the child failed");
+	/* flock's and OFD locks, held by the open file: shared with the
+	   processes it is passed to, kept as they end. */
+	CHECK("locks: a flock lock", flock(fd, LOCK_EX) == 0, "%s", strerror(errno));
+	CHECK("locks: a flock lock, seen from another process", locks_seen("flock", -1), "the child failed");
+	CHECK("locks: an OFD lock", lock_bytes(fd, F_OFD_SETLK, F_WRLCK, 20, 10) == 0, "%s", strerror(errno));
+	l = lock_in_the_way(fd, F_OFD_GETLK, F_UNLCK, 0, 0);
+	CHECK("locks: F_OFD_GETLK of F_UNLCK finds the open file's own",
+	      l.l_type == F_WRLCK && l.l_start == 20 && l.l_len == 10 && l.l_pid == -1, "type %d, %ld+%ld", l.l_type,
+	      (long)l.l_start, (long)l.l_len);
+	CHECK("locks: an OFD lock is in the way of this process's record locks",
+	      lock_bytes(fd, F_SETLK, F_RDLCK, 25, 1) == EAGAIN, "it took one");
+	CHECK("locks: an open file's locks, passed to another process", locks_seen("inherited", fd), "the child failed");
+	fd2 = open("locks.bin", O_RDWR);
+	errno = 0;
+	int kept = flock(fd2, LOCK_SH | LOCK_NB) == -1 && errno == EWOULDBLOCK;
+	CHECK("locks: the open file keeps them as the other process ends",
+	      kept && lock_bytes(fd2, F_OFD_SETLK, F_RDLCK, 20, 1) == EAGAIN, "flock %d", kept);
+	/* Unlike a process's, an open file's locks stay as another descriptor
+	   of the file closes. */
+	close(fd2);
+	CHECK("locks: and as another descriptor of the file closes",
+	      lock_in_the_way(fd, F_GETLK, F_RDLCK, 20, 1).l_type == F_WRLCK, "it is gone");
+	CHECK("locks: unlocking", flock(fd, LOCK_UN) == 0 && lock_bytes(fd, F_OFD_SETLK, F_UNLCK, 0, 0) == 0,
+	      "%s", strerror(errno));
+	/* A process's locks go as it ends, and its open files' as they close:
+	   the file system hears of it as their connections close, which may
+	   come a moment after the parent's next request. */
+	int seen = locks_seen("exit", -1), took = 0;
+	for (int i = 0; seen && i < 200 && !took; i++) {
+		took = lock_bytes(fd, F_SETLK, F_WRLCK, 100, 1) == 0 && flock(fd, LOCK_EX | LOCK_NB) == 0;
+		if (!took) {
+			struct timespec pause = { 0, 10 * 1000 * 1000 };
+			nanosleep(&pause, 0);
+		}
+	}
+	CHECK("locks: a process's locks go as it ends", seen && took, "the child %s", seen ? "left them" : "failed");
+	flock(fd, LOCK_UN);
+	lock_bytes(fd, F_SETLK, F_UNLCK, 0, 0);
+	check_lock_deadlock(fd);
+	close(fd);
+	unlink("locks.bin");
+}
+
 static int child(const char *mode, const char *arg)
 {
 	if (!strcmp(mode, "sandbox"))
 		return sandboxed();
+	if (!strcmp(mode, "locks"))
+		return locks_child(arg);
 	if (!strcmp(mode, "expendable")) {
 		/* Moves itself to the expendable class, and not back. */
 		return veda_process_set_memory_class(VEDA_MEMORY_EXPENDABLE) == 0 &&
@@ -2938,6 +3169,7 @@ int main(int argc, char **argv)
 	check_time();
 	check_signals();
 	check_processes();
+	check_file_locks();
 	check_veda_interfaces();
 	check_epoll();
 	check_timerfd();

@@ -27,6 +27,8 @@ use alloc::vec::Vec;
 
 use proto::fs::{FsError, LOAN_SIZE};
 
+use crate::same;
+
 /// How long a loan waits to be taken: in nanoseconds, a minute.
 pub const LAPSE_NS: u64 = 60_000_000_000;
 
@@ -159,12 +161,6 @@ impl Loans {
         self.held = kept;
         back.into_iter().map(TakenBack::from).collect()
     }
-}
-
-/// Whether `a` and `b` are the same bytes, compared in a time that does not
-/// depend on where they differ.
-fn same(a: &[u8], b: &[u8]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
 }
 
 #[cfg(test)]
@@ -309,11 +305,5 @@ mod tests {
         assert_eq!(loans.take_back(3, &[9; LOAN_SIZE]), None);
         assert!(loans.forget(3).is_empty());
         assert_ne!(x, documents);
-    }
-
-    #[test]
-    fn bytes_are_the_same_or_not() {
-        assert!(same(&[1, 2, 3], &[1, 2, 3]) && same(&[], &[]));
-        assert!(!same(&[1, 2, 3], &[1, 2, 4]) && !same(&[1, 2, 3], &[1, 2]) && !same(&[0], &[]));
     }
 }

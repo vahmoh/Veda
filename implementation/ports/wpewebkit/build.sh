@@ -289,16 +289,15 @@ library brotli
 
 # The amalgamation, compiled as one file: thread-safe, without loadable
 # extensions (Veda links statically), with the options WebKit's databases
-# use. It locks no files (its unix-none VFS): Veda's file system cannot
-# arbitrate POSIX locks between processes yet (fcntl refuses them), and
-# each of the engine's databases is one process's (the network process
-# keeps the cookies, the storage and the like, the browser's own process
-# the icons), in a browser that runs once.
+# use. It locks a database's file, as on Linux (its unix VFS), with the
+# locks Veda's file system arbitrates between processes; without the
+# write-ahead log, whose index is a shared mapping that writes its file,
+# which Veda's files do not take: WebKit asks for it, and keeps a rollback
+# journal.
 SQLITE_OPTIONS=(
 	-DSQLITE_THREADSAFE=1 -DSQLITE_OMIT_LOAD_EXTENSION=1 -DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_ENABLE_FTS3=1
 	-DSQLITE_ENABLE_FTS3_PARENTHESIS=1 -DSQLITE_ENABLE_UNLOCK_NOTIFY=1 -DSQLITE_SECURE_DELETE=1
-	-DSQLITE_ENABLE_COLUMN_METADATA=1 -DSQLITE_DQS=0 -DHAVE_USLEEP=1 -DHAVE_FDATASYNC=1
-	-DSQLITE_DEFAULT_UNIX_VFS=\"unix-none\"
+	-DSQLITE_ENABLE_COLUMN_METADATA=1 -DSQLITE_DQS=0 -DHAVE_USLEEP=1 -DHAVE_FDATASYNC=1 -DSQLITE_OMIT_WAL=1
 )
 stage_sqlite() {
 	local b=$BUILD/sqlite

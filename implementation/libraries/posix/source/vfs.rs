@@ -4,6 +4,7 @@
 //! The file system service, the working directory and file metadata.
 
 use alloc::string::String;
+use alloc::vec::Vec;
 
 use proto::fs::{Stat, vfs};
 use rt::sync::Mutex;
@@ -20,6 +21,10 @@ static VFS: Mutex<Option<vfs::Client>> = Mutex::new(None);
 /// The working directory (absolute, normalised).
 static CWD: Mutex<String> = Mutex::new(String::new());
 
+/// The secret by which this process owns record locks, once the VFS has
+/// drawn it for the connection (`vfs::lock_owner`).
+static LOCK_OWNER: Mutex<Option<Vec<u8>>> = Mutex::new(None);
+
 /// Runs `f` with the VFS connection. Calls from several threads take turns.
 pub fn with<R>(f: impl FnOnce(&vfs::Client) -> R) -> Result<R, isize> {
     let mut slot = VFS.lock();
@@ -28,6 +33,19 @@ pub fn with<R>(f: impl FnOnce(&vfs::Client) -> R) -> Result<R, isize> {
         *slot = Some(vfs::Client::new(channel));
     }
     Ok(f(slot.as_ref().unwrap()))
+}
+
+/// The secret by which this process owns record locks: the VFS draws it
+/// for the connection, which lasts as long as the process, so that its
+/// locks go as it ends.
+pub fn lock_owner() -> Result<Vec<u8>, isize> {
+    let mut slot = LOCK_OWNER.lock();
+    if let Some(secret) = &*slot {
+        return Ok(secret.clone());
+    }
+    let secret = error::ipc(with(|c| c.lock_owner(crate::process::koid()))?)?.0;
+    *slot = Some(secret.clone());
+    Ok(secret)
 }
 
 pub fn cwd() -> String {

@@ -36,7 +36,7 @@ interpreter, with the libraries they stand on.
 | `compression.zstd` | Zstandard 1.5.7 |
 | `decimal` | mpdecimal 4.0.1 |
 | `xml.etree`, `xml.parsers.expat` | Expat 2.9.0 |
-| `sqlite3`, `dbm.sqlite3` | SQLite 3.54.1, with full-text search (FTS3, FTS4, FTS5), R*Tree indexes and the mathematical functions |
+| `sqlite3`, `dbm.sqlite3` | SQLite 3.54.1, with full-text search (FTS3, FTS4, FTS5), R*Tree indexes and the mathematical functions; it locks a database between processes, without a write-ahead log ([Limits](#limits)) |
 | `ssl`, `hashlib`, `hmac` | OpenSSL 3.5.9; `ssl` trusts the certificate authorities of `/system/etc/ssl/cert.pem` (Mozilla's list) |
 
 A module that cannot be had says why, in the traceback of its import:
@@ -163,20 +163,25 @@ Python's terms:
   `send` that has no room) to end. A fault ends the program:
   `faulthandler` reports the signals a program raises, not a stack
   overflow.
-- **Files have no links, permissions or locks.** `os.link`, `os.symlink`
-  and `os.mkfifo` are not there (pathlib's raise
-  `UnsupportedOperation`); `os.chmod` changes nothing, a file is the one
-  user's (`os.chown` to another fails, `PermissionError`), and
-  `fcntl.flock` and `fcntl.lockf` fail (`ENOLCK`). SQLite therefore locks
-  no database: a database is one connection's to write at a time. A file
-  keeps one time, its modification's, which `st_atime` and `st_ctime`
-  give too. Its blocks are all there: a file seeked past its end takes the
-  space it skips, and a file holds 2 GiB at most (`OSError`, `ENOSPC`).
+- **Files have no links or permissions.** `os.link`, `os.symlink` and
+  `os.mkfifo` are not there (pathlib's raise `UnsupportedOperation`);
+  `os.chmod` changes nothing, and a file is the one user's (`os.chown` to
+  another fails, `PermissionError`). A file keeps one time, its
+  modification's, which `st_atime` and `st_ctime` give too. Its blocks
+  are all there: a file seeked past its end takes the space it skips, and
+  a file holds 2 GiB at most (`OSError`, `ENOSPC`). Its locks
+  (`fcntl.flock`, `fcntl.lockf`, `fcntl.fcntl`'s) are Linux's, between
+  processes, but only files take them (`ENOLCK` on a directory, a pipe or
+  a socket), and a wait for one is not ended by a signal.
 - **Files map as copies.** `mmap` maps a file to read (`ACCESS_READ`) or
   as a private copy (`ACCESS_COPY`); a mapping that writes the file
   (`ACCESS_WRITE`, and `ACCESS_DEFAULT`, which is that) fails (`ENODEV`).
   Memory files (`os.memfd_create`) and the files of `/dev/shm`
-  (`multiprocessing.shared_memory`'s) are shared memory.
+  (`multiprocessing.shared_memory`'s) are shared memory. SQLite, which
+  locks a database between processes as on Linux, therefore keeps no
+  write-ahead log, whose index is a mapping that writes a file beside the
+  database: `PRAGMA journal_mode = WAL` leaves the journal as it is
+  (`dbm.sqlite3` asks for it, and does without).
 - **The network** has no out-of-band data (`MSG_OOB`, which
   `ftplib.FTP.abort` sends), no ancillary data on Internet sockets
   (`IPV6_RECVHOPLIMIT` and the like) and no list of interfaces
@@ -223,7 +228,7 @@ and `build.sh` builds it. The patch:
 - **Has CPython's tests skip what Veda lacks** (`Lib/test`), by what they
   need where it can be told: a shell (`support.requires_shell`), a
   `preexec_fn` (`support.requires_preexec_fn`), signals from other
-  processes, file locks (`os_helper.skip_unless_file_locks`), permission
+  processes, permission
   bits (`os_helper.skip_unless_working_chmod`), shared writable mappings,
   symbolic links, ancillary data; and expect what Veda does as it does it
   (UTF-8 in the C locale, names that are not UTF-8 refused, musl's
@@ -238,8 +243,9 @@ and `build.sh` builds it. The patch:
   `ProcessPoolExecutor`), shared memory (`multiprocessing.shared_memory`),
   signals, time, sockets (TCP and UDP over IPv4 and IPv6, Unix domain,
   ports shared by an IPv4 and an IPv6-only socket), asyncio, TLS, hashes,
-  compression, SQLite, data formats, memory, and virtual environments
-  with pip; and that what Veda has not fails as this document says.
+  compression, SQLite (a database two processes share too), data formats,
+  memory, file locks between processes, and virtual environments with
+  pip; and that what Veda has not fails as this document says.
   `systest` runs it (`/system/tests/python/stdlib.py`), with the host's
   servers.
 - **`verification/ui/python.vts`** runs Python in the Terminal: a script
@@ -255,7 +261,7 @@ and `build.sh` builds it. The patch:
   test other systems, Windows' above all, or what Veda has not: `fork`,
   Tk, curses, `ctypes`...) and 9 need resources a run is not given by
   default (`-u`: the Internet, a lot of time or disk). Of the 48,331
-  tests in the files that run, 3,791 skip, each saying what it needs:
+  tests in the files that run, 3,766 skip, each saying what it needs:
   another system, or what Veda has not. With every resource but the
   Internet and what Veda has not (`-uall` less `network`, `urlfetch`,
   `largefile`, `extralargefile`, `gui`, `audio`, `tzdata` and `curses`,

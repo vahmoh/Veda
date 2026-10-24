@@ -15,7 +15,7 @@ use crate::fd::{self, Description, Object};
 use crate::inet::Recv;
 use crate::inherit::{Inherited, Pseudo};
 use crate::linux::errno::*;
-use crate::linux::{self, Flock, Iovec, Pollfd, fcntl, ioctl, o, poll, rwf};
+use crate::linux::{self, Iovec, Pollfd, fcntl, ioctl, o, poll, rwf};
 use crate::log::Log;
 use crate::{time, tty, user, vfs};
 
@@ -509,26 +509,10 @@ pub unsafe fn fcntl(fd: i32, cmd: u32, arg: usize) -> SysResult {
             desc.set_status(arg as u32);
             Ok(0)
         }
-        // There are no advisory locks between processes (`lock`): as none
-        // is ever held, none is in the way.
-        fcntl::GETLK => {
-            let desc = fd::get(fd)?;
+        // Advisory locks, which the VFS arbitrates.
+        fcntl::GETLK | fcntl::SETLK | fcntl::SETLKW | fcntl::OFD_GETLK | fcntl::OFD_SETLK | fcntl::OFD_SETLKW => {
             // SAFETY: the program passed a `struct flock`.
-            let mut l: Flock = unsafe { user::read(arg)? };
-            lock(&desc, l.kind)?;
-            l.kind = fcntl::F_UNLCK;
-            // SAFETY: as above.
-            unsafe { user::write(arg, l)? };
-            Ok(0)
-        }
-        fcntl::SETLK | fcntl::SETLKW => {
-            let desc = fd::get(fd)?;
-            // SAFETY: the program passed a `struct flock`.
-            let l: Flock = unsafe { user::read(arg)? };
-            match l.kind {
-                fcntl::F_UNLCK => Ok(0),
-                kind => lock(&desc, kind).and(Err(ENOLCK)),
-            }
+            unsafe { crate::lock::fcntl(fd, cmd, arg) }
         }
         // The owner is kept, as a program may ask who it is; none is sent
         // SIGIO or SIGURG, as Veda's signals are synchronous.
@@ -580,32 +564,6 @@ pub unsafe fn fcntl(fd: i32, cmd: u32, arg: usize) -> SysResult {
             Object::Memfd(m) => Ok(m.seals() as usize),
             _ => Err(EINVAL),
         },
-        _ => Err(EINVAL),
-    }
-}
-
-/// Checks a request for a record lock of `kind` (`F_RDLCK`, `F_WRLCK`) on
-/// `desc`. Advisory locks between processes need a party they share, which
-/// the VFS is not yet: rather than let two processes both "hold" a lock (a
-/// lock file, a database), every lock is refused with `ENOLCK`, which says
-/// that the system has no room for locks; unlocking succeeds.
-fn lock(desc: &Description, kind: i16) -> Result<(), isize> {
-    match kind {
-        fcntl::F_RDLCK if !desc.readable() => Err(EBADF),
-        fcntl::F_WRLCK if !desc.writable() => Err(EBADF),
-        fcntl::F_RDLCK | fcntl::F_WRLCK => Ok(()),
-        _ => Err(EINVAL),
-    }
-}
-
-/// `flock`: whole-file locks, refused as record locks are (see [`lock`]);
-/// unlocking succeeds.
-pub fn flock(fd: i32, operation: u32) -> SysResult {
-    use crate::linux::flock::{EX, NB, SH, UN};
-    fd::get(fd)?;
-    match operation & !NB {
-        UN => Ok(0),
-        SH | EX => Err(ENOLCK),
         _ => Err(EINVAL),
     }
 }
@@ -1026,33 +984,6 @@ mod tests {
     fn null(mode: u32) -> (i32, Arc<Description>) {
         let desc = Description::new(Object::Null, mode);
         (fd::insert(desc.clone(), false, 0).unwrap(), desc)
-    }
-
-    #[test]
-    fn advisory_locks_are_refused_and_unlocks_succeed() {
-        use crate::linux::flock::{EX, NB, SH, UN};
-        let (rw, _) = null(o::RDWR);
-        let (ro, _) = null(o::RDONLY);
-        assert_eq!(flock(rw, EX), Err(ENOLCK));
-        assert_eq!(flock(rw, SH | NB), Err(ENOLCK));
-        assert_eq!(flock(rw, UN), Ok(0));
-        assert_eq!(flock(rw, 0), Err(EINVAL));
-        let lock_with = |fd: i32, cmd: u32, kind: i16| {
-            let mut l = Flock { kind, ..Default::default() };
-            // SAFETY: a `struct flock` of the test's.
-            let r = unsafe { fcntl(fd, cmd, &mut l as *mut Flock as usize) };
-            (r, l.kind)
-        };
-        assert_eq!(lock_with(rw, fcntl::SETLK, fcntl::F_WRLCK).0, Err(ENOLCK));
-        assert_eq!(lock_with(rw, fcntl::SETLKW, fcntl::F_RDLCK).0, Err(ENOLCK));
-        assert_eq!(lock_with(rw, fcntl::SETLK, fcntl::F_UNLCK).0, Ok(0));
-        // A lock the descriptor's access does not allow, or no lock at all.
-        assert_eq!(lock_with(ro, fcntl::SETLK, fcntl::F_WRLCK).0, Err(EBADF));
-        assert_eq!(lock_with(rw, fcntl::SETLK, 7).0, Err(EINVAL));
-        // No lock is ever held, so none is in the way.
-        assert_eq!(lock_with(rw, fcntl::GETLK, fcntl::F_WRLCK), (Ok(0), fcntl::F_UNLCK));
-        assert_eq!(lock_with(rw, fcntl::GETLK, fcntl::F_UNLCK).0, Err(EINVAL));
-        let _ = (fd::remove(rw), fd::remove(ro));
     }
 
     #[test]

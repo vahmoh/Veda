@@ -10,7 +10,7 @@ use crate::fd::{self, Object};
 use crate::linux::errno::*;
 use crate::linux::{Timespec, clock, nr};
 use crate::{
-    epoll, eventfd, fs, io, mem, memfd, process, sched, signal, socket, system, thread, time, timerfd, user, vfs,
+    epoll, eventfd, fs, io, lock, mem, memfd, process, sched, signal, socket, system, thread, time, timerfd, user, vfs,
 };
 
 /// Deadline (monotonic ns) of a relative timeout, `None` for none.
@@ -239,7 +239,7 @@ unsafe fn generic(n: usize, a: [usize; 6]) -> SysResult {
             // The machine's names are the system's: no program changes them.
             nr::SETHOSTNAME | nr::SETDOMAINNAME => Err(EPERM),
             nr::FCNTL => io::fcntl(fd0, a[1] as u32, a[2]),
-            nr::FLOCK => io::flock(fd0, a[1] as u32),
+            nr::FLOCK => lock::flock(fd0, a[1] as u32),
             nr::FSYNC | nr::FDATASYNC => io::fsync(fd0),
             nr::SYNC_FILE_RANGE => io::sync_file_range(fd0, a[1] as i64, a[2] as i64, a[3] as u32),
             nr::SYNC => io::sync(),

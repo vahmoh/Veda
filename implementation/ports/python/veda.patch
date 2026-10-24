@@ -732,48 +732,6 @@
  
  if FS_NONASCII:
      TESTFN_NONASCII = TESTFN_ASCII + FS_NONASCII
-@@ -296,6 +299,41 @@
-     return test if ok else unittest.skip(msg)(test)
- 
- 
-+_can_lock_files = None
-+
-+def can_lock_files():
-+    """Whether files take advisory locks: fcntl.lockf(), fcntl.flock()
-+    (Veda's take none yet, and refuse them with ENOLCK)."""
-+    global _can_lock_files
-+    if _can_lock_files is not None:
-+        return _can_lock_files
-+    try:
-+        import fcntl
-+    except ImportError:
-+        _can_lock_files = False
-+        return _can_lock_files
-+    try:
-+        with open(TESTFN, "wb") as f:
-+            try:
-+                fcntl.lockf(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-+                fcntl.lockf(f, fcntl.LOCK_UN)
-+            except OSError:
-+                can = False
-+            else:
-+                can = True
-+    finally:
-+        unlink(TESTFN)
-+    _can_lock_files = can
-+    return can
-+
-+
-+def skip_unless_file_locks(test):
-+    """Skip tests that lock files."""
-+    ok = can_lock_files()
-+    msg = "requires file locks"
-+    return test if ok else unittest.skip(msg)(test)
-+
-+
- @contextlib.contextmanager
- def save_mode(path, *, quiet=False):
-     """Context manager that restores the mode (permissions) of *path* on exit.
 --- a/Lib/test/test_asyncio/test_events.py
 +++ b/Lib/test/test_asyncio/test_events.py
 @@ -2429,6 +2429,7 @@
@@ -965,7 +923,7 @@
              import faulthandler
 --- a/Lib/test/test_fcntl.py
 +++ b/Lib/test/test_fcntl.py
-@@ -8,10 +8,10 @@
+@@ -8,7 +8,7 @@
  import sys
  import unittest
  from test.support import (
@@ -973,52 +931,8 @@
 +    cpython_only, get_pagesize, is_apple, requires_subprocess, verbose, is_emscripten, is_veda
  )
  from test.support.import_helper import import_module
--from test.support.os_helper import TESTFN, unlink, make_bad_fd
-+from test.support.os_helper import TESTFN, unlink, make_bad_fd, skip_unless_file_locks
- 
- 
- # Skip test if no fcntl module.
-@@ -82,6 +82,7 @@
-                 print('struct.pack: ', repr(lockdata))
-         return lockdata
- 
-+    @skip_unless_file_locks
-     def test_fcntl_fileno(self):
-         # the example from the library docs
-         self.f = open(TESTFN, 'wb')
-@@ -94,6 +95,7 @@
-             print('String from fcntl with F_SETLKW: ', repr(rv))
-         self.f.close()
- 
-+    @skip_unless_file_locks
-     def test_fcntl_file_descriptor(self):
-         # again, but pass the file rather than numeric descriptor
-         self.f = open(TESTFN, 'wb')
-@@ -156,6 +158,7 @@
-         finally:
-             os.close(fd)
- 
-+    @skip_unless_file_locks
-     def test_flock(self):
-         # Solaris needs readable file for shared lock
-         self.f = open(TESTFN, 'wb+')
-@@ -172,6 +175,7 @@
- 
-     @unittest.skipIf(platform.system() == "AIX", "AIX returns PermissionError")
-     @requires_subprocess()
-+    @skip_unless_file_locks
-     def test_lockf_exclusive(self):
-         self.f = open(TESTFN, 'wb+')
-         cmd = fcntl.LOCK_EX | fcntl.LOCK_NB
-@@ -185,6 +189,7 @@
- 
-     @unittest.skipIf(platform.system() == "AIX", "AIX returns PermissionError")
-     @requires_subprocess()
-+    @skip_unless_file_locks
-     def test_lockf_share(self):
-         self.f = open(TESTFN, 'wb+')
-         cmd = fcntl.LOCK_SH | fcntl.LOCK_NB
-@@ -213,6 +218,7 @@
+ from test.support.os_helper import TESTFN, unlink, make_bad_fd
+@@ -213,6 +213,7 @@
          hasattr(fcntl, "F_SETPIPE_SZ") and hasattr(fcntl, "F_GETPIPE_SZ"),
          "F_SETPIPE_SZ and F_GETPIPE_SZ are not available on all platforms.")
      @unittest.skipIf(is_emscripten, "Emscripten pipefs doesn't support these")
@@ -1130,23 +1044,7 @@
                  'test requires %s bytes and a long time to run' % self.LARGE)
 --- a/Lib/test/test_mailbox.py
 +++ b/Lib/test/test_mailbox.py
-@@ -515,6 +515,7 @@
-         self._box.popitem()
-         self._box.flush()
- 
-+    @os_helper.skip_unless_file_locks
-     def test_lock_unlock(self):
-         # Lock and unlock the mailbox
-         self.assertFalse(os.path.exists(self._get_lock_path()))
-@@ -543,6 +544,7 @@
-             self.assertIn(self._box.get_string(key), contents)
-         oldbox.close()
- 
-+    @os_helper.skip_unless_file_locks
-     def test_use_context_manager(self):
-         # Mailboxes are usable as a context manager
-         with self._box as box:
-@@ -762,6 +764,9 @@
+@@ -762,6 +762,9 @@
          foo_stat = os.stat(foo_path)
          os.utime(foo_path, (time.time() - 129600 - 2,
                              foo_stat.st_mtime))
@@ -1156,7 +1054,7 @@
          self._box.clean()
          self.assertFalse(os.path.exists(foo_path))
          self.assertTrue(os.path.exists(bar_path))
-@@ -1070,6 +1075,7 @@
+@@ -1070,6 +1073,7 @@
          self._box = self._factory(self._path)
          self.assertEqual(len(self._box), 1)
  
@@ -1164,46 +1062,6 @@
      def test_permissions_after_flush(self):
          # See issue #5346
  
-@@ -1126,6 +1132,7 @@
-         self.assertEqual(st.st_gid, other_gid)
-         self.assertEqual(st.st_mode, mode)
- 
-+    @os_helper.skip_unless_file_locks
-     def test_context_manager_locks_and_closes(self):
-         # Context manager locks/unlocks and closes.
-         # (This test uses an implementation detail to get the state.)
-@@ -1264,6 +1271,7 @@
-         self._box.lock()
-         self._box.unlock()
- 
-+    @os_helper.skip_unless_file_locks
-     def test_relock(self):
-         # Test case for bug #1575506: the mailbox class was locking the
-         # wrong file object in its flush() method.
-@@ -1418,6 +1426,7 @@
-         box.set_sequences({})
-         self.assertEqual(os.listdir(path), ['.mh_sequences'])
- 
-+    @os_helper.skip_unless_file_locks
-     def test_lock_unlock_no_dot_mh_sequences_file(self):
-         path = os.path.join(self._path, 'foo.bar')
-         os.mkdir(path)
-@@ -1433,6 +1442,7 @@
-         key0 = self._box.add(msg0)
-         refmsg0 = self._box.get_message(key0)
- 
-+    @os_helper.skip_unless_file_locks
-     def test_issue7627(self):
-         msg0 = mailbox.MHMessage(self._template % 0)
-         key0 = self._box.add(msg0)
-@@ -1440,6 +1450,7 @@
-         self._box.remove(key0)
-         self._box.unlock()
- 
-+    @os_helper.skip_unless_file_locks
-     def test_pack(self):
-         # Pack the contents of the mailbox
-         msg0 = mailbox.MHMessage(self._template % 0)
 --- a/Lib/test/test_mmap.py
 +++ b/Lib/test/test_mmap.py
 @@ -34,6 +34,29 @@
@@ -1497,15 +1355,7 @@
          affinity2 = os.process_cpu_count()
 --- a/Lib/test/test_os/test_posix.py
 +++ b/Lib/test/test_os/test_posix.py
-@@ -289,6 +289,7 @@
-         assert_python_ok('-c', code)
- 
-     @unittest.skipUnless(hasattr(posix, 'lockf'), "test needs posix.lockf()")
-+    @os_helper.skip_unless_file_locks
-     def test_lockf(self):
-         fd = os.open(os_helper.TESTFN, os.O_WRONLY | os.O_CREAT)
-         try:
-@@ -1108,11 +1109,13 @@
+@@ -1108,11 +1108,13 @@
              self.check_chmod(posix.chmod, f.fileno())
  
      @unittest.skipUnless(hasattr(posix, 'lchmod'), 'test needs os.lchmod()')
@@ -1519,7 +1369,7 @@
      def test_lchmod_dir(self):
          target = self.tempdir()
          self.check_chmod(posix.lchmod, target)
-@@ -1328,6 +1331,7 @@
+@@ -1328,6 +1330,7 @@
      @unittest.skipUnless(hasattr(os, 'getegid'), "test needs os.getegid()")
      @unittest.skipUnless(hasattr(os, 'popen'), "test needs os.popen()")
      @support.requires_subprocess()
@@ -1527,7 +1377,7 @@
      def test_getgroups(self):
          with os.popen('id -G 2>/dev/null') as idg:
              groups = idg.read().strip()
-@@ -1495,7 +1499,15 @@
+@@ -1495,7 +1498,15 @@
          if len(mask) > 1:
              # Empty masks are forbidden
              mask.pop()
@@ -1544,7 +1394,7 @@
          self.assertEqual(posix.sched_getaffinity(0), mask)
  
          try:
-@@ -1837,6 +1849,7 @@
+@@ -1837,6 +1848,7 @@
  
      @unittest.skipUnless(hasattr(os, 'readlink') and (os.readlink in os.supports_dir_fd),
                           "test needs dir_fd support in os.readlink()")
@@ -1552,7 +1402,7 @@
      def test_readlink_dir_fd(self):
          with self.prepare() as (dir_fd, name, fullname):
              os.symlink('symlink', fullname)
-@@ -1852,7 +1865,8 @@
+@@ -1852,7 +1864,8 @@
              posix.stat(fullname2) # should not raise exception
              posix.rename(fullname2, fullname)
  
@@ -1913,54 +1763,6 @@
      def test_write(self):
          # Test that wfile.write() sends data immediately, and that it does
          # not truncate sends when interrupted by a Unix signal
---- a/Lib/test/test_sqlite3/test_dbapi.py
-+++ b/Lib/test/test_sqlite3/test_dbapi.py
-@@ -38,6 +38,7 @@
- from test.support import threading_helper, import_helper
- from os import SEEK_SET, SEEK_CUR, SEEK_END
- from test.support.os_helper import TESTFN, TESTFN_UNDECODABLE, unlink, temp_dir, FakePath
-+from test.support.os_helper import skip_unless_file_locks
- 
- from .util import memory_database, cx_limit
- from .util import MemoryDatabaseMixin
-@@ -1949,6 +1950,9 @@
- 
- 
- @requires_subprocess()
-+# SQLite locks a database by locking its file (Veda's SQLite, without file
-+# locks, does not).
-+@skip_unless_file_locks
- class MultiprocessTests(unittest.TestCase):
-     CONNECTION_TIMEOUT = 0  # Disable the busy timeout.
- 
---- a/Lib/test/test_sqlite3/test_transactions.py
-+++ b/Lib/test/test_sqlite3/test_transactions.py
-@@ -24,7 +24,7 @@
- import sqlite3 as sqlite
- from contextlib import contextmanager
- 
--from test.support.os_helper import TESTFN, unlink
-+from test.support.os_helper import TESTFN, unlink, skip_unless_file_locks
- from test.support.script_helper import assert_python_ok
- 
- from .util import memory_database
-@@ -111,12 +111,16 @@
-         res = self.cur2.fetchall()
-         self.assertEqual(len(res), 1)
- 
-+    # SQLite locks a database by locking its file (Veda's SQLite, without
-+    # file locks, does not).
-+    @skip_unless_file_locks
-     def test_raise_timeout(self):
-         self.cur1.execute("create table test(i)")
-         self.cur1.execute("insert into test(i) values (5)")
-         with self.assertRaises(sqlite.OperationalError):
-             self.cur2.execute("insert into test(i) values (5)")
- 
-+    @skip_unless_file_locks
-     def test_locking(self):
-         # This tests the improved concurrency with pysqlite 2.3.4. You needed
-         # to roll back con2 before you could commit con1.
 --- a/Lib/test/test_subprocess.py
 +++ b/Lib/test/test_subprocess.py
 @@ -722,6 +722,7 @@
