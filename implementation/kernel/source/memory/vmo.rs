@@ -221,7 +221,10 @@ impl Vmo {
         true
     }
 
-    /// Copies `data` into the VMO, committing pages as needed.
+    /// Copies `data` into the VMO, committing pages as needed: zeros for a
+    /// page of anonymous memory that has none committed commit none, as it
+    /// reads as zeros already (clearing what a file no longer holds takes
+    /// no memory where it held nothing).
     pub fn write(&self, offset: u64, data: &[u8]) -> bool {
         if offset.checked_add(data.len() as u64).is_none_or(|end| end > self.size()) {
             return false;
@@ -231,7 +234,14 @@ impl Vmo {
             let pos = offset + done as u64;
             let in_page = (pos % PAGE_SIZE) as usize;
             let n = (PAGE_SIZE as usize - in_page).min(data.len() - done);
-            let Some(f) = self.page(pos, true) else { return false };
+            let zeros = self.kind == VmoKind::Anonymous && data[done..done + n].iter().all(|&b| b == 0);
+            let Some(f) = self.page(pos, !zeros) else {
+                if zeros {
+                    done += n;
+                    continue;
+                }
+                return false;
+            };
             let at = f + in_page as u64;
             // SAFETY: as in `read`.
             unsafe { core::ptr::copy_nonoverlapping(data.as_ptr().add(done), phys_to_virt(at) as *mut u8, n) };
