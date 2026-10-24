@@ -176,12 +176,19 @@ fn check_directories() -> Check {
     ensure(fs::hard_link("notes.txt", "link.txt").is_err(), || "a hard link was made".into())
 }
 
+/// `File::lock` and the like are the C library's `flock`, whose locks the
+/// VFS arbitrates between processes: this process's exclusive lock is in a
+/// child's way until it unlocks it.
 fn check_file_locks() -> Check {
-    // The standard library for Veda does not lock files yet (with the C
-    // library's `flock`): it says so.
     let f = io("open", File::open("notes.txt"))?;
-    let lock = f.lock().map_err(|e| e.kind());
-    ensure(lock == Err(io::ErrorKind::Unsupported), || format!("lock: {lock:?}"))
+    io("lock", f.lock())?;
+    let locked = child("try-lock", |_| {})?;
+    let said = String::from_utf8_lossy(&locked.stdout);
+    ensure(said == "Err(WouldBlock)\n", || format!("a child's try_lock while locked: '{}'", said.trim_end()))?;
+    io("unlock", f.unlock())?;
+    let unlocked = child("try-lock", |_| {})?;
+    let said = String::from_utf8_lossy(&unlocked.stdout);
+    ensure(said == "Ok(())\n", || format!("a child's try_lock once unlocked: '{}'", said.trim_end()))
 }
 
 fn check_threads() -> Check {
@@ -1032,6 +1039,14 @@ fn child_mode(mode: &str) -> i32 {
             thread::sleep(Duration::from_secs(60));
             0
         }
+        // It tries to lock `notes.txt`, which its parent may hold locked.
+        "try-lock" => match File::open("notes.txt") {
+            Ok(f) => {
+                println!("{:?}", f.try_lock().map_err(|e| io::Error::from(e).kind()));
+                0
+            }
+            Err(_) => 1,
+        },
         // A Unix domain socket's client: it answers in capitals what it
         // reads.
         "unix" => {

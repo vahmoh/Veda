@@ -410,6 +410,46 @@
          )))]
          unsafe fn os_datasync(fd: c_int) -> c_int {
              libc::fsync(fd)
+@@ -1332,6 +1337,7 @@
+                 target_os = "aix",
+                 target_os = "android",
+                 target_vendor = "apple",
++                target_os = "veda",
+             ) => {
+                 cvt(unsafe { libc::flock(self.as_raw_fd(), libc::LOCK_EX) })?;
+                 Ok(())
+@@ -1356,6 +1362,7 @@
+                 target_os = "aix",
+                 target_os = "android",
+                 target_vendor = "apple",
++                target_os = "veda",
+             ) => {
+                 cvt(unsafe { libc::flock(self.as_raw_fd(), libc::LOCK_SH) })?;
+                 Ok(())
+@@ -1380,6 +1387,7 @@
+                 target_os = "aix",
+                 target_os = "android",
+                 target_vendor = "apple",
++                target_os = "veda",
+             ) => {
+                 let result = cvt(unsafe { libc::flock(self.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) });
+                 if let Err(err) = result {
+@@ -1415,6 +1423,7 @@
+                 target_os = "aix",
+                 target_os = "android",
+                 target_vendor = "apple",
++                target_os = "veda",
+             ) => {
+                 let result = cvt(unsafe { libc::flock(self.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) });
+                 if let Err(err) = result {
+@@ -1450,6 +1459,7 @@
+                 target_os = "aix",
+                 target_os = "android",
+                 target_vendor = "apple",
++                target_os = "veda",
+             ) => {
+                 cvt(unsafe { libc::flock(self.as_raw_fd(), libc::LOCK_UN) })?;
+                 Ok(())
 --- a/library/std/src/sys/io/error/unix.rs
 +++ b/library/std/src/sys/io/error/unix.rs
 @@ -18,6 +18,7 @@

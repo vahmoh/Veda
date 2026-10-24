@@ -128,6 +128,7 @@ library's `syscall`, which the POSIX layer carries out.
 | `Mutex`, `Condvar`, `RwLock`, `Once`, parking | Futexes (`FUTEX_WAIT_BITSET`, with absolute deadlines on the monotonic clock) |
 | `sleep`, `Instant`, `SystemTime`, `HashMap`'s keys | The kernel's clocks (`clock_nanosleep`, `clock_gettime`) and generator (`getrandom`) |
 | Files and directories | The VFS: `openat`, `fstatat` and `unlinkat` relative to a directory (so `remove_dir_all` cannot be led elsewhere by a directory replaced meanwhile), `preadv` and `pwritev` |
+| `File::lock` and the like | `flock`: advisory locks on the whole file, held by the open file description, which the VFS arbitrates between processes |
 | `Command` | `posix_spawn`, with file actions for the standard streams and the working directory |
 | `io::pipe`, `UnixStream::pair`, `UnixDatagram::pair` | Pipes and socket pairs, made close-on-exec |
 | `UnixListener`, `UnixStream`, `UnixDatagram` | Unix domain sockets bound to paths, with time-outs, non-blocking use and names (`local_addr`, `peer_addr`, a datagram's sender); tokio's too, with `peer_cred` |
@@ -176,11 +177,8 @@ Rust programs share the limits of C programs
   abstract names (`SocketAddr::from_abstract_name`) are not in the
   standard library for Veda, which sees a socket bound to one as unnamed
   (the C library has them, for `libc`'s calls).
-- **No links or permissions, nor `File::lock`**: `fs::hard_link` (but
-  between `/dev/shm`'s shared memory objects) and `symlink` fail,
-  permissions are not kept, and `File::lock` and the like fail with
-  `Unsupported`: the standard library for Veda does not use the C
-  library's locks (`flock`) yet, which C programs have.
+- **No links or permissions**: `fs::hard_link` (but between `/dev/shm`'s
+  shared memory objects) and `symlink` fail, and permissions are not kept.
 - **Thread names** are the standard library's alone: panics and
   `thread::current` show them, the system does not.
 
@@ -222,10 +220,10 @@ CMake (for LLVM) and Python 3 (for `x.py`) are among the toolchain's
 - **`verification/rust/stdlib.rs`** checks the standard library, from
   files, threads, processes and pipes to sockets (Unix domain, TCP and
   UDP, shared with child processes, and the host's servers through QEMU),
-  names, panics, backtraces and a deep stack, and that `File::lock`,
-  `pre_exec` and `exec` fail. `cargo automation build` compiles it
-  twice into `/system/tests/rust`: position-independent (`stdlib`) and at
-  a fixed address (`stdlib-fixed`).
+  names, file locks between processes, panics, backtraces and a deep
+  stack, and that `pre_exec` and `exec` fail. `cargo automation build`
+  compiles it twice into `/system/tests/rust`: position-independent
+  (`stdlib`) and at a fixed address (`stdlib-fixed`).
 - **`verification/stdcrates`** (`/system/bin/stdcrates` in the image)
   checks crates as Veda's ports have them: libc, both releases of
   getrandom, rand, rustix, tempfile, and tokio (both runtimes, with TCP,
