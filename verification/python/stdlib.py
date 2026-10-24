@@ -415,15 +415,36 @@ def check_shared_memory():
     ensure(not os.path.exists(path), f"{path} is still there")
 
 
+# A child that says it is ready, then runs until SIGINT interrupts it: in
+# a loop that makes no system call, or in a sleep.
+INTERRUPTIBLE_CHILD = '''
+import sys, time
+print("ready", flush=True)
+try:
+    if sys.argv[1] == "loop":
+        while True:
+            pass
+    time.sleep(60)
+except KeyboardInterrupt:
+    print("interrupted", flush=True)
+    sys.exit(5)
+'''
+
+
+class Alarm(Exception):
+    pass
+
+
 def check_signals():
     import signal
+    import subprocess
 
     got = []
     old = signal.signal(signal.SIGUSR1, lambda signum, frame: got.append(signum))
     try:
         os.kill(os.getpid(), signal.SIGUSR1)
         signal.raise_signal(signal.SIGUSR1)
-        # From another thread, as its next system call returns.
+        # From another thread.
         main = threading.get_ident()
         threading.Thread(target=signal.pthread_kill, args=(main, signal.SIGUSR1)).start()
         deadline = time.monotonic() + 10
@@ -433,8 +454,49 @@ def check_signals():
     finally:
         signal.signal(signal.SIGUSR1, old)
     raises(KeyboardInterrupt, signal.raise_signal, signal.SIGINT)
-    # Signals are synchronous: no alarms or interval timers.
-    ensure(not hasattr(signal, "alarm") and not hasattr(signal, "setitimer"), "alarm or setitimer is there")
+    # KeyboardInterrupt follows SIGINT from another process: in a child that
+    # runs Python code, or sleeps; and in this process, from its child.
+    for how in ("loop", "sleep"):
+        p = subprocess.Popen([sys.executable, "-c", INTERRUPTIBLE_CHILD, how], stdout=subprocess.PIPE, text=True)
+        ready = p.stdout.readline()
+        p.send_signal(signal.SIGINT)
+        out, _ = p.communicate(timeout=60)
+        ensure(ready == "ready\n" and out == "interrupted\n" and p.returncode == 5,
+               f"the child ({how}) said {ready!r}, {out!r} and exited with {p.returncode}")
+    # One that lets it end it ends as the signal ends a program.
+    p = subprocess.Popen([sys.executable, "-c", "import time; print('ready', flush=True); time.sleep(60)"],
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    p.stdout.readline()
+    p.send_signal(signal.SIGINT)
+    _, err = p.communicate(timeout=60)
+    ensure(p.returncode == -signal.SIGINT and "KeyboardInterrupt" in err, f"the child exited with {p.returncode}")
+    e = raises(KeyboardInterrupt, python, "-c", f"import os, signal; os.kill({os.getpid()}, signal.SIGINT)")
+    ensure(isinstance(e, KeyboardInterrupt), "no KeyboardInterrupt from the child")
+
+    # alarm, and interval timers: SIGALRM interrupts a sleep (its handler
+    # raises), and code that makes no system call.
+    def ring(signum, frame):
+        raise Alarm()
+
+    old = signal.signal(signal.SIGALRM, ring)
+    try:
+        start = time.monotonic()
+        signal.alarm(1)
+        raises(Alarm, time.sleep, 30)
+        elapsed = time.monotonic() - start
+        ensure(0.9 <= elapsed < 10, f"the alarm rang after {elapsed:.2f} s")
+        rings = []
+        signal.signal(signal.SIGALRM, lambda signum, frame: rings.append(signum))
+        signal.setitimer(signal.ITIMER_REAL, 0.05, 0.05)
+        deadline = time.monotonic() + 10
+        while len(rings) < 3 and time.monotonic() < deadline:
+            pass
+        left, interval = signal.setitimer(signal.ITIMER_REAL, 0)
+        ensure(len(rings) >= 3 and interval == 0.05, f"the timer rang {len(rings)} times, every {interval}")
+        ensure(signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0), "the timer is still armed")
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, old)
 
 
 def check_time():

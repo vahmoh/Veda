@@ -167,11 +167,10 @@ Rust programs share the limits of C programs
   `CommandExt::exec` and a `Command` that changes `PATH` for a program
   named without a directory. `process_group` changes nothing, as Veda's
   processes have no groups.
-- **Signals are synchronous**, and a fault ends the program (status 139
-  in the Terminal): the standard library has no stack-overflow handler,
-  and a thread that overflows its stack ends the program without a
-  message. `Child::kill` ends a child. tokio's signals never come (it
-  waits for them as they come to a process); its child processes work.
+- **A fault ends the program** (status 139 in the Terminal): the
+  standard library has no stack-overflow handler, and a thread that
+  overflows its stack ends the program without a message. `Child::kill`
+  ends a child.
 - **The network is TCP and UDP**, without multicast (`join_multicast_v4`
   and the like fail). Unix domain sockets are named by paths: Linux's
   abstract names (`SocketAddr::from_abstract_name`) are not in the

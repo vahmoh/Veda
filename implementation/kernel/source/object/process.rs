@@ -1,13 +1,26 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Processes: an address space, a handle table and a set of threads.
+//! Processes: an address space, a handle table and a set of threads, and
+//! the POSIX signals other processes send them.
+//!
+//! A process that takes signals has a *signal entry* (`SIGNAL_ENTRY_SET`),
+//! where its threads go when interrupted: a signal another process sends
+//! it waits among its *incoming* signals, which it takes
+//! (`SIGNAL_TAKE`), and the thread that set the entry (another, once that
+//! one has ended) is interrupted to take them. Which of its threads acts
+//! on each, by what it blocks and handles, is the process's own affair (its
+//! POSIX layer's). A process without an entry yet has the signals it
+//! inherited as ignored and as blocked so (`PROCESS_SIGNALS_INHERITED`): an
+//! ignored one does nothing, and a blocked one waits among its incoming
+//! signals for it to take once it has an entry; another ends it if it ends
+//! a process by default, and leaves it alone if not.
 
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
-use abi::{ProcessInfo, process_state};
+use abi::{ProcessInfo, SentSignals, process_state};
 
 use super::handle::HandleTable;
 use super::{Name, Signals};
@@ -51,6 +64,17 @@ pub struct Process {
     /// ([`abi::memory_class`]): its creator's at first, and only ever more
     /// expendable ([`Process::set_memory_class`]).
     memory_class: AtomicU8,
+    /// Where its threads go when interrupted (0: nowhere, it takes no
+    /// signals).
+    signal_entry: AtomicU64,
+    /// The thread that other processes' signals interrupt.
+    signal_receiver: SpinLock<Weak<Thread>>,
+    /// The signals other processes sent it, not taken yet.
+    incoming: SpinLock<SentSignals>,
+    /// The signals it inherited as ignored, and as blocked, which it has so
+    /// until it has a signal entry.
+    inherited_ignored: AtomicU64,
+    inherited_blocked: AtomicU64,
 }
 
 /// Every process ever created that is still referenced somewhere.
@@ -125,6 +149,11 @@ impl Process {
             restrictions: AtomicUsize::new(0),
             max_priority,
             memory_class: AtomicU8::new(memory_class),
+            signal_entry: AtomicU64::new(0),
+            signal_receiver: SpinLock::new(Weak::new()),
+            incoming: SpinLock::new(SentSignals::default()),
+            inherited_ignored: AtomicU64::new(0),
+            inherited_blocked: AtomicU64::new(0),
         });
         let mut list = PROCESSES.lock();
         list.retain(|w| w.strong_count() > 0);
@@ -169,7 +198,8 @@ impl Process {
 
     /// Called by a thread of this process as it exits. The processor time
     /// it used comes to [`Process::keep_cpu_time`] as it is switched out
-    /// for the last time.
+    /// for the last time. An interruption it had not acted on goes to
+    /// another thread, for the signals it may have been for.
     pub fn thread_exited(self: &Arc<Self>, t: &Thread) {
         let last = {
             let mut threads = self.threads.lock();
@@ -179,6 +209,89 @@ impl Process {
         if last {
             let code = self.pending_code.lock().unwrap_or(0);
             self.terminate(code);
+        } else if t.interrupt.load(Ordering::Acquire) {
+            self.interrupt_receiver(Some(t.koid));
+        }
+    }
+
+    /// Where its threads go when interrupted, if it takes signals.
+    pub fn signal_entry(&self) -> Option<u64> {
+        match self.signal_entry.load(Ordering::Acquire) {
+            0 => None,
+            entry => Some(entry),
+        }
+    }
+
+    /// Sets where its threads go when interrupted (`SIGNAL_ENTRY_SET`), and
+    /// the thread that other processes' signals interrupt, which takes at
+    /// once those that waited for it (it inherited them blocked).
+    pub fn set_signal_entry(&self, entry: u64, receiver: &Arc<Thread>) {
+        *self.signal_receiver.lock() = Arc::downgrade(receiver);
+        self.signal_entry.store(entry, Ordering::Release);
+        if self.incoming.lock().set != 0 {
+            self.interrupt_receiver(None);
+        }
+    }
+
+    /// Sets the signals it inherited as ignored and as blocked
+    /// (`PROCESS_SIGNALS_INHERITED`), bit `n - 1` for signal `n`.
+    pub fn set_inherited_signals(&self, ignored: u64, blocked: u64) {
+        let kill = 1 << (abi::posix_signal::KILL - 1);
+        self.inherited_ignored.store(ignored & !kill, Ordering::Release);
+        self.inherited_blocked.store(blocked & !kill, Ordering::Release);
+    }
+
+    /// Sends it POSIX signal `s` from process `sender` (`PROCESS_SIGNAL`):
+    /// it waits among the incoming signals of a process with a signal
+    /// entry, whose receiving thread is interrupted; a process without one
+    /// does with it as it inherited it (nothing if ignored; blocked, it
+    /// waits among the incoming signals), else is ended if `s` ends a
+    /// process by default. `SIGKILL` ends it.
+    pub fn signal(self: &Arc<Self>, s: usize, sender: u64) {
+        let bit = 1 << (s - 1);
+        if self.signal_entry().is_none() {
+            if self.inherited_ignored.load(Ordering::Acquire) & bit != 0 {
+                return;
+            }
+            if self.inherited_blocked.load(Ordering::Acquire) & bit != 0 {
+                self.incoming.lock().add(s, sender);
+                return;
+            }
+        }
+        if s == abi::posix_signal::KILL || self.signal_entry().is_none() {
+            if abi::posix_signal::ends_process(s) {
+                self.kill(abi::EXIT_CODE_SIGNALED - s as i64);
+            }
+            return;
+        }
+        self.incoming.lock().add(s, sender);
+        self.interrupt_receiver(None);
+    }
+
+    /// The signals other processes sent it, not taken yet.
+    pub fn sent_signals(&self) -> SentSignals {
+        *self.incoming.lock()
+    }
+
+    /// Takes signals `set` from those sent it ([`Process::sent_signals`]).
+    pub fn take_signals(&self, set: u64) {
+        let mut incoming = self.incoming.lock();
+        incoming.set &= !set;
+    }
+
+    /// Interrupts the thread that takes the signals other processes send it:
+    /// the one that set its signal entry or, once that one has ended (or is
+    /// `but`), another that has started and acts on interruptions.
+    pub fn interrupt_receiver(&self, but: Option<u64>) {
+        let eligible = |t: &Arc<Thread>| {
+            but != Some(t.koid)
+                && !matches!(t.state(), scheduler::State::Dead | scheduler::State::New)
+                && scheduler::takes_interruptions(t)
+        };
+        let receiver = self.signal_receiver.lock().upgrade().filter(eligible);
+        let t = receiver.or_else(|| self.threads.lock().iter().find(|t| eligible(t)).cloned());
+        if let Some(t) = t {
+            scheduler::interrupt(&t);
         }
     }
 

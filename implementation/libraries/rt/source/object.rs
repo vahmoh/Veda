@@ -54,7 +54,8 @@ impl Handle {
     /// Waits until any of `signals` is active or `deadline` (monotonic ns)
     /// passes. Returns the active signals.
     pub fn wait(&self, signals: u32, deadline: u64) -> Result<u32, Error> {
-        call(nr::OBJECT_WAIT_ONE, [self.0 as usize, signals as usize, deadline as usize, 0, 0, 0]).map(|s| s as u32)
+        sys::call_waiting(nr::OBJECT_WAIT_ONE, [self.0 as usize, signals as usize, deadline as usize, 0, 0, 0])
+            .map(|s| s as u32)
     }
 
     /// Sets/clears user signals on the object.
@@ -511,7 +512,7 @@ impl Port {
     /// first: how many. `TimedOut` if the deadline passed.
     pub fn wait_packets(&self, out: &mut [abi::PortPacket], deadline: u64) -> Result<usize, Error> {
         let max = out.len().min(abi::PORT_WAIT_MAX);
-        call(nr::PORT_WAIT, [self.raw() as usize, out.as_mut_ptr() as usize, max, deadline as usize, 0, 0])
+        sys::call_waiting(nr::PORT_WAIT, [self.raw() as usize, out.as_mut_ptr() as usize, max, deadline as usize, 0, 0])
     }
 }
 
@@ -589,8 +590,22 @@ impl Process {
         call(nr::PROCESS_KILL, [self.raw() as usize, 0, signal as usize, 0, 0, 0]).map(|_| ())
     }
 
+    /// A handle to the calling process.
+    pub fn current() -> Result<Process, Error> {
+        call(nr::PROCESS_SELF, [0; 6]).map(|h| Process(Handle(h as RawHandle)))
+    }
+
+    /// Sends the process POSIX signal `signal` (1 to 64), and with
+    /// `abi::kill_flags::DESCENDANTS` every process it started that still
+    /// runs (and those they started): its job, as a terminal's Ctrl+C
+    /// signals it. A process that takes signals acts on it as it will; one
+    /// that does not is ended if the signal ends a process by default.
+    pub fn signal(&self, signal: usize, flags: usize) -> Result<(), Error> {
+        call(nr::PROCESS_SIGNAL, [self.raw() as usize, signal, flags, 0, 0, 0]).map(|_| ())
+    }
+
     /// Kills the process and every process it started that still runs
-    /// (and those they started): its job, as a terminal's Ctrl+C ends it.
+    /// (and those they started): its job.
     pub fn kill_tree(&self) -> Result<(), Error> {
         call(nr::PROCESS_KILL, [self.raw() as usize, abi::kill_flags::DESCENDANTS, 0, 0, 0, 0]).map(|_| ())
     }
@@ -753,7 +768,7 @@ impl Vcpu {
 /// Waits on several objects at once. Returns the number of satisfied items;
 /// each item's `observed` field is filled in.
 pub fn wait_many(items: &mut [WaitItem], deadline: u64) -> Result<usize, Error> {
-    call(nr::OBJECT_WAIT_MANY, [items.as_mut_ptr() as usize, items.len(), deadline as usize, 0, 0, 0])
+    sys::call_waiting(nr::OBJECT_WAIT_MANY, [items.as_mut_ptr() as usize, items.len(), deadline as usize, 0, 0, 0])
 }
 
 /// Reads the kernel log starting at `offset`; returns bytes read and the next

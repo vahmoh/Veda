@@ -377,11 +377,13 @@ fn deadline(timeout: Option<u64>) -> u64 {
 
 /// Waits on `channel` for a message, the end of the service or `signals`
 /// until `deadline`; `EAGAIN` when it passes (what a socket's time-outs
-/// make a call fail with, as on Linux).
+/// make a call fail with, as on Linux), `ERESTARTSYS` (`EINTR`, with a
+/// time-out) when a signal is to be acted on.
 fn wait(channel: &Channel, signals: u32, deadline: u64) -> Result<(), isize> {
-    match channel.wait(READABLE | PEER_CLOSED | signals, deadline) {
+    match crate::interrupt::wait_one(&channel.0, READABLE | PEER_CLOSED | signals, deadline) {
         Ok(_) => Ok(()),
         Err(abi::Error::TimedOut) => Err(EAGAIN),
+        Err(abi::Error::Interrupted) => Err(crate::stream::interrupted(deadline)),
         Err(e) => Err(error::kernel(e)),
     }
 }
@@ -418,10 +420,11 @@ fn read_bytes(
         if how.nonblock {
             return if got > 0 { Ok((got, false)) } else { Err(EAGAIN) };
         }
-        match socket.wait(READABLE | PEER_CLOSED | PEER_WRITE_DISABLED, deadline) {
+        match crate::interrupt::wait_one(&socket.0, READABLE | PEER_CLOSED | PEER_WRITE_DISABLED, deadline) {
             Ok(_) => {}
             Err(_) if got > 0 => return Ok((got, false)),
             Err(abi::Error::TimedOut) => return Err(EAGAIN),
+            Err(abi::Error::Interrupted) => return Err(crate::stream::interrupted(deadline)),
             Err(e) => return Err(error::kernel(e)),
         }
     }
@@ -1003,9 +1006,13 @@ impl Inet {
                 Self::waiter(&st, Want::Out).ok_or(ECONNREFUSED)?
             };
             // A connection that takes longer than the socket's send
-            // time-out goes on without the caller.
-            if wait(&channel, signals, end).is_err() {
-                return Err(EINPROGRESS);
+            // time-out goes on without the caller, as one a signal
+            // interrupts does (`EINTR`, as POSIX has it: never started
+            // again, which would find it connecting).
+            match wait(&channel, signals, end) {
+                Ok(()) => {}
+                Err(EINTR | ERESTARTSYS) => return Err(EINTR),
+                Err(_) => return Err(EINPROGRESS),
             }
         }
     }
@@ -1211,9 +1218,10 @@ impl Inet {
                 channel
             };
             // Room in the channel, which other processes may take first.
-            match channel.wait(WRITABLE | PEER_CLOSED, end) {
+            match crate::interrupt::wait_one(&channel.0, WRITABLE | PEER_CLOSED, end) {
                 Ok(_) => {}
                 Err(abi::Error::TimedOut) => return Err(EAGAIN),
+                Err(abi::Error::Interrupted) => return Err(crate::stream::interrupted(end)),
                 Err(e) => return Err(error::kernel(e)),
             }
         }

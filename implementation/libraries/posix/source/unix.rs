@@ -238,11 +238,14 @@ fn deadline(timeout: Option<u64>) -> u64 {
 }
 
 /// Waits on `handle` for `signals` until `deadline`: `EAGAIN` when it
-/// passes (what a socket's time-outs make a call fail with, as on Linux).
+/// passes (what a socket's time-outs make a call fail with, as on Linux),
+/// `ERESTARTSYS` (or `EINTR`, with a time-out) when a signal is to be
+/// acted on.
 fn wait(handle: &Handle, signals: u32, deadline: u64) -> Result<u32, isize> {
-    match handle.wait(signals, deadline) {
+    match crate::interrupt::wait_one(handle, signals, deadline) {
         Ok(s) => Ok(s),
         Err(KError::TimedOut) => Err(EAGAIN),
+        Err(KError::Interrupted) => Err(crate::stream::interrupted(deadline)),
         Err(e) => Err(error::kernel(e)),
     }
 }
@@ -1063,7 +1066,7 @@ impl Unix {
                 }
                 Ok(Err(FsError::Busy)) if !nonblock => {
                     // The listener's backlog is full: try again soon.
-                    if busy_wait(&mut backoff, end) {
+                    if busy_wait(&mut backoff, end)? {
                         return Err(EAGAIN);
                     }
                 }
@@ -1137,7 +1140,7 @@ impl Unix {
                         return Err(EAGAIN);
                     }
                     drop(st);
-                    return Err(if signal::sleep_until(end) { EINTR } else { EAGAIN });
+                    return Err(if signal::sleep_until(end) { crate::stream::interrupted(end) } else { EAGAIN });
                 }
                 // Linux's answers to reading a socket that is not connected.
                 _ if self.kind == Kind::Stream => return Err(EINVAL),
@@ -1238,7 +1241,7 @@ impl Unix {
                     match sent {
                         Ok(Ok(())) => return Ok(data.len()),
                         Ok(Err(FsError::Busy)) if !nonblock => {
-                            if busy_wait(&mut backoff, end) {
+                            if busy_wait(&mut backoff, end)? {
                                 return Err(EAGAIN);
                             }
                         }
@@ -1354,15 +1357,19 @@ enum Target {
 }
 
 /// Waits a while before a call that found a socket's inbox full asks again,
-/// longer each time; whether `deadline` passed.
-fn busy_wait(backoff: &mut u64, deadline: u64) -> bool {
+/// longer each time; whether `deadline` passed. A signal to be acted on
+/// ends it as it ends a blocking call's wait (`ERESTARTSYS`, or `EINTR`
+/// with a time-out).
+fn busy_wait(backoff: &mut u64, deadline: u64) -> Result<bool, isize> {
     let now = time::monotonic_ns();
     if now >= deadline {
-        return true;
+        return Ok(true);
     }
-    signal::sleep_until(now.saturating_add(*backoff).min(deadline));
+    if signal::sleep_until(now.saturating_add(*backoff).min(deadline)) {
+        return Err(crate::stream::interrupted(deadline));
+    }
     *backoff = (*backoff * 2).min(BUSY_WAIT_MAX_NS);
-    false
+    Ok(false)
 }
 
 #[cfg(test)]

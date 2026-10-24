@@ -30,17 +30,29 @@ fn ok(v: usize) -> SysResult {
 }
 
 /// Carries out the system call a thread made (from the architecture's
-/// entry code), returning its result in `frame`.
-pub fn syscall_dispatch(frame: &mut TrapFrame) {
+/// entry code), returning its result in `frame`. Returns whether every
+/// register of `frame` is to be restored (`signal_return` set them), which
+/// only the return from a trap does.
+pub fn syscall_dispatch(frame: &mut TrapFrame) -> bool {
     bkl::acquire();
     scheduler::entered_from_user();
     let (n, a) = frame.syscall();
-    match dispatch(n, a) {
+    let mut restore = false;
+    let result = match n {
+        nr::SIGNAL_RETURN => task::signal_return(frame, a[0], a[1]).map(|()| {
+            restore = true;
+            (0, None)
+        }),
+        _ => dispatch(n, a),
+    };
+    match result {
+        Ok(_) if restore => {}
         Ok((v, second)) => frame.set_syscall_result(v as u64, second.map(|s| s as u64)),
         Err(e) => frame.set_syscall_result(e.as_return() as u64, None),
     }
     scheduler::return_to_user_hook(frame);
     bkl::release();
+    restore
 }
 
 fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
@@ -48,7 +60,7 @@ fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
         nr::DEBUG_WRITE => misc::debug_write(a[0], a[1]),
         nr::LOG_READ => misc::log_read(a[0], a[1], a[2]),
         nr::CLOCK_GET => misc::clock_get(a[0]),
-        nr::SLEEP => misc::sleep(a[0]),
+        nr::SLEEP => misc::sleep(a[0], a[1]),
         nr::YIELD => {
             scheduler::yield_now();
             ok(0)
@@ -63,12 +75,12 @@ fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
         nr::HANDLE_REPLACE => ipc::handle_replace(a[0] as RawHandle, a[1] as u32),
         nr::OBJECT_INFO => ipc::object_info(a[0] as RawHandle, a[1], a[2], a[3]),
         nr::OBJECT_SIGNAL => ipc::object_signal(a[0] as RawHandle, a[1] as u32, a[2] as u32),
-        nr::OBJECT_WAIT_ONE => ipc::wait_one(a[0] as RawHandle, a[1] as u32, a[2] as u64),
-        nr::OBJECT_WAIT_MANY => ipc::wait_many(a[0], a[1], a[2] as u64),
+        nr::OBJECT_WAIT_ONE => ipc::wait_one(a[0] as RawHandle, a[1] as u32, a[2] as u64, a[3]),
+        nr::OBJECT_WAIT_MANY => ipc::wait_many(a[0], a[1], a[2] as u64, a[3]),
         nr::PORT_CREATE => ipc::port_create(),
         nr::OBJECT_WAIT_ASYNC => ipc::wait_async(a[0] as RawHandle, a[1] as RawHandle, a[2] as u64, a[3] as u32),
         nr::OBJECT_WAIT_ASYNC_CANCEL => ipc::wait_async_cancel(a[0] as RawHandle, a[1] as RawHandle, a[2] as u64),
-        nr::PORT_WAIT => ipc::port_wait(a[0] as RawHandle, a[1], a[2], a[3] as u64),
+        nr::PORT_WAIT => ipc::port_wait(a[0] as RawHandle, a[1], a[2], a[3] as u64, a[4]),
         nr::CHANNEL_CREATE => ipc::channel_create(a[0], a[1] as u32),
         nr::CHANNEL_WRITE => ipc::channel_write(a[0] as RawHandle, a[1], a[2], a[3], a[4]),
         nr::CHANNEL_READ => ipc::channel_read(a[0] as RawHandle, a[1], a[2], a[3], a[4], a[5]),
@@ -115,9 +127,16 @@ fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
         nr::THREAD_SELF => task::thread_self(),
         nr::PROCESS_RESTRICT => task::process_restrict(a[0]),
         nr::PROCESS_SET_MEMORY_CLASS => task::process_set_memory_class(a[0] as RawHandle, a[1]),
+        nr::PROCESS_SELF => task::process_self(),
+
+        nr::SIGNAL_ENTRY_SET => task::signal_entry_set(a[0]),
+        nr::PROCESS_SIGNAL => task::process_signal(a[0] as RawHandle, a[1], a[2]),
+        nr::SIGNAL_TAKE => task::signal_take(a[0]),
+        nr::THREAD_INTERRUPT => task::thread_interrupt(a[0] as RawHandle),
+        nr::PROCESS_SIGNALS_INHERITED => task::process_signals_inherited(a[0] as RawHandle, a[1] as u64, a[2] as u64),
 
         nr::FUTEX_WAIT => {
-            crate::synchronization::futex::wait(a[0] as u64, a[1] as u32, deadline(a[2] as u64))?;
+            crate::synchronization::futex::wait(a[0] as u64, a[1] as u32, deadline(a[2] as u64), a[3])?;
             ok(0)
         }
         nr::FUTEX_WAKE => ok(crate::synchronization::futex::wake(a[0] as u64, a[1])?),

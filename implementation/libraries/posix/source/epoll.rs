@@ -239,9 +239,15 @@ impl Epoll {
             if !ready.is_empty() || deadline.is_some_and(|d| time::monotonic_ns() >= d) {
                 return Ok(ready);
             }
-            match self.watcher.port.wait_packets(&mut packets, deadline.unwrap_or(abi::DEADLINE_INFINITE)) {
+            match crate::interrupt::port_wait(
+                &self.watcher.port,
+                &mut packets,
+                deadline.unwrap_or(abi::DEADLINE_INFINITE),
+            ) {
                 Ok(n) => self.take(&packets[..n]),
                 Err(abi::Error::TimedOut) => {}
+                // A signal ends it, never to start again (as on Linux).
+                Err(abi::Error::Interrupted) => return Err(EINTR),
                 Err(e) => return Err(error::kernel(e)),
             }
         }

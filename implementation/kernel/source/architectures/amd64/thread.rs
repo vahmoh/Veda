@@ -139,6 +139,12 @@ impl Context {
         }
     }
 
+    /// The thread's thread pointer (0 until it sets one), as it set it
+    /// last.
+    pub fn tls(&self) -> u64 {
+        self.fs_base
+    }
+
     /// Sets the thread pointer of the running thread, whose context this
     /// is: the FS base, through which it finds its thread-local storage.
     pub fn set_tls(&mut self, value: u64) {

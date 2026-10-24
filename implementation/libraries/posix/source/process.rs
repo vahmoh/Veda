@@ -8,13 +8,15 @@
 //! gives it what `exec` keeps on Linux: the descriptors not marked
 //! close-on-exec, as the file actions leave them, the working directory,
 //! the signals ignored and the signal mask, as the attributes change them
-//! (`inherit` says how what is not a handle travels). A process id is the
-//! process's kernel object id, cut to the 30 bits thread ids have ([`pid_of`]:
-//! the main thread's id is its process's); the processes this one started
-//! are its children, the only ones it can wait for or signal. Cut so, ids
-//! repeat after 2^30 kernel objects: a child never gets the id of another
-//! child this one has not waited for (the process made for it is dropped
-//! before it runs, and another made in its place).
+//! (`inherit` says how what is not a handle travels), and a handle to this
+//! process, with which it may signal it. A process id is the process's
+//! kernel object id, cut to the 30 bits thread ids have ([`pid_of`]: the
+//! main thread's id is its process's); the processes this one started are
+//! its children, the only ones it can wait for, and, with the process that
+//! started it, the only others it can signal. Cut so, ids repeat after
+//! 2^30 kernel objects: a child never gets the id of another child this
+//! one has not waited for (the process made for it is dropped before it
+//! runs, and another made in its place).
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -31,6 +33,7 @@ use rt::sync::Mutex;
 use crate::error::{self, SysResult};
 use crate::fd::{self, Description, Object};
 use crate::inherit::{Inherited, Pseudo};
+use crate::interrupt::Layer;
 use crate::linux::errno::*;
 use crate::linux::{Rusage, Siginfo, Timeval, o, sig, wait};
 use crate::{fs, path, signal, tty, user, vfs};
@@ -71,6 +74,15 @@ pub fn ppid() -> i32 {
 
 /// The processes this one started and has not waited for.
 static CHILDREN: Mutex<BTreeMap<i32, Process>> = Mutex::new(BTreeMap::new());
+
+/// The process that started this one, if it gave this one a handle to it
+/// (a POSIX program's parent does), to signal it with.
+static PARENT: Mutex<Option<Process>> = Mutex::new(None);
+
+/// Keeps the handle to the process that started this one (`role::PARENT`).
+pub fn adopt_parent(parent: Process) {
+    *PARENT.lock() = Some(parent);
+}
 
 /// Whether `pid` is a child of this process not waited for yet.
 pub fn is_child(pid: i32) -> bool {
@@ -370,7 +382,8 @@ unsafe fn spawn(res: usize, name: usize, ops: usize, attr: usize, argv: usize, e
     let program = program(&child.cwd, given)?;
 
     let mut handles = child.handles(&mut inherited)?;
-    // A registry connection of its own; the terminal's state.
+    // A registry connection of its own; the terminal's state; this process,
+    // to signal it (`kill(getppid(), ...)`), and no more.
     let registry = proto::with_registry(|r| r.clone_registry()).map_err(|_| EIO)?;
     match registry {
         Ok(Ok(ch)) => handles.push((role::REGISTRY, ch.into_handle())),
@@ -378,6 +391,15 @@ unsafe fn spawn(res: usize, name: usize, ops: usize, attr: usize, argv: usize, e
     }
     if let Some(vmo) = tty::vmo_for_child() {
         handles.push((role::TERMINAL, vmo.into_handle()));
+    }
+    if let Ok(me) = rt::object::Process::current() {
+        // Sent through the channel, it is to be transferable.
+        let rights = abi::Rights(
+            abi::Rights::SIGNAL.0 | abi::Rights::WAIT.0 | abi::Rights::GET_INFO.0 | abi::Rights::TRANSFER.0,
+        );
+        if let Ok(h) = me.0.duplicate(Some(rights)) {
+            handles.push((role::PARENT, h));
+        }
     }
     if handles.len() > abi::CHANNEL_MAX_HANDLES {
         return Err(EMFILE);
@@ -398,6 +420,9 @@ unsafe fn spawn(res: usize, name: usize, ops: usize, attr: usize, argv: usize, e
     spawn.env = env;
     spawn.handles = handles;
     spawn.inherited = entries.iter().map(String::as_str).collect();
+    // Until it takes signals itself, another process's are as it inherits
+    // them.
+    spawn.signals_inherited = (ignored, mask);
     let unused = |koid: u64| !CHILDREN.lock().contains_key(&pid_of(koid));
     spawn.accept = Some(&unused);
     let process = spawn.start_file(&program.vmo, program.size).map_err(spawn_errno)?;
@@ -425,6 +450,7 @@ pub unsafe extern "C" fn __veda_spawn(
     argv: usize,
     envp: usize,
 ) -> i32 {
+    let _layer = Layer::enter();
     // SAFETY: per the caller.
     match unsafe { spawn(res, path, ops, attr, argv, envp) } {
         Ok(()) => 0,
@@ -459,6 +485,7 @@ pub fn pidfd_open(pid: i32, flags: u32) -> SysResult {
 /// `ended` has room for an int.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn veda_child_ended_for_memory(pid: i32, ended: *mut core::ffi::c_int) -> core::ffi::c_int {
+    let _layer = Layer::enter();
     if ended.is_null() {
         return EFAULT as core::ffi::c_int;
     }
@@ -490,7 +517,8 @@ fn select_children(pid: i32) -> Result<Vec<(i32, Process)>, isize> {
 }
 
 /// Waits for one of the children `pid` selects to end; returns its id and
-/// exit code, or `None` if `nohang` and none has.
+/// exit code, or `None` if `nohang` and none has. A signal for the thread
+/// ends the wait (`ERESTARTSYS`).
 fn wait_child(pid: i32, nohang: bool, reap: bool) -> Result<Option<(i32, i64)>, isize> {
     let children = select_children(pid)?;
     let mut items: Vec<WaitItem> = children
@@ -498,9 +526,10 @@ fn wait_child(pid: i32, nohang: bool, reap: bool) -> Result<Option<(i32, i64)>, 
         .map(|(_, p)| WaitItem { handle: p.raw(), signals: signals::TERMINATED, observed: 0, _reserved: 0 })
         .collect();
     let deadline = if nohang { 0 } else { abi::DEADLINE_INFINITE };
-    match rt::object::wait_many(&mut items, deadline) {
+    match crate::interrupt::wait_many(&mut items, deadline) {
         Ok(_) => {}
         Err(abi::Error::TimedOut) => return Ok(None),
+        Err(abi::Error::Interrupted) => return Err(ERESTARTSYS),
         Err(e) => return Err(error::kernel(e)),
     }
     let Some(i) = items.iter().position(|it| it.observed & signals::TERMINATED != 0) else { return Ok(None) };
@@ -557,12 +586,13 @@ pub unsafe fn waitid(kind: u32, id: i32, info: usize, options: u32) -> SysResult
     Ok(0)
 }
 
-/// `kill`: this process, a child, or (`-1`) every child; signal 0 only
-/// checks that they exist. Signals do not cross processes: a child ends at
-/// once on a signal that ends a process by default, as that signal ends a
-/// program (its parent's `waitpid` says so), and is left alone on the
-/// others. Each process is the one member of its process group (its
-/// id is the group's, `getpgid`), so `-pid` means `pid`.
+/// `kill`: this process, a child, the process that started this one, or
+/// (`-1`) every child; signal 0 only checks that they exist. Another
+/// process gets the signal by way of the kernel, which ends one that takes
+/// no signals yet (it has not started, or is no POSIX program) if the
+/// signal ends a process by default. Each process is the one member of its
+/// process group (its id is the group's, `getpgid`), so `-pid` means
+/// `pid`.
 pub fn kill(pid: i32, s: u32) -> SysResult {
     if s >= sig::NSIG {
         return Err(EINVAL);
@@ -571,16 +601,22 @@ pub fn kill(pid: i32, s: u32) -> SysResult {
     if pid == 0 || pid == me || pid == -me {
         return signal::send_self(s);
     }
+    let send = |p: &Process| if s == 0 { Ok(()) } else { p.signal(s as usize, 0).map_err(error::kernel) };
+    if pid.wrapping_abs() == ppid() {
+        let parent = PARENT.lock();
+        return match parent.as_ref() {
+            Some(p) => send(p).map(|()| 0),
+            None => Err(EPERM),
+        };
+    }
     let children = CHILDREN.lock();
     let targets: Vec<&Process> =
         if pid == -1 { children.values().collect() } else { children.get(&pid.wrapping_abs()).into_iter().collect() };
     if targets.is_empty() {
         return Err(ESRCH);
     }
-    if s != 0 && signal::terminates(s) {
-        for p in targets {
-            p.kill_with_signal(s).map_err(error::kernel)?;
-        }
+    for p in targets {
+        send(p)?;
     }
     Ok(0)
 }

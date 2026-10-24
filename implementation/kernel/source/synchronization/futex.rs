@@ -39,7 +39,8 @@ fn key(addr: u64) -> Result<(u64, u64), Error> {
     Ok(p.aspace().and_then(|a| a.shared_location(addr)).unwrap_or((p.koid, addr)))
 }
 
-pub fn wait(addr: u64, expected: u32, deadline: Option<u64>) -> Result<(), Error> {
+pub fn wait(addr: u64, expected: u32, deadline: Option<u64>, flags: usize) -> Result<(), Error> {
+    let how = scheduler::Interruptible::from_flags(flags, 0)?;
     let k = key(addr)?;
     let value: u32 = user::read(addr)?;
     if value != expected {
@@ -47,7 +48,7 @@ pub fn wait(addr: u64, expected: u32, deadline: Option<u64>) -> Result<(), Error
     }
     let cur = scheduler::current();
     QUEUES.lock().entry(k).or_default().push_back(cur.clone());
-    let reason = scheduler::block(deadline);
+    let reason = scheduler::block_interruptible(deadline, how);
     // Remove ourselves if we were not dequeued by a waker.
     {
         let mut q = QUEUES.lock();
@@ -61,6 +62,7 @@ pub fn wait(addr: u64, expected: u32, deadline: Option<u64>) -> Result<(), Error
     match reason {
         WakeReason::TimedOut => Err(Error::TimedOut),
         WakeReason::Killed => Err(Error::Canceled),
+        WakeReason::Interrupted => Err(Error::Interrupted),
         _ => Ok(()),
     }
 }

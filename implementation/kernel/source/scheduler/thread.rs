@@ -36,6 +36,8 @@ pub enum WakeReason {
     Signaled,
     TimedOut,
     Killed,
+    /// Interrupted ([`Thread::interrupt`]) in a wait that may be.
+    Interrupted,
 }
 
 pub struct SchedData {
@@ -46,6 +48,9 @@ pub struct SchedData {
     /// (the one it blocked on), and its key there.
     pub timeout_key: Option<(u32, (u64, u64))>,
     pub cpu: u32,
+    /// While blocked: whether an interruption ends the wait
+    /// ([`super::block_interruptible`]).
+    pub interruptible: bool,
 }
 
 pub struct Thread {
@@ -63,6 +68,15 @@ pub struct Thread {
     /// ([`super::cpu_time_ns`] adds the one it is running).
     pub(super) cpu_time_ns: AtomicU64,
     pub kill_pending: AtomicBool,
+    /// Interrupted (`THREAD_INTERRUPT`, a signal for its process): an
+    /// interruptible wait it is in or begins ends, and its next return to
+    /// user code runs its process's signal entry, which clears this
+    /// ([`super::interrupt`]).
+    pub interrupt: AtomicBool,
+    /// It deferred an interruption (`signal_return_flags::DEFER`) and has
+    /// not taken its signals since (`SIGNAL_TAKE`): waits with
+    /// `wait_flags::DEFERRED` end at once.
+    pub deferred: AtomicBool,
     pub is_idle: bool,
     /// User address of a 32-bit word to clear, and wake a futex waiter on,
     /// when the thread exits (0: none; see `THREAD_SET_EXIT_FUTEX`).
@@ -113,11 +127,14 @@ impl Thread {
                 wake_reason: WakeReason::None,
                 timeout_key: None,
                 cpu: 0,
+                interruptible: false,
             }),
             ctx: UnsafeCell::new(Context::new(!is_idle)?),
             signals: Signals::new(0),
             cpu_time_ns: AtomicU64::new(0),
             kill_pending: AtomicBool::new(false),
+            interrupt: AtomicBool::new(false),
+            deferred: AtomicBool::new(false),
             is_idle,
             exit_futex: AtomicU64::new(0),
             suspensions: AtomicU32::new(0),

@@ -61,6 +61,7 @@ unsafe fn name<'a>(name: *const c_char) -> Option<&'a str> {
 /// Closes a handle.
 #[unsafe(no_mangle)]
 pub extern "C" fn veda_close(h: RawHandle) -> c_int {
+    let _layer = crate::interrupt::Layer::enter();
     done(rt::sys::handle_close(h))
 }
 
@@ -70,6 +71,7 @@ pub extern "C" fn veda_close(h: RawHandle) -> c_int {
 /// `out` is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn veda_duplicate(h: RawHandle, rights: u32, out: *mut RawHandle) -> c_int {
+    let _layer = crate::interrupt::Layer::enter();
     // SAFETY: as the caller promises.
     unsafe { give(out, call(nr::HANDLE_DUPLICATE, [h as usize, rights as usize, 0, 0, 0, 0])) }
 }
@@ -84,6 +86,7 @@ pub unsafe extern "C" fn veda_duplicate(h: RawHandle, rights: u32, out: *mut Raw
 /// `out` is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn veda_startup_handle(role: u32, out: *mut RawHandle) -> c_int {
+    let _layer = crate::interrupt::Layer::enter();
     if role < abi::startup::role::USER {
         return fail(Error::InvalidArgs);
     }
@@ -104,6 +107,7 @@ pub unsafe extern "C" fn veda_startup_handle(role: u32, out: *mut RawHandle) -> 
 /// `out` is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn veda_registry(out: *mut RawHandle) -> c_int {
+    let _layer = crate::interrupt::Layer::enter();
     match proto::with_registry(|r| r.clone_registry()) {
         // SAFETY: as the caller promises.
         Ok(Ok(Ok(ch))) => unsafe { give(out, Ok(ch.0.into_raw() as usize)) },
@@ -119,6 +123,7 @@ pub unsafe extern "C" fn veda_registry(out: *mut RawHandle) -> c_int {
 /// `name` is NUL-terminated; `listener` is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn veda_service_register(name_: *const c_char, listener: *mut RawHandle) -> c_int {
+    let _layer = crate::interrupt::Layer::enter();
     // SAFETY: as the caller promises.
     let Some(n) = (unsafe { name(name_) }) else { return fail(Error::InvalidArgs) };
     match proto::register(n) {
@@ -136,6 +141,7 @@ pub unsafe extern "C" fn veda_service_register(name_: *const c_char, listener: *
 /// `channel` is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn veda_service_accept(listener: RawHandle, channel: *mut RawHandle) -> c_int {
+    let _layer = crate::interrupt::Layer::enter();
     match proto::accept(&borrowed(listener)) {
         // SAFETY: as the caller promises.
         Some(ch) => unsafe { give(channel, Ok(ch.0.into_raw() as usize)) },
@@ -150,6 +156,7 @@ pub unsafe extern "C" fn veda_service_accept(listener: RawHandle, channel: *mut 
 /// `name` is NUL-terminated; `channel` is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn veda_service_connect(name_: *const c_char, channel: *mut RawHandle) -> c_int {
+    let _layer = crate::interrupt::Layer::enter();
     // SAFETY: as the caller promises.
     let Some(n) = (unsafe { name(name_) }) else { return fail(Error::InvalidArgs) };
     match proto::connect(n) {
@@ -173,6 +180,7 @@ pub unsafe extern "C" fn veda_channel_write(
     handles: *const RawHandle,
     count: usize,
 ) -> c_int {
+    let _layer = crate::interrupt::Layer::enter();
     done(call(nr::CHANNEL_WRITE, [ch as usize, bytes as usize, len, handles as usize, count, 0]))
 }
 
@@ -194,6 +202,7 @@ pub unsafe extern "C" fn veda_channel_read(
     hcap: usize,
     count: *mut usize,
 ) -> c_int {
+    let _layer = crate::interrupt::Layer::enter();
     let mut actual = [0u32; 2];
     let r = call(
         nr::CHANNEL_READ,
@@ -216,6 +225,7 @@ pub unsafe extern "C" fn veda_channel_read(
 /// `items` holds `count` items.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn veda_wait(items: *mut WaitItem, count: usize, deadline: u64) -> c_int {
+    let _layer = crate::interrupt::Layer::enter();
     if count == 0 || count > abi::WAIT_MANY_MAX {
         return fail(Error::InvalidArgs);
     }
@@ -231,6 +241,7 @@ pub unsafe extern "C" fn veda_wait(items: *mut WaitItem, count: usize, deadline:
 /// The monotonic clock, in nanoseconds since boot.
 #[unsafe(no_mangle)]
 pub extern "C" fn veda_now_ns() -> u64 {
+    let _layer = crate::interrupt::Layer::enter();
     rt::time::now_ns()
 }
 
@@ -240,6 +251,7 @@ pub extern "C" fn veda_now_ns() -> u64 {
 /// `vmo` is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn veda_vmo_create(size: u64, vmo: *mut RawHandle) -> c_int {
+    let _layer = crate::interrupt::Layer::enter();
     // SAFETY: as the caller promises.
     unsafe { give(vmo, call(nr::VMO_CREATE, [size as usize, 0, 0, 0, 0, 0])) }
 }
@@ -257,6 +269,7 @@ pub unsafe extern "C" fn veda_vmo_map(
     flags: u32,
     addr: *mut *mut c_void,
 ) -> c_int {
+    let _layer = crate::interrupt::Layer::enter();
     let flags = flags as usize & (abi::map_flags::READ | abi::map_flags::WRITE);
     let r = call(nr::VM_MAP, [abi::INVALID_HANDLE as usize, vmo as usize, offset as usize, size as usize, 0, flags]);
     match r {
@@ -272,6 +285,7 @@ pub unsafe extern "C" fn veda_vmo_map(
 /// Unmaps what [`veda_vmo_map`] mapped.
 #[unsafe(no_mangle)]
 pub extern "C" fn veda_vmo_unmap(addr: *mut c_void, size: u64) -> c_int {
+    let _layer = crate::interrupt::Layer::enter();
     done(call(nr::VM_UNMAP, [abi::INVALID_HANDLE as usize, addr as usize, size as usize, 0, 0, 0]))
 }
 
@@ -281,6 +295,7 @@ pub extern "C" fn veda_vmo_unmap(addr: *mut c_void, size: u64) -> c_int {
 /// `event` is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn veda_event_create(event: *mut RawHandle) -> c_int {
+    let _layer = crate::interrupt::Layer::enter();
     // SAFETY: as the caller promises.
     unsafe { give(event, call(nr::EVENT_CREATE, [0; 6])) }
 }
@@ -289,5 +304,6 @@ pub unsafe extern "C" fn veda_event_create(event: *mut RawHandle) -> c_int {
 /// the user signals of any.
 #[unsafe(no_mangle)]
 pub extern "C" fn veda_object_signal(h: RawHandle, clear: u32, set: u32) -> c_int {
+    let _layer = crate::interrupt::Layer::enter();
     done(call(nr::OBJECT_SIGNAL, [h as usize, clear as usize, set as usize, 0, 0, 0]))
 }

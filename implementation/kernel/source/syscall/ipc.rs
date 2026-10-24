@@ -16,7 +16,7 @@ use crate::ipc::socket;
 use crate::memory::user;
 use crate::object::handle::Handle;
 use crate::object::{KObject, new_koid};
-use crate::scheduler::{self, WakeReason};
+use crate::scheduler::{self, Interruptible, WakeReason};
 
 const CHANNEL_RIGHTS: Rights = Rights(
     Rights::TRANSFER.0 | Rights::READ.0 | Rights::WRITE.0 | Rights::WAIT.0 | Rights::SIGNAL.0 | Rights::GET_INFO.0,
@@ -141,15 +141,23 @@ pub fn object_signal(raw: RawHandle, clear: u32, set: u32) -> SysResult {
     ok(0)
 }
 
-/// Shared implementation of the wait calls. Returns the number of satisfied
-/// items; `observed` is filled for every item.
 /// Waits until `object` has one of `signals`, or `d` (an ABI deadline)
-/// passes: for calls that wait for an object themselves.
+/// passes: for calls that wait for an object themselves, which an
+/// interruption does not end.
 pub(super) fn wait_for(object: &KObject, signals: u32, d: u64) -> Result<(), Error> {
-    wait_objects(core::slice::from_ref(object), &[signals], &mut [0], d).map(|_| ())
+    wait_objects(core::slice::from_ref(object), &[signals], &mut [0], d, Interruptible::No).map(|_| ())
 }
 
-fn wait_objects(objects: &[KObject], masks: &[u32], observed: &mut [u32], d: u64) -> Result<usize, Error> {
+/// Shared implementation of the wait calls. Returns the number of satisfied
+/// items; `observed` is filled for every item. An interruption ends the
+/// wait (`Interrupted`) as `how` says.
+fn wait_objects(
+    objects: &[KObject],
+    masks: &[u32],
+    observed: &mut [u32],
+    d: u64,
+    how: Interruptible,
+) -> Result<usize, Error> {
     let cur = scheduler::current();
     let wait_id = new_koid();
     loop {
@@ -171,7 +179,7 @@ fn wait_objects(objects: &[KObject], masks: &[u32], observed: &mut [u32], d: u64
                 s.add_waiter(wait_id, cur.clone(), masks[i]);
             }
         }
-        let reason = scheduler::block(deadline(d));
+        let reason = scheduler::block_interruptible(deadline(d), how);
         for o in objects {
             if let Some(s) = o.signals() {
                 s.remove_waiter(wait_id);
@@ -179,6 +187,7 @@ fn wait_objects(objects: &[KObject], masks: &[u32], observed: &mut [u32], d: u64
         }
         match reason {
             WakeReason::Killed => return Err(Error::Canceled),
+            WakeReason::Interrupted => return Err(Error::Interrupted),
             WakeReason::TimedOut => {
                 // Report the final state, then time out.
                 for (i, o) in objects.iter().enumerate() {
@@ -195,19 +204,21 @@ fn wait_objects(objects: &[KObject], masks: &[u32], observed: &mut [u32], d: u64
     }
 }
 
-pub fn wait_one(raw: RawHandle, signals: u32, d: u64) -> SysResult {
+pub fn wait_one(raw: RawHandle, signals: u32, d: u64, flags: usize) -> SysResult {
+    let how = Interruptible::from_flags(flags, 0)?;
     let h = handle(raw, Rights::WAIT)?;
     if h.object.signals().is_none() {
         return Err(Error::NotSupported);
     }
     let mut observed = [0u32];
-    match wait_objects(core::slice::from_ref(&h.object), &[signals], &mut observed, d) {
+    match wait_objects(core::slice::from_ref(&h.object), &[signals], &mut observed, d, how) {
         Ok(_) => ok(observed[0] as usize),
         Err(e) => Err(e),
     }
 }
 
-pub fn wait_many(items_ptr: usize, count: usize, d: u64) -> SysResult {
+pub fn wait_many(items_ptr: usize, count: usize, d: u64, flags: usize) -> SysResult {
+    let how = Interruptible::from_flags(flags, 0)?;
     if count == 0 || count > abi::WAIT_MANY_MAX {
         return Err(Error::InvalidArgs);
     }
@@ -228,7 +239,7 @@ pub fn wait_many(items_ptr: usize, count: usize, d: u64) -> SysResult {
     }
     let masks: Vec<u32> = items.iter().map(|i| i.signals).collect();
     let mut observed = alloc::vec![0u32; count];
-    let result = wait_objects(&objects, &masks, &mut observed, d);
+    let result = wait_objects(&objects, &masks, &mut observed, d, how);
     for (it, o) in items.iter_mut().zip(&observed) {
         it.observed = *o;
     }
@@ -284,7 +295,8 @@ pub fn wait_async_cancel(raw: RawHandle, port_raw: RawHandle, key: u64) -> SysRe
     ok(0)
 }
 
-pub fn port_wait(port_raw: RawHandle, packets_ptr: usize, max: usize, d: u64) -> SysResult {
+pub fn port_wait(port_raw: RawHandle, packets_ptr: usize, max: usize, d: u64, flags: usize) -> SysResult {
+    let how = Interruptible::from_flags(flags, 0)?;
     let port = get_port(port_raw, Rights::READ)?;
     if max == 0 || max > abi::PORT_WAIT_MAX {
         return Err(Error::InvalidArgs);
@@ -304,7 +316,7 @@ pub fn port_wait(port_raw: RawHandle, packets_ptr: usize, max: usize, d: u64) ->
         }
         let object = KObject::Port(port.clone());
         let mut observed = [0u32];
-        wait_objects(core::slice::from_ref(&object), &[signals::READABLE], &mut observed, d)?;
+        wait_objects(core::slice::from_ref(&object), &[signals::READABLE], &mut observed, d, how)?;
     }
 }
 

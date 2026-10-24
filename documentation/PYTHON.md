@@ -16,8 +16,9 @@ CPython, and its tests.
 In the Terminal, `python3` (also `python3.15` and `python`) runs a script,
 a module (`python3 -m json.tool`) or the interactive interpreter, which
 ends at Ctrl+D. A script whose first line names the interpreter
-(`#!/system/bin/python3`) is a program of its own. Ctrl+C ends a program,
-as it ends any (`$?` is 130).
+(`#!/system/bin/python3`) is a program of its own. Ctrl+C raises
+`KeyboardInterrupt` (the interactive interpreter goes on); a program that
+lets it end it ends as `SIGINT` ends any (`$?` is 130).
 
 ```bash
 echo 'import sys; print(sys.platform, sys.version)' > hello.py
@@ -131,7 +132,7 @@ what the image has: no C API and no library to build extensions with.
 | `os`, `pathlib`, `shutil`, `tempfile` | The VFS. File names are UTF-8 (a name that is not is refused, `EILSEQ`): Python's file system encoding is UTF-8 whatever the locale |
 | `time`, `datetime` | The kernel's clocks; local time is the system's offset from UTC unless `TZ` says otherwise |
 | `locale`, standard streams | UTF-8, in the C locale too |
-| `signal` | Handlers run for the signals a program raises itself and its threads send each other |
+| `signal` | Linux's signals: handlers for those the program raises, its threads send, its timers ring (`signal.alarm`, `signal.setitimer`) and other processes send (`os.kill`, `Popen.send_signal`, Ctrl+C). A signal interrupts what the main thread does, Python code or a blocking call (which Python makes again after the handler, as PEP 475 has it); `KeyboardInterrupt` follows `SIGINT` |
 
 ## Limits
 
@@ -155,14 +156,11 @@ Python's terms:
 - **No shell.** `/system/bin/sh` is not there yet: `shell=True`,
   `os.system` and `os.popen` fail (`FileNotFoundError` for `/bin/sh`).
   The Terminal's commands are its own.
-- **Signals are synchronous.** There are no alarms or interval timers
-  (`signal.alarm` and `signal.setitimer` are not there). A signal from
-  another process runs no handler: `Popen.send_signal(SIGINT)` ends the
-  child, without a `KeyboardInterrupt`, as Ctrl+C in the Terminal does. A
-  signal waits for a blocking call other than a sleep or a wait (a
-  `send` that has no room) to end. A fault ends the program:
-  `faulthandler` reports the signals a program raises, not a stack
-  overflow.
+- **A fault ends the program.** A bad access is no signal a handler
+  takes: `faulthandler` reports the signals a program raises, not a stack
+  overflow. Nothing stops a process (`SIGSTOP`, `SIGTSTP`), and the
+  timers of processor time (`ITIMER_VIRTUAL`, `ITIMER_PROF`) count user
+  and system time as one.
 - **Files have no links or permissions.** `os.link`, `os.symlink` and
   `os.mkfifo` are not there (pathlib's raise `UnsupportedOperation`);
   `os.chmod` changes nothing, and a file is the one user's (`os.chown` to
@@ -172,7 +170,7 @@ Python's terms:
   a file holds 2 GiB at most (`OSError`, `ENOSPC`). Its locks
   (`fcntl.flock`, `fcntl.lockf`, `fcntl.fcntl`'s) are Linux's, between
   processes, but only files take them (`ENOLCK` on a directory, a pipe or
-  a socket), and a wait for one is not ended by a signal.
+  a socket).
 - **Files map as copies.** `mmap` maps a file to read (`ACCESS_READ`) or
   as a private copy (`ACCESS_COPY`); a mapping that writes the file
   (`ACCESS_WRITE`, and `ACCESS_DEFAULT`, which is that) fails (`ENODEV`).
@@ -207,7 +205,7 @@ and `build.sh` builds it. The patch:
   `x86_64-veda`, whose modules are built in, whose C library's release
   `platform.libc_ver()` gives, and which has none of the functions musl
   has but Veda does not carry out, so that Python leaves out what would
-  fail (`fork`, `exec*`, `dlopen`, links, alarms, pseudo-terminals,
+  fail (`fork`, `exec*`, `dlopen`, links, pseudo-terminals,
   `if_nameindex`...). The modules that cannot be built are
   named, with the reasons their imports give (`MISSING_MODULES` in
   `build.sh`).
@@ -227,9 +225,8 @@ and `build.sh` builds it. The patch:
   (`Lib/multiprocessing/heap.py`).
 - **Has CPython's tests skip what Veda lacks** (`Lib/test`), by what they
   need where it can be told: a shell (`support.requires_shell`), a
-  `preexec_fn` (`support.requires_preexec_fn`), signals from other
-  processes, permission
-  bits (`os_helper.skip_unless_working_chmod`), shared writable mappings,
+  `preexec_fn` (`support.requires_preexec_fn`), permission bits
+  (`os_helper.skip_unless_working_chmod`), shared writable mappings,
   symbolic links, ancillary data; and expect what Veda does as it does it
   (UTF-8 in the C locale, names that are not UTF-8 refused, musl's
   behaviour).
@@ -241,11 +238,12 @@ and `build.sh` builds it. The patch:
   threads, processes (`subprocess`, `os.spawn*`, `multiprocessing`: its
   locks, events and queues, `Pool`, and `concurrent.futures`'
   `ProcessPoolExecutor`), shared memory (`multiprocessing.shared_memory`),
-  signals, time, sockets (TCP and UDP over IPv4 and IPv6, Unix domain,
-  ports shared by an IPv4 and an IPv6-only socket), asyncio, TLS, hashes,
-  compression, SQLite (a database two processes share too), data formats,
-  memory, file locks between processes, and virtual environments with
-  pip; and that what Veda has not fails as this document says.
+  signals (from other processes, `KeyboardInterrupt` after `SIGINT` among
+  them, and timers), time, sockets (TCP and UDP over IPv4 and IPv6, Unix
+  domain, ports shared by an IPv4 and an IPv6-only socket), asyncio, TLS,
+  hashes, compression, SQLite (a database two processes share too), data
+  formats, memory, file locks between processes, and virtual environments
+  with pip; and that what Veda has not fails as this document says.
   `systest` runs it (`/system/tests/python/stdlib.py`), with the host's
   servers.
 - **`verification/ui/python.vts`** runs Python in the Terminal: a script
@@ -256,15 +254,16 @@ and `build.sh` builds it. The patch:
   `--python-tests`: `python3 -m test -j4` in the Terminal, or from the
   kernel's command line, as a script does
   (`boot-cmdline "run=python3:/system/tests/python/regrtest.py,-j4"`, then
-  `wait-serial "Tests result:"`), in some six minutes on four processors.
+  `wait-serial "Tests result:"`), in some four minutes on four processors.
   They all pass: of their 560 test files, 440 run, 111 skip whole (they
   test other systems, Windows' above all, or what Veda has not: `fork`,
   Tk, curses, `ctypes`...) and 9 need resources a run is not given by
   default (`-u`: the Internet, a lot of time or disk). Of the 48,331
-  tests in the files that run, 3,766 skip, each saying what it needs:
+  tests in the files that run, 3,680 skip, each saying what it needs:
   another system, or what Veda has not. With every resource but the
-  Internet and what Veda has not (`-uall` less `network`, `urlfetch`,
-  `largefile`, `extralargefile`, `gui`, `audio`, `tzdata` and `curses`,
-  each taken away as `-u-network` takes the first), 441 files run and
-  pass, in some nine minutes; `test_socketserver`, which asks for the
-  network but stays on the machine, passes with `-unetwork`.
+  Internet, what Veda has not and `cpu` (`-uall` less `network`,
+  `urlfetch`, `largefile`, `extralargefile`, `gui`, `audio`, `tzdata`,
+  `curses` and `cpu`, each taken away as `-u-network` takes the first),
+  440 files run and pass, in some five minutes; `test_socketserver`,
+  which asks for the network but stays on the machine, passes with
+  `-unetwork`.

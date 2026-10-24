@@ -179,6 +179,21 @@ logs (see [the driver VM](DRIVERVM.md)).
   leave its process. `ipc`'s
   `WaitSet`, the core of every service loop, uses one when it is kept from
   one wait to the next.
+- **Interruptions.** A thread can be interrupted (`thread_interrupt`, by a
+  thread of its process; `process_signal`, by a signal another process
+  sends, which waits among the process's incoming signals): a wait it is
+  in ends (`Interrupted`), and as it next returns to user code the kernel
+  sends it to its process's *signal entry*, its registers saved on its
+  stack, which `signal_return` resumes, as they were or as the entry left
+  them. A thread inside its POSIX layer puts the interruption off
+  (`signal_return_flags::DEFER`): until it takes its signals, the waits of
+  its blocking calls end at once (`wait_flags::DEFERRED`). Of POSIX
+  signals the kernel knows only that: the POSIX layer keeps the rest. A
+  process without a signal entry has the signals it inherited as ignored
+  and as blocked so (`process_signals_inherited`, which `posix_spawn`
+  gives): an ignored one does nothing, a blocked one waits for the entry;
+  another ends it if it ends a process by default (`abi::posix_signal`),
+  and leaves it alone if not.
 - **Time.** On AMD64 the monotonic clock counts the TSC, calibrated against
   the HPET (or the PIT); on an Intel processor not under a hypervisor, the
   frequency the processor reports (CPUID leaves 0x15 and 0x16) wins over a
@@ -263,10 +278,12 @@ says which each is:
   whose system calls go to `posix` (`implementation/libraries/posix`), a
   POSIX layer in Rust: files and their locks are the VFS's, pipes and
   terminals kernel sockets, network sockets `netd`'s, Unix domain sockets
-  named by the VFS, `epoll` a kernel port, memory files VMOs, `timerfd` an
-  event its thread signals, and threads kernel threads; `posix_spawn`
-  starts processes (see [C on Veda](C.md)). Python is such a program too,
-  CPython with its modules built in ([Python on Veda](PYTHON.md)).
+  named by the VFS, `epoll` a kernel port, memory files VMOs, `timerfd`
+  and `alarm`'s timers the layer's own, which a thread of its expires, and
+  threads kernel threads, which the kernel interrupts for the signals the
+  layer keeps; `posix_spawn` starts processes (see [C on Veda](C.md)).
+  Python is such a program too, CPython with its modules built in
+  ([Python on Veda](PYTHON.md)).
 - **Services** register by name with the registry in `init`, and clients
   connect by name; a connection to a service not registered yet waits for
   it (up to 64 per process). Protocols are declared with `ipc`'s macros,

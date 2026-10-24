@@ -820,7 +820,7 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 43] = [
+    let tests: [Test; 45] = [
         ("starved threads run", test_starved_threads_run),
         ("ipc primitives", test_ipc_primitives),
         ("short sleeps", test_short_sleeps),
@@ -857,6 +857,8 @@ fn main() -> i32 {
         ("media checkasm", media::test_checkasm),
         ("media decoder", media::test_decoder),
         ("killing a job", posix::test_kill_job),
+        ("signalling a job", posix::test_signal_job),
+        ("interruptions", posix::test_interruptions),
         ("giving abilities up", posix::test_process_restrict),
         ("launcher", test_launcher),
         ("what applications may do", policy::test_application_limits),

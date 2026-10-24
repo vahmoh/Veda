@@ -4,10 +4,11 @@
 # Python in the Terminal (1280x800 with the taskbar): a script run by
 # python3, its exit status as $?; a script that is a program of its own (its
 # first line names its interpreter); the interactive interpreter, the basic
-# one, which reads the lines typed for it without a warning and ends at
-# Ctrl+D; a program ended by Ctrl+C (status 130); and a virtual environment,
-# whose pip is such a script. Results are checked with the shell's `logger`
-# command, which writes to the serial log.
+# one, which reads the lines typed for it without a warning, goes on after
+# Ctrl+C (`KeyboardInterrupt`) and ends at Ctrl+D; a program Ctrl+C ends
+# (status 130); and a virtual environment, whose pip is such a script.
+# Results are checked with the shell's `logger` command, which writes to the
+# serial log.
 requires python
 boot-cmdline "run=terminal"
 wait-serial "desktop ready" 90
@@ -24,12 +25,18 @@ key ret
 type "echo 'import sys; print(sys.argv[1], 6 * 7)' >> hello.py && ./hello.py hello | grep 'hello 42' && logger script-ok"
 key ret
 wait-serial "terminal: script-ok" 60
-# The interactive interpreter: its banner and prompt, a line typed for it,
-# and the end of its input.
+# The interactive interpreter: its banner and prompt; Ctrl+C, which
+# interrupts what it runs (`KeyboardInterrupt`) and leaves it going; a line
+# typed for it after; and the end of its input.
 type "python3"
 key ret
 wait 5
 shot target/veda/python-1-interpreter.png
+type "import time; time.sleep(60)"
+key ret
+wait 2
+key ctrl-c
+wait 2
 type "open('/tmp/answer.txt', 'w').write(str(6 * 7))"
 key ret
 type "print('the answer is', 6 * 7)"
@@ -52,7 +59,8 @@ type "grep -c '>>>' repl.txt && logger prompted; grep pyrepl repl.txt; logger wa
 key ret
 wait-serial "terminal: prompted" 30
 wait-serial "terminal: warned-1" 30
-# Ctrl+C ends a program (130), the rest of its command line too.
+# Ctrl+C ends a program that lets `KeyboardInterrupt` end it (130), the
+# rest of its command line too.
 type "python3 -c 'import time; time.sleep(60)'; logger not-skipped"
 key ret
 wait 4

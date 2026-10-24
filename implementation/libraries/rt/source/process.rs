@@ -252,6 +252,11 @@ pub struct Spawn<'a> {
     /// Its memory class (`abi::memory_class`), never less expendable than
     /// this process's (`None`: this process's).
     pub memory_class: Option<usize>,
+    /// The POSIX signals it inherits as ignored and as blocked, bit `n - 1`
+    /// for signal `n`, which it has so until it takes signals itself
+    /// (`abi::nr::PROCESS_SIGNALS_INHERITED`): for a program a POSIX one
+    /// starts.
+    pub signals_inherited: (u64, u64),
 }
 
 impl<'a> Spawn<'a> {
@@ -267,6 +272,7 @@ impl<'a> Spawn<'a> {
             accept: None,
             max_priority: None,
             memory_class: None,
+            signals_inherited: (0, 0),
         }
     }
 
@@ -370,6 +376,13 @@ impl<'a> Spawn<'a> {
             }
             if let Some(class) = self.memory_class {
                 set_memory_class(Some(&process), class)?;
+            }
+            if self.signals_inherited != (0, 0) {
+                let (ignored, blocked) = self.signals_inherited;
+                call(
+                    nr::PROCESS_SIGNALS_INHERITED,
+                    [process.raw() as usize, ignored as usize, blocked as usize, 0, 0, 0],
+                )?;
             }
             let t = call(nr::THREAD_CREATE, [process.raw() as usize, "main".as_ptr() as usize, 4, 0, 0, 0])?;
             // SAFETY: fresh handle from the kernel.

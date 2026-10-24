@@ -84,6 +84,7 @@ impl Write for TzString {
 /// `buf` must be valid for writes of `size` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __veda_tz(buf: *mut u8, size: usize) {
+    let _layer = crate::interrupt::Layer::enter();
     if size == 0 {
         return;
     }
@@ -182,8 +183,9 @@ pub unsafe fn time(out: usize) -> SysResult {
 }
 
 /// `clock_nanosleep` (and `nanosleep`, which sleeps on the monotonic
-/// clock): until the time comes, or a signal handler runs first (`EINTR`,
-/// what is left of a relative sleep in `rem` if it is not null).
+/// clock): until the time comes, or a signal is to be acted on first
+/// (`EINTR`, never started again, as on Linux; what is left of a relative
+/// sleep in `rem` if it is not null).
 pub unsafe fn clock_nanosleep(clk: u32, flags: u32, req: usize, rem: usize) -> SysResult {
     if req == 0 {
         return Err(EFAULT);

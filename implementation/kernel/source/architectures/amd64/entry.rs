@@ -10,7 +10,9 @@
 //!   register state as a [`TrapFrame`] and call into Rust.
 //! * `vk_syscall_entry`: the `syscall` instruction target. It builds the same
 //!   [`TrapFrame`] layout so that scheduling code can treat both kinds of
-//!   kernel entry uniformly, and returns with `sysretq`.
+//!   kernel entry uniformly, and returns with `sysretq`; or, when every
+//!   register is to be restored (`signal_return`), through
+//!   `vk_return_from_trap`, as `sysretq` restores neither `rcx` nor `r11`.
 //! * `vk_context_switch`: switches kernel stacks between two threads.
 //!
 //! `swapgs` is executed exactly when crossing the user/kernel boundary, which
@@ -140,6 +142,8 @@ vk_syscall_entry:
     cld
     mov rdi, rsp
     call {syscall_dispatch}
+    test al, al
+    jnz vk_return_from_trap
     pop r15
     pop r14
     pop r13
@@ -210,9 +214,10 @@ vk_kernel_thread_trampoline:
     syscall_vector = const SYSCALL_VECTOR,
 );
 
-/// A system call (from `vk_syscall_entry`).
-extern "sysv64" fn syscall_from_user(frame: &mut TrapFrame) {
-    crate::syscall::syscall_dispatch(frame);
+/// A system call (from `vk_syscall_entry`): whether to return through the
+/// trap path, restoring every register.
+extern "sysv64" fn syscall_from_user(frame: &mut TrapFrame) -> bool {
+    crate::syscall::syscall_dispatch(frame)
 }
 
 /// First Rust code run by a new user thread (from `vk_thread_trampoline`).

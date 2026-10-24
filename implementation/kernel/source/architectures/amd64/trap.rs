@@ -93,6 +93,72 @@ impl TrapFrame {
         }
     }
 
+    /// Has the thread run its process's signal entry `entry` as it returns
+    /// to user code (see `abi::architecture`'s "Signal entry"): its user
+    /// registers as they are, with its thread pointer `tls`, go on its
+    /// stack, whose address it starts with. `Fault` if its stack cannot
+    /// take them (it is left as it was).
+    pub fn divert(&mut self, entry: u64, tls: u64) -> Result<(), abi::Error> {
+        let state = abi::ThreadState {
+            rax: self.rax,
+            rbx: self.rbx,
+            rcx: self.rcx,
+            rdx: self.rdx,
+            rsi: self.rsi,
+            rdi: self.rdi,
+            rbp: self.rbp,
+            rsp: self.rsp,
+            r8: self.r8,
+            r9: self.r9,
+            r10: self.r10,
+            r11: self.r11,
+            r12: self.r12,
+            r13: self.r13,
+            r14: self.r14,
+            r15: self.r15,
+            rip: self.rip,
+            rflags: self.rflags,
+            fs_base: tls,
+        };
+        let at = abi::architecture::signal_frame(self.rsp as usize);
+        crate::memory::user::write(at as u64, &state)?;
+        self.rip = entry;
+        self.rsp = abi::entry_stack_pointer(at) as u64;
+        self.rdi = at as u64;
+        self.rflags = abi::architecture::INTERRUPT_FLAG;
+        Ok(())
+    }
+
+    /// Resumes user registers `state` (`signal_return`), but its thread
+    /// pointer: of the flags, those user code may change
+    /// (`abi::architecture::SIGNAL_RETURN_FLAGS`). `InvalidArgs` for an
+    /// instruction or stack pointer outside user space.
+    pub fn resume(&mut self, state: &abi::ThreadState) -> Result<(), abi::Error> {
+        let user = abi::USER_SPACE_START as u64..abi::USER_SPACE_END as u64;
+        if !user.contains(&state.rip) || !user.contains(&state.rsp) {
+            return Err(abi::Error::InvalidArgs);
+        }
+        self.rax = state.rax;
+        self.rbx = state.rbx;
+        self.rcx = state.rcx;
+        self.rdx = state.rdx;
+        self.rsi = state.rsi;
+        self.rdi = state.rdi;
+        self.rbp = state.rbp;
+        self.rsp = state.rsp;
+        self.r8 = state.r8;
+        self.r9 = state.r9;
+        self.r10 = state.r10;
+        self.r11 = state.r11;
+        self.r12 = state.r12;
+        self.r13 = state.r13;
+        self.r14 = state.r14;
+        self.r15 = state.r15;
+        self.rip = state.rip;
+        self.rflags = abi::architecture::resumed_flags(state.rflags);
+        Ok(())
+    }
+
     /// The page fault this trap is, if it is one.
     pub fn page_fault(&self) -> Option<PageFault> {
         (self.vector == PAGE_FAULT).then(|| PageFault {

@@ -5,16 +5,17 @@
 
 use core::sync::atomic::Ordering;
 
-use abi::{Error, ProcessInfo, RawHandle, Rights, resource_kind, restrict};
+use abi::{Error, ProcessInfo, RawHandle, Rights, SentSignals, resource_kind, restrict};
 
 use super::{SysResult, current_process, get_process, get_resource, get_thread, insert, ok, read_str, target_process};
+use crate::architecture::trap::TrapFrame;
 use crate::memory::user;
 use crate::object::KObject;
 use crate::object::handle::Handle;
-use crate::object::process::{self, Process};
+use crate::object::process::{self, Process, ProcessState};
 use crate::scheduler::{self, State, Thread};
 
-const PROCESS_RIGHTS: Rights = Rights(Rights::BASIC.0 | Rights::MANAGE.0 | Rights::GET_INFO.0);
+const PROCESS_RIGHTS: Rights = Rights(Rights::BASIC.0 | Rights::MANAGE.0 | Rights::GET_INFO.0 | Rights::SIGNAL.0);
 const THREAD_RIGHTS: Rights = Rights(Rights::BASIC.0 | Rights::MANAGE.0 | Rights::GET_INFO.0);
 
 fn is_user_address(a: usize) -> bool {
@@ -137,6 +138,96 @@ pub fn process_kill(raw: RawHandle, flags: usize, signal: usize) -> SysResult {
         scheduler::exit_current();
     }
     ok(0)
+}
+
+/// Sets where the calling process's threads go when interrupted, and has
+/// the calling thread take the signals other processes send it
+/// (`nr::SIGNAL_ENTRY_SET`).
+pub fn signal_entry_set(entry: usize) -> SysResult {
+    if !is_user_address(entry) {
+        return Err(Error::InvalidArgs);
+    }
+    current_process()?.set_signal_entry(entry as u64, &scheduler::current());
+    ok(0)
+}
+
+/// Sends a process POSIX signal `signal`, and with
+/// `kill_flags::DESCENDANTS` the processes it started, and so on
+/// (`nr::PROCESS_SIGNAL`).
+pub fn process_signal(raw: RawHandle, signal: usize, flags: usize) -> SysResult {
+    if signal == 0 || signal > abi::posix_signal::MAX || flags & !abi::kill_flags::DESCENDANTS != 0 {
+        return Err(Error::InvalidArgs);
+    }
+    let job = flags & abi::kill_flags::DESCENDANTS != 0;
+    let rights = if job { Rights(Rights::SIGNAL.0 | Rights::MANAGE.0) } else { Rights::SIGNAL };
+    let p = get_process(raw, rights)?;
+    let mut targets = alloc::vec![p.clone()];
+    if job {
+        targets.extend(process::descendants(p.koid));
+    }
+    let me = current_process()?;
+    for t in &targets {
+        t.signal(signal, me.koid);
+    }
+    // Ended by its own signal: it goes now, as with `process_kill`.
+    if me.ending_with().is_some() && targets.iter().any(|t| t.koid == me.koid) {
+        scheduler::exit_current();
+    }
+    ok(0)
+}
+
+/// Sets the signals a process not started yet inherited as ignored and as
+/// blocked (`nr::PROCESS_SIGNALS_INHERITED`).
+pub fn process_signals_inherited(raw: RawHandle, ignored: u64, blocked: u64) -> SysResult {
+    let p = get_process(raw, Rights::MANAGE)?;
+    if p.state() != ProcessState::Created {
+        return Err(Error::BadState);
+    }
+    p.set_inherited_signals(ignored, blocked);
+    ok(0)
+}
+
+/// Takes the signals other processes sent the calling process
+/// (`nr::SIGNAL_TAKE`): those written to `out` are taken, and no others.
+/// An interruption the thread deferred is over.
+pub fn signal_take(out: usize) -> SysResult {
+    let p = current_process()?;
+    let sent: SentSignals = p.sent_signals();
+    user::write(out as u64, &sent)?;
+    p.take_signals(sent.set);
+    scheduler::current().deferred.store(false, Ordering::Release);
+    ok(sent.set.count_ones() as usize)
+}
+
+/// Interrupts a thread of the calling process (`nr::THREAD_INTERRUPT`).
+pub fn thread_interrupt(raw: RawHandle) -> SysResult {
+    let t = get_thread(raw, Rights::MANAGE)?;
+    let me = current_process()?;
+    if !t.process.as_ref().is_some_and(|p| p.koid == me.koid) {
+        return Err(Error::AccessDenied);
+    }
+    scheduler::interrupt(&t);
+    ok(0)
+}
+
+/// Resumes the user registers at `at`, which the signal entry was given
+/// (`nr::SIGNAL_RETURN`), as the return through `frame` will; with
+/// `signal_return_flags::DEFER`, the thread deferred its interruption.
+pub fn signal_return(frame: &mut TrapFrame, at: usize, flags: usize) -> Result<(), Error> {
+    if flags & !abi::signal_return_flags::DEFER != 0 {
+        return Err(Error::InvalidArgs);
+    }
+    let state: abi::ThreadState = user::read(at as u64)?;
+    frame.resume(&state)?;
+    if flags & abi::signal_return_flags::DEFER != 0 {
+        scheduler::current().deferred.store(true, Ordering::Release);
+    }
+    Ok(())
+}
+
+/// A handle to the calling process (`nr::PROCESS_SELF`).
+pub fn process_self() -> SysResult {
+    ok(insert(KObject::Process(current_process()?), PROCESS_RIGHTS)? as usize)
 }
 
 pub fn thread_create(proc: RawHandle, name: usize, len: usize) -> SysResult {

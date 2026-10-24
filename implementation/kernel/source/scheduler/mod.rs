@@ -26,6 +26,10 @@
 //!   `NORMAL`, or the earliest deadline of the threads that went to sleep
 //!   on it, which it alone wakes).
 //! * Every CPU has an idle thread that halts until an interrupt arrives.
+//! * A thread can be interrupted ([`interrupt`]): the waits user code makes
+//!   end ([`block_interruptible`]), and as it next returns to user code it
+//!   runs its process's signal entry: how POSIX signals reach a thread,
+//!   whatever it is doing.
 
 pub mod percpu;
 pub mod thread;
@@ -354,12 +358,63 @@ pub fn wake(t: &Arc<Thread>, reason: WakeReason) {
     after_wakeup(prio, now);
 }
 
+/// How an interruption ([`interrupt`]) bears on a wait.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Interruptible {
+    /// It does not end it: the kernel's own waits.
+    No,
+    /// It ends it (`Interrupted`), at once if one came before: the waits
+    /// user code makes, when its thread can act on one
+    /// ([`takes_interruptions`]).
+    Yes,
+    /// So does one the thread deferred and has not acted on yet
+    /// ([`Thread::deferred`]): `wait_flags::DEFERRED`.
+    OrDeferred,
+}
+
+impl Interruptible {
+    /// What a wait call's flags make of its wait (`abi::wait_flags`; the
+    /// call's own, `own`, it takes itself): `InvalidArgs` for flags there
+    /// are not.
+    pub fn from_flags(flags: usize, own: usize) -> Result<Interruptible, abi::Error> {
+        if flags & !(abi::wait_flags::DEFERRED | own) != 0 {
+            return Err(abi::Error::InvalidArgs);
+        }
+        Ok(if flags & abi::wait_flags::DEFERRED != 0 { Interruptible::OrDeferred } else { Interruptible::Yes })
+    }
+}
+
 /// Blocks the current thread until [`wake`] is called or `deadline`
 /// (monotonic ns) passes.
 pub fn block(deadline: Option<u64>) -> WakeReason {
+    block_as(deadline, Interruptible::No)
+}
+
+/// [`block`], which an interruption ends as `how` says.
+pub fn block_interruptible(deadline: Option<u64>, how: Interruptible) -> WakeReason {
+    block_as(deadline, how)
+}
+
+/// Whether `t` acts on an interruption: its process has a signal entry,
+/// and it has a thread pointer, by which the entry finds the thread's
+/// state. Another thread's waits are not ended by one, which would end
+/// them again each time they began.
+pub fn takes_interruptions(t: &Thread) -> bool {
+    // SAFETY: the context's thread pointer, read under the BKL.
+    t.process.as_ref().is_some_and(|p| p.signal_entry().is_some()) && unsafe { (*t.ctx_ptr()).tls() } != 0
+}
+
+fn block_as(deadline: Option<u64>, how: Interruptible) -> WakeReason {
     let cur = current();
+    let interruptible = how != Interruptible::No && takes_interruptions(&cur);
     if cur.kill_pending.load(Ordering::Acquire) {
         return WakeReason::Killed;
+    }
+    if interruptible
+        && (cur.interrupt.load(Ordering::Acquire)
+            || (how == Interruptible::OrDeferred && cur.deferred.load(Ordering::Acquire)))
+    {
+        return WakeReason::Interrupted;
     }
     if let Some(d) = deadline
         && d <= time::now_ns()
@@ -370,6 +425,7 @@ pub fn block(deadline: Option<u64>) -> WakeReason {
         let mut s = cur.sched.lock();
         s.state = State::Blocked;
         s.wake_reason = WakeReason::None;
+        s.interruptible = interruptible;
         if let Some(d) = deadline {
             let (cpu, key) = (percpu::cpu_id_or_boot(), (d, cur.koid));
             TIMEOUTS[cpu as usize].lock().insert(key, Arc::downgrade(&cur));
@@ -384,15 +440,34 @@ pub fn block(deadline: Option<u64>) -> WakeReason {
     s.wake_reason
 }
 
-/// Sleeps until `deadline` (monotonic ns).
-pub fn sleep_until(deadline: u64) -> WakeReason {
+/// Sleeps until `deadline` (monotonic ns), or an interruption as `how`
+/// says.
+pub fn sleep_until(deadline: u64, how: Interruptible) -> WakeReason {
     loop {
-        match block(Some(deadline)) {
-            WakeReason::TimedOut => return WakeReason::TimedOut,
-            WakeReason::Killed => return WakeReason::Killed,
+        match block_as(Some(deadline), how) {
+            reason @ (WakeReason::TimedOut | WakeReason::Killed | WakeReason::Interrupted) => return reason,
             _ if time::now_ns() >= deadline => return WakeReason::TimedOut,
             _ => {}
         }
+    }
+}
+
+/// Interrupts `t` (`THREAD_INTERRUPT`, a signal for its process): an
+/// interruptible wait it is in ends, as one it begins will, and as it next
+/// returns to user code it runs its process's signal entry
+/// ([`return_to_user_hook`]). One running on another processor is made to
+/// enter the kernel; one running here is the caller, which returns to user
+/// code next.
+pub fn interrupt(t: &Arc<Thread>) {
+    t.interrupt.store(true, Ordering::Release);
+    let (state, interruptible, cpu) = {
+        let s = t.sched.lock();
+        (s.state, s.interruptible, s.cpu)
+    };
+    match state {
+        State::Blocked if interruptible => wake(t, WakeReason::Interrupted),
+        State::Running if cpu != percpu::cpu_id_or_boot() => architecture::smp::reschedule(cpu),
+        _ => {}
     }
 }
 
@@ -629,8 +704,10 @@ pub fn timer_interrupt() {
 }
 
 /// Called on every return to user mode (with the BKL held): handles
-/// preemption, pending kills and suspensions.
-pub fn return_to_user_hook(_frame: &mut TrapFrame) {
+/// preemption, pending kills and suspensions, then an interruption: the
+/// thread runs its process's signal entry, once it has a thread pointer
+/// (the signal entry finds its thread's state by it).
+pub fn return_to_user_hook(frame: &mut TrapFrame) {
     loop {
         if current().kill_pending.load(Ordering::Acquire) {
             exit_current();
@@ -645,6 +722,21 @@ pub fn return_to_user_hook(_frame: &mut TrapFrame) {
             continue;
         }
         break;
+    }
+    let cur = current();
+    if !cur.interrupt.load(Ordering::Acquire) || !takes_interruptions(&cur) {
+        return;
+    }
+    let Some(entry) = cur.process.as_ref().and_then(|p| p.signal_entry()) else { return };
+    // SAFETY: the current thread's context, under the BKL.
+    let tls = unsafe { (*cur.ctx_ptr()).tls() };
+    cur.interrupt.store(false, Ordering::Release);
+    // A stack it cannot be given its registers on (one being freed as the
+    // thread ends) goes without: the signals wait for another thread.
+    if frame.divert(entry, tls).is_err()
+        && let Some(p) = &cur.process
+    {
+        p.interrupt_receiver(Some(cur.koid));
     }
 }
 

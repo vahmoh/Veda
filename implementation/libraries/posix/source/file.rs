@@ -6,13 +6,14 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use abi::signals::{PEER_CLOSED, READABLE};
 use ipc::Bytes;
 use proto::fs::{FsError, LockHolder, LockRange, MAX_IO, Stat, file, lock_event, open_flags, seek};
 use rt::object::{Channel, Vmo};
 use rt::sync::Mutex;
 
 use crate::error;
-use crate::linux::errno::{EINVAL, EIO, ENOLCK, ENOMEM};
+use crate::linux::errno::{EINVAL, EIO, ENOLCK, ENOMEM, ERESTARTSYS};
 use crate::linux::{self, dt};
 use crate::path;
 use crate::vfs;
@@ -180,9 +181,20 @@ impl VfsFile {
 /// Waits for a request for a lock that waits ([`Requested::Waiting`]) to be
 /// granted (whether its owner, a process, holds locks on the file's bytes
 /// then), or to fail: with `EDEADLK`, `EBADF` if the file closed first, or
-/// `ENOLCK` if the VFS had no room for the lock.
+/// `ENOLCK` if the VFS had no room for the lock. A signal for the thread
+/// ends the wait as it ends other blocking calls (`ERESTARTSYS`: the call
+/// is made again after a handler with `SA_RESTART`, as Linux makes
+/// `flock` and `F_SETLKW` again): the channel goes, and the VFS forgets
+/// the request with it, unless it had granted it already.
 pub fn await_lock(waiting: Channel) -> Result<bool, isize> {
-    let message = waiting.read_blocking(abi::DEADLINE_INFINITE).map_err(|_| EIO)?;
+    let message = match crate::interrupt::wait_one(&waiting.0, READABLE | PEER_CLOSED, abi::DEADLINE_INFINITE) {
+        Ok(_) | Err(abi::Error::Interrupted) => match waiting.read() {
+            Ok(message) => message,
+            Err(abi::Error::ShouldWait) => return Err(ERESTARTSYS),
+            Err(_) => return Err(EIO),
+        },
+        Err(_) => return Err(EIO),
+    };
     match ipc::decode_event::<Result<bool, FsError>>(message) {
         Ok((lock_event::DONE, Err(FsError::TooMany))) => Err(ENOLCK),
         Ok((lock_event::DONE, result)) => result.map_err(error::fs),

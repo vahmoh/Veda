@@ -10,7 +10,8 @@ use crate::fd::{self, Object};
 use crate::linux::errno::*;
 use crate::linux::{Timespec, clock, nr};
 use crate::{
-    epoll, eventfd, fs, io, lock, mem, memfd, process, sched, signal, socket, system, thread, time, timerfd, user, vfs,
+    epoll, eventfd, fs, io, lock, mem, memfd, process, sched, signal, socket, system, thread, time, timer, timerfd,
+    user, vfs,
 };
 
 /// Deadline (monotonic ns) of a relative timeout, `None` for none.
@@ -21,6 +22,31 @@ unsafe fn deadline_ts(ts: usize) -> Result<Option<u64>, isize> {
     // SAFETY: the program passed a timespec.
     let t: Timespec = unsafe { user::read(ts)? };
     Ok(Some(time::monotonic_ns().saturating_add(t.to_ns().ok_or(EINVAL)?)))
+}
+
+/// The signal mask a waiting call gives (`ppoll`, `epoll_pwait`: its
+/// address and size), if it gives one.
+unsafe fn sigmask(at: usize, size: usize) -> Result<Option<u64>, isize> {
+    if at == 0 {
+        return Ok(None);
+    }
+    if size != 8 {
+        return Err(EINVAL);
+    }
+    // SAFETY: the program passed a sigset.
+    Ok(Some(unsafe { user::read(at)? }))
+}
+
+/// The mask `pselect6` gives: its sixth argument points at the mask's
+/// address and size.
+unsafe fn pselect_mask(at: usize) -> Result<Option<u64>, isize> {
+    if at == 0 {
+        return Ok(None);
+    }
+    // SAFETY: the program passed the pair.
+    let [mask, size]: [usize; 2] = unsafe { user::read(at)? };
+    // SAFETY: as above.
+    unsafe { sigmask(mask, size) }
 }
 
 /// `fallocate` with mode 0: makes sure the file is at least
@@ -137,8 +163,16 @@ unsafe fn generic(n: usize, a: [usize; 6]) -> SysResult {
             nr::CLOSE => io::close(fd0),
             nr::FSTAT => fs::fstat(fd0, a[1]),
             nr::NEWFSTATAT => fs::fstatat(fd0, a[1], a[2], a[3] as u32),
-            nr::PPOLL => io::poll(a[0], a[1], deadline_ts(a[2])?),
-            nr::PSELECT6 => io::select(fd0, a[1], a[2], a[3], deadline_ts(a[4])?),
+            // With the mask they give for as long as they wait, as
+            // `sigsuspend` has it.
+            nr::PPOLL => {
+                let (deadline, mask) = (deadline_ts(a[2])?, sigmask(a[3], a[4])?);
+                signal::with_mask(mask, || io::poll(a[0], a[1], deadline))
+            }
+            nr::PSELECT6 => {
+                let (deadline, mask) = (deadline_ts(a[4])?, pselect_mask(a[5])?);
+                signal::with_mask(mask, || io::select(fd0, a[1], a[2], a[3], deadline))
+            }
             nr::LSEEK => io::lseek(fd0, a[1] as i64, a[2] as u32),
             nr::MMAP => mem::mmap(a[0], a[1], a[2] as u32, a[3] as u32, a[4] as i32, a[5] as i64),
             nr::MPROTECT => mem::mprotect(a[0], a[1], a[2] as u32),
@@ -153,6 +187,15 @@ unsafe fn generic(n: usize, a: [usize; 6]) -> SysResult {
             nr::RT_SIGPENDING => signal::rt_sigpending(a[0]),
             nr::RT_SIGSUSPEND => signal::rt_sigsuspend(a[0]),
             nr::RT_SIGTIMEDWAIT => signal::rt_sigtimedwait(a[0], a[1], a[2]),
+            nr::RT_SIGQUEUEINFO => signal::sigqueue(fd0, 0, a[1] as u32, a[2]),
+            nr::RT_TGSIGQUEUEINFO => signal::sigqueue(fd0, a[1] as i32, a[2] as u32, a[3]),
+            nr::GETITIMER => timer::getitimer(a[0] as u32, a[1]),
+            nr::SETITIMER => timer::setitimer(a[0] as u32, a[1], a[2]),
+            nr::TIMER_CREATE => timer::timer_create(a[0] as u32, a[1], a[2]),
+            nr::TIMER_SETTIME => timer::timer_settime(fd0, a[1] as u32, a[2], a[3]),
+            nr::TIMER_GETTIME => timer::timer_gettime(fd0, a[1]),
+            nr::TIMER_GETOVERRUN => timer::timer_getoverrun(fd0),
+            nr::TIMER_DELETE => timer::timer_delete(fd0),
             nr::SIGALTSTACK => signal::sigaltstack(a[1]),
             nr::IOCTL => io::ioctl(fd0, a[1] as u32, a[2]),
             nr::PREAD64 => io::pread(fd0, a[1], a[2], a[3] as i64),
@@ -185,9 +228,14 @@ unsafe fn generic(n: usize, a: [usize; 6]) -> SysResult {
             nr::SHUTDOWN => socket::shutdown(fd0, a[1] as u32),
             nr::EPOLL_CREATE1 => epoll::epoll_create1(a[0] as u32),
             nr::EPOLL_CTL => epoll::epoll_ctl(fd0, a[1] as u32, a[2] as i32, a[3]),
-            // The signal mask stays as it is, as with `ppoll`.
-            nr::EPOLL_PWAIT => epoll::epoll_wait(fd0, a[1], a[2] as i32, epoll::deadline_ms(a[3] as i32)),
-            nr::EPOLL_PWAIT2 => epoll::epoll_wait(fd0, a[1], a[2] as i32, deadline_ts(a[3])?),
+            nr::EPOLL_PWAIT => {
+                let (deadline, mask) = (epoll::deadline_ms(a[3] as i32), sigmask(a[4], a[5])?);
+                signal::with_mask(mask, || epoll::epoll_wait(fd0, a[1], a[2] as i32, deadline))
+            }
+            nr::EPOLL_PWAIT2 => {
+                let (deadline, mask) = (deadline_ts(a[3])?, sigmask(a[4], a[5])?);
+                signal::with_mask(mask, || epoll::epoll_wait(fd0, a[1], a[2] as i32, deadline))
+            }
             nr::EVENTFD2 => eventfd::eventfd2(a[0] as u32, a[1] as u32),
             nr::TIMERFD_CREATE => timerfd::create(a[0] as u32, a[1] as u32),
             nr::TIMERFD_SETTIME => timerfd::settime(a[0] as i32, a[1] as u32, a[2], a[3]),

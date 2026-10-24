@@ -23,7 +23,8 @@
 //! | threads, TLS, futexes | kernel threads, the thread pointer, kernel futexes ([`thread`]) |
 //! | nice values, affinity | the kernel's thread priorities; every processor ([`sched`]) |
 //! | `fork` + `exec` | `posix_spawn`, which loads the program directly ([`process`]) |
-//! | signals | synchronous delivery (`raise`, `abort`, `SIGPIPE`, `pthread_kill`) ([`signal`]) |
+//! | signals | the layer's own state, handlers run as a call returns or where the kernel interrupts a thread ([`signal`], [`interrupt`]); another process's by way of the kernel |
+//! | `alarm`, `setitimer`, `timer_create` | timers of the layer's, which a thread of its signals ([`timer`]) |
 //! | a sandbox (Landlock, seccomp, namespaces) | the VFS connection and the registry channel confined, the kernel's `process_restrict` (`<veda/sandbox.h>`, [`sandbox`]) |
 //!
 //! musl's hooks into this layer are:
@@ -33,7 +34,9 @@
 //!   reads the startup message: the working directory, the descriptors the
 //!   program was given (role `FD + n`), the terminal, the registry, and what
 //!   it inherits that is no handle (`inherit`);
-//! * `__veda_syscall(n, a1, ..., a6)` replaces the `syscall` instruction;
+//! * `__veda_syscall(n, a1, ..., a6)` replaces the `syscall` instruction:
+//!   the architecture's gate (`architecture::signal`), which keeps where
+//!   its caller resumes, then [`syscall_gate`];
 //! * `__clone`, `__set_thread_area` and `__unmapself` jump to
 //!   [`thread::__veda_clone`], [`thread::__veda_set_thread_area`] and
 //!   [`thread::__veda_unmapself`];
@@ -71,6 +74,7 @@ mod file;
 mod fs;
 mod inet;
 mod inherit;
+mod interrupt;
 mod io;
 mod linux;
 mod lock;
@@ -92,6 +96,7 @@ mod syscall;
 mod system;
 mod thread;
 mod time;
+mod timer;
 mod timerfd;
 mod tty;
 mod unix;
@@ -108,11 +113,20 @@ use rt::object::Vmo;
 pub static __veda_bootstrap: AtomicU32 = AtomicU32::new(0);
 
 /// Sets the layer up from the startup message (called by `__init_libc`,
-/// once the thread pointer is set, before any constructor runs).
+/// once the thread pointer is set, before any constructor runs). Signals
+/// from other processes are the program's from then on: until it has a
+/// signal entry, they end it, or not, as they end a program by default.
 #[unsafe(no_mangle)]
 pub extern "C" fn __veda_init() {
-    // Thread-local storage is set up: threads can be told apart.
+    // Thread-local storage is set up: threads can be told apart, and each
+    // has its word.
+    #[cfg(target_os = "none")]
+    {
+        architecture::signal::init();
+        architecture::signal::clear_word(!0);
+    }
     signal::threads_ready();
+    let _layer = interrupt::Layer::enter();
     thread::main_thread_ready();
     rt::env::adopt(__veda_bootstrap.swap(0, Ordering::Relaxed));
     let entries = rt::env::vars();
@@ -126,22 +140,47 @@ pub extern "C" fn __veda_init() {
     if let Some(h) = rt::env::take_handle(role::TERMINAL) {
         tty::adopt(Vmo::from_handle(h));
     }
+    if let Some(h) = rt::env::take_handle(role::PARENT) {
+        process::adopt_parent(rt::object::Process::from_handle(h));
+    }
     io::adopt_startup_fds(&inherited);
+    #[cfg(target_os = "none")]
+    let _ = rt::sys::call(abi::nr::SIGNAL_ENTRY_SET, [architecture::signal::entry_address(), 0, 0, 0, 0, 0]);
 }
 
-/// A Linux system call. Returns its result, or `-errno`.
+/// A Linux system call (from `__veda_syscall`, which passes `caller`: where
+/// it returns, and with what, `caller.rax`). As the call returns, the
+/// calling thread acts on its ready signals (as a system call returns on
+/// Linux), which may start a blocking call again (`signal::returning`).
 ///
 /// # Safety
-/// The arguments are those of the Linux system call `n`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __veda_syscall(n: isize, a: isize, b: isize, c: isize, d: isize, e: isize, f: isize) -> isize {
+/// The arguments are those of the Linux system call `n`; `caller` is
+/// `__veda_syscall`'s.
+#[cfg_attr(not(target_os = "none"), allow(dead_code))]
+unsafe extern "C" fn syscall_gate(
+    n: isize,
+    a: isize,
+    b: isize,
+    c: isize,
+    d: isize,
+    e: isize,
+    f: isize,
+    caller: *mut architecture::signal::Caller,
+) {
     let args = [a, b, c, d, e, f].map(|v| v as usize);
     // SAFETY: per the caller.
-    let r = unsafe { syscall::dispatch(n as usize, args) };
-    // Signals another thread sent this one are taken as a system call
-    // returns.
-    signal::deliver_if_any();
-    error::encode(r)
+    let (caller, call) = (unsafe { &mut *caller }, || unsafe { syscall::dispatch(n as usize, args) });
+    if !interrupt::enter() {
+        // No signal is acted on (thread-local storage is not set up yet).
+        let r = call();
+        caller.rax =
+            error::encode(if r == Err(linux::errno::ERESTARTSYS) { Err(linux::errno::EINTR) } else { r }) as u64;
+        return;
+    }
+    signal::returning(call(), caller, call);
+    while !interrupt::leave() {
+        signal::act_on_ready(caller);
+    }
 }
 
 /// The layer's own memory (separate from `malloc`, which calls into the

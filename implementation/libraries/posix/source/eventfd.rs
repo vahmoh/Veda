@@ -69,7 +69,7 @@ impl EventFd {
             if nonblock {
                 return Err(EAGAIN);
             }
-            self.event.wait(READABLE, abi::DEADLINE_INFINITE).map_err(error::kernel)?;
+            crate::stream::wait_signal(&self.event.0, READABLE)?;
         }
     }
 
@@ -95,7 +95,7 @@ impl EventFd {
             if nonblock {
                 return Err(EAGAIN);
             }
-            self.event.wait(WRITABLE, abi::DEADLINE_INFINITE).map_err(error::kernel)?;
+            crate::stream::wait_signal(&self.event.0, WRITABLE)?;
         }
     }
 }

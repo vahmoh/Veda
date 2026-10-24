@@ -46,6 +46,19 @@ pub fn call2(n: usize, a: [usize; 6]) -> Result<(usize, usize), Error> {
     crate::guest::call(n, a)
 }
 
+/// A call that waits (`object_wait_one`, `port_wait`, `futex_wait`,
+/// `sleep`...), made again when an interruption ends it: interruptions are
+/// for the POSIX layer, which acts on them with its own calls, and are
+/// nothing to the rest of a program.
+pub fn call_waiting(n: usize, a: [usize; 6]) -> SysResult {
+    loop {
+        match call(n, a) {
+            Err(Error::Interrupted) => {}
+            r => return r,
+        }
+    }
+}
+
 pub fn debug_write(text: &[u8]) {
     let _ = call(nr::DEBUG_WRITE, [text.as_ptr() as usize, text.len(), 0, 0, 0, 0]);
 }

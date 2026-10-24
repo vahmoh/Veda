@@ -42,6 +42,7 @@ pub unsafe fn dispatch(n: usize, a: [usize; 6]) -> Option<SysResult> {
             nr::PIPE => io::pipe2(a[0], 0),
             nr::DUP2 => io::dup3(fd0, a[1] as i32, 0, true),
             nr::PAUSE => signal::pause(),
+            nr::ALARM => crate::timer::alarm(a[0] as u32),
             nr::GETPGRP => Ok(process::pid() as usize),
             // Processes are made from program images (posix_spawn), not
             // by copying this one.

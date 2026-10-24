@@ -21,6 +21,22 @@
 //! `rsi`, and the stack pointer [`entry_stack_pointer`] gives. Its thread
 //! pointer (`thread_set_tls`) is its FS base. The clock's counter
 //! ([`ClockInfo`](crate::ClockInfo)) is the TSC (`rdtsc`).
+//!
+//! # Signal entry
+//!
+//! An interrupted thread (`thread_interrupt`) goes to its process's signal
+//! entry (`signal_entry_set`) as it next returns to user code, with its
+//! user registers as it left that code in a [`ThreadState`] on its stack:
+//! below the 128 bytes under its stack pointer (the System V ABI's red
+//! zone, which the code interrupted may use), 64-byte aligned. `rdi` holds
+//! its address; the stack pointer is 8 below it, as on entry to a
+//! function; the flags are cleared, but for interrupts (`IF`), so that
+//! the direction flag is clear. The other registers are those of the
+//! code interrupted, but `rcx` and `r11`, which are not kept. The x87,
+//! SSE and AVX registers are the code's: the entry keeps them, and
+//! `signal_return` resumes the registers it is given. Of the flags,
+//! `signal_return` takes those arithmetic sets and the direction flag
+//! ([`SIGNAL_RETURN_FLAGS`]).
 
 /// Page size used by the kernel for all mappings.
 pub const PAGE_SIZE: usize = 4096;
@@ -71,6 +87,28 @@ pub struct ThreadState {
     pub rflags: u64,
     /// The thread pointer: its FS base.
     pub fs_base: u64,
+}
+
+/// Where an interrupted thread's [`ThreadState`] goes, its stack pointer
+/// being `sp` as it left user code: below the System V ABI's red zone,
+/// 64-byte aligned (see "Signal entry").
+pub const fn signal_frame(sp: usize) -> usize {
+    sp.wrapping_sub(128 + core::mem::size_of::<ThreadState>()) & !63
+}
+
+/// The flags `signal_return` takes from the registers it resumes: carry,
+/// parity, adjust, zero, sign, direction and overflow. It sets interrupts
+/// on, and the rest off ([`resumed_flags`]).
+pub const SIGNAL_RETURN_FLAGS: u64 = 0xCD5;
+
+/// The interrupt flag, which user code always runs with.
+pub const INTERRUPT_FLAG: u64 = 0x200;
+
+/// The flags `signal_return` resumes a thread with, given `flags`: those
+/// user code may change, and interrupts on (no single-stepping, I/O
+/// privilege, alignment checks or virtual-8086 mode).
+pub const fn resumed_flags(flags: u64) -> u64 {
+    (flags & SIGNAL_RETURN_FLAGS) | INTERRUPT_FLAG
 }
 
 /// A segment register of a virtual processor.
@@ -138,4 +176,34 @@ pub mod vcpu_exit {
     /// `data[1]` its qualification (or the instruction error of a failed
     /// entry), `data[2]` the guest's rip.
     pub const FAILED: u32 = 5;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_resumed_thread_keeps_only_the_flags_user_code_may_change() {
+        // Carry, zero, sign, direction and overflow stay; interrupts come on.
+        assert_eq!(resumed_flags(0x0001 | 0x0040 | 0x0080 | 0x0400 | 0x0800), 0x0cc1 | INTERRUPT_FLAG);
+        // Single-stepping (TF), I/O privilege, nested tasks, resume,
+        // virtual-8086 mode and alignment checks do not.
+        assert_eq!(resumed_flags(0x0100 | 0x3000 | 0x4000 | 0x1_0000 | 0x2_0000 | 0x4_0000), INTERRUPT_FLAG);
+        // Interrupts are on whatever is asked.
+        assert_eq!(resumed_flags(0), INTERRUPT_FLAG);
+    }
+
+    #[test]
+    fn signal_frames_leave_the_red_zone_and_are_aligned() {
+        for sp in [0x7fff_0000_1000, 0x7fff_0000_1008, 0x7fff_0000_0ff0, 0x5555_0000_0123] {
+            let frame = signal_frame(sp);
+            assert_eq!(frame % 64, 0, "{sp:#x}");
+            // The frame ends below the 128 bytes the interrupted code may
+            // use under its stack pointer, and not far below.
+            let end = frame + core::mem::size_of::<ThreadState>();
+            assert!(end <= sp - 128 && sp - 128 - end < 64, "{sp:#x}");
+            // The entry's stack pointer is as on entry to a function.
+            assert_eq!(entry_stack_pointer(frame) % 16, 8);
+        }
+    }
 }

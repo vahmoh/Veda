@@ -53,6 +53,7 @@ pub fn kernel(e: abi::Error) -> isize {
         K::NotSupported | K::UnknownSyscall => ENOSYS,
         K::Busy => EBUSY,
         K::Fault => EFAULT,
+        K::Interrupted => EINTR,
         K::BufferTooSmall | K::BadState | K::Canceled | K::Io | K::Internal => EIO,
     }
 }

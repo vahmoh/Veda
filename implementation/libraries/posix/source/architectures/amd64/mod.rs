@@ -3,9 +3,11 @@
 
 //! The POSIX layer on AMD64: what Linux's x86-64 ABI has of its own
 //! ([`linux`], [`syscall`]), the thread pointer (the FS base, which `%fs:0`
-//! holds), and the code new threads start in.
+//! holds), the code new threads start in, and how signals reach a thread
+//! ([`signal`]).
 
 pub mod linux;
+pub mod signal;
 pub mod syscall;
 
 /// The calling thread's thread pointer (once the C library has set up
@@ -15,24 +17,6 @@ pub fn thread_pointer() -> usize {
     // SAFETY: with TLS set up, %fs:0 holds the thread pointer itself.
     unsafe { core::arch::asm!("mov {}, qword ptr fs:[0]", out(reg) tp, options(nostack, readonly, preserves_flags)) };
     tp
-}
-
-/// Stores a stopped thread's registers at `out` as musl's `mcontext_t` on
-/// x86-64 has them, as Linux's signal frames do: `gregs` (23 of them, in
-/// `REG_R8`'s order), then `fpregs` (null: no floating point is kept) and
-/// eight reserved words.
-///
-/// # Safety
-/// `out` must point at 256 writable bytes.
-pub unsafe fn store_mcontext(s: &abi::ThreadState, out: *mut core::ffi::c_void) {
-    let mut m = [0u64; 32];
-    let gregs = [
-        s.r8, s.r9, s.r10, s.r11, s.r12, s.r13, s.r14, s.r15, s.rdi, s.rsi, s.rbp, s.rbx, s.rdx, s.rax, s.rcx, s.rsp,
-        s.rip, s.rflags,
-    ];
-    m[..gregs.len()].copy_from_slice(&gregs);
-    // SAFETY: per the caller.
-    unsafe { core::ptr::write_unaligned(out.cast::<[u64; 32]>(), m) };
 }
 
 /// Where a thread `__veda_clone` makes starts: `__veda_thread_entry`.

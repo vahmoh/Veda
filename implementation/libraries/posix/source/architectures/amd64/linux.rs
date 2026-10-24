@@ -41,6 +41,16 @@ pub mod nr {
     pub const DUP: usize = linux_raw_sys::general::__NR_dup as usize;
     pub const DUP2: usize = linux_raw_sys::general::__NR_dup2 as usize;
     pub const PAUSE: usize = linux_raw_sys::general::__NR_pause as usize;
+    pub const GETITIMER: usize = linux_raw_sys::general::__NR_getitimer as usize;
+    pub const ALARM: usize = linux_raw_sys::general::__NR_alarm as usize;
+    pub const SETITIMER: usize = linux_raw_sys::general::__NR_setitimer as usize;
+    pub const RT_SIGQUEUEINFO: usize = linux_raw_sys::general::__NR_rt_sigqueueinfo as usize;
+    pub const RT_TGSIGQUEUEINFO: usize = linux_raw_sys::general::__NR_rt_tgsigqueueinfo as usize;
+    pub const TIMER_CREATE: usize = linux_raw_sys::general::__NR_timer_create as usize;
+    pub const TIMER_SETTIME: usize = linux_raw_sys::general::__NR_timer_settime as usize;
+    pub const TIMER_GETTIME: usize = linux_raw_sys::general::__NR_timer_gettime as usize;
+    pub const TIMER_GETOVERRUN: usize = linux_raw_sys::general::__NR_timer_getoverrun as usize;
+    pub const TIMER_DELETE: usize = linux_raw_sys::general::__NR_timer_delete as usize;
     pub const NANOSLEEP: usize = linux_raw_sys::general::__NR_nanosleep as usize;
     pub const GETPID: usize = linux_raw_sys::general::__NR_getpid as usize;
     pub const SOCKET: usize = linux_raw_sys::general::__NR_socket as usize;
@@ -239,10 +249,13 @@ pub struct Stat {
 }
 
 /// `ucontext_t`, the context a signal handler gets (musl's on x86-64): its
-/// size, and where its signal mask is (`uc_sigmask`, after `uc_flags`,
-/// `uc_link`, `uc_stack` and the 256 bytes of `uc_mcontext`).
+/// size, where its registers are (`uc_mcontext`, after `uc_flags`,
+/// `uc_link` and `uc_stack`), and its signal mask (`uc_sigmask`, after
+/// the 256 bytes of `uc_mcontext`); `uc_stack`'s `ss_flags`.
 pub mod ucontext {
     pub const SIZE: usize = 936;
+    pub const STACK_FLAGS: usize = 24;
+    pub const MCONTEXT: usize = 40;
     pub const SIGMASK: usize = 296;
 }
 

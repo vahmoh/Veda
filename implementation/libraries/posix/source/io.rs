@@ -822,7 +822,7 @@ pub unsafe fn poll(fds: usize, count: usize, deadline: Option<u64>) -> SysResult
         }
         if waits.is_empty() {
             // Nothing can become ready: wait out the time, unless a signal
-            // handler runs first.
+            // is to be acted on first.
             if crate::signal::sleep_until(deadline.unwrap_or(abi::DEADLINE_INFINITE)) {
                 return Err(EINTR);
             }
@@ -834,8 +834,10 @@ pub unsafe fn poll(fds: usize, count: usize, deadline: Option<u64>) -> SysResult
                 Some(WaitItem { handle: w.handle()?, signals: *signals, observed: 0, _reserved: 0 })
             })
             .collect();
-        match rt::object::wait_many(&mut items, deadline.unwrap_or(abi::DEADLINE_INFINITE)) {
+        match crate::interrupt::wait_many(&mut items, deadline.unwrap_or(abi::DEADLINE_INFINITE)) {
             Ok(_) | Err(abi::Error::TimedOut) => {}
+            // A signal ends it, never to start again (as on Linux).
+            Err(abi::Error::Interrupted) => return Err(EINTR),
             Err(e) => return Err(error::kernel(e)),
         }
         pfds = read_all()?;

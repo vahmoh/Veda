@@ -10,7 +10,8 @@
 //! zooming. Commands are interpreted inside this process (see `shell.rs` and
 //! `commands.rs`), each on a thread of its own (`job.rs`): the window stays
 //! responsive while one runs, keys typed meanwhile wait for it, and Ctrl+C
-//! stops it. Programs and applications are started through the launcher.
+//! stops it (a program it sends `SIGINT`). Programs and applications are
+//! started through the launcher.
 //! [`agent`] lets the voice agent run commands and read what they print.
 //!
 //! Usage: `terminal [DIR]` starts in DIR.
@@ -543,8 +544,9 @@ impl Terminal {
         }
     }
 
-    /// Stops the running command (Ctrl+C): it stops at its next step, ^C
-    /// shows at once, and what was typed meanwhile is dropped, as in other
+    /// Stops the running command (Ctrl+C): it stops at its next step (a
+    /// program gets `SIGINT`, and ends unless it handles it), ^C shows at
+    /// once, and what was typed meanwhile is dropped, as in other
     /// terminals. Returns whether a command was running.
     fn interrupt(&mut self) -> bool {
         if self.job.is_none() {

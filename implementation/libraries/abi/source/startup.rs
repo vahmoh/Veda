@@ -58,6 +58,9 @@ pub mod role {
     /// VMO with the state of the terminal the program runs in (rows,
     /// columns, modes); see `proto::tty`.
     pub const TERMINAL: u32 = 18;
+    /// The process that started this one, which it may send signals
+    /// (`process_signal`): what a POSIX program's parent gives it.
+    pub const PARENT: u32 = 19;
     /// File descriptor `n` of a POSIX program has role `FD + n`
     /// (`n < MAX_FDS`): a socket (a pipe or a terminal) or a channel to an
     /// open file.

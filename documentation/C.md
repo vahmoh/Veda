@@ -61,10 +61,10 @@ share its terminal.
   mode): a read returns one line at most, and lines typed ahead stay for
   whoever reads next, the shell included. With `termios` a program reads
   keys one by one (`VMIN` and `VTIME` work as POSIX says).
-- **Ctrl+C** ends the program, with the programs it started; **Ctrl+D**
-  ends its input. `$?` is the exit status, or 128 plus the signal for a
-  program that was ended: 130 after Ctrl+C, 134 after `abort`, 139 after a
-  crash.
+- **Ctrl+C** sends the program `SIGINT`, with the programs it started:
+  those that do not handle it end. **Ctrl+D** ends its input. `$?` is the
+  exit status, or 128 plus the signal for a program that was ended: 130
+  after Ctrl+C, 134 after `abort`, 139 after a crash.
 - **Redirections and pipes**: `<`, `>`, `>>`, `2>`, `2>>`, `&>`, `2>&1`,
   `|` and `|&` (errors too) work with programs and built-in commands. The
   shell runs a pipeline's commands one after the other, and a pipe holds
@@ -107,6 +107,8 @@ which calls into it.
 | `dladdr`, `dl_iterate_phdr` | The program alone, statically linked: its segments, and its path as the loader gives it (`AT_EXECFN`); `dladdr` names no symbol |
 | Local time | Without `TZ`, the system's offset from UTC (the `tz=` boot option, or the firmware's), as a POSIX `TZ` string (`<+0530>-5:30`): `localtime`, `mktime` and `tzname` follow it; `TZ` overrides it with a POSIX string (there is no tz database yet) |
 | `posix_spawn`, `waitpid` | Processes started from the program image. A process id is the kernel object id cut to 30 bits, never that of another child not yet waited for (`EAGAIN` in the rare case none can be had) |
+| Signals | The layer keeps what Linux's kernel keeps of them (dispositions, masks, pending signals and what each says, `siginfo_t`). Another process's come by way of the kernel, which interrupts the thread that takes them: its wait ends, or it is sent to run the handler, wherever it is in the program's code |
+| `alarm`, `setitimer`, `timer_create` | Timers of the layer's, which a thread of its expires: on the monotonic clock, or on the processor time used (`ITIMER_VIRTUAL`, `ITIMER_PROF`, timers on a CPU-time clock), user and system time as one |
 
 **Sockets** take `bind`, `listen`, `accept4`, `connect`, the send and
 receive calls and their message forms, `shutdown`, `getsockname`,
@@ -166,10 +168,10 @@ program the Terminal runs.
 | `/bin/sh` | None yet (the Terminal's shell is part of the Terminal): `system` and `popen` fail with `ENOENT` |
 | Links | No symbolic links, and no hard links but between the shared memory objects of `/dev/shm`, as `sem_open` makes them: elsewhere `link` fails with `EPERM` (`EXDEV` from `/dev/shm` to elsewhere), as `symlink` does, and `readlink` finds none (`EINVAL`) |
 | Permissions | No owners or permission bits: a program file (ELF or `#!`) is executable, nothing else is; `chmod` changes nothing, and `chown` to another user or group is refused (`EPERM`, as for Linux's unprivileged users). Programs run as user 1000 |
-| File locks | Advisory, as Linux has them, which the VFS arbitrates between processes: `flock`'s, held by the open file description; record locks (`F_SETLK`, `F_SETLKW`, `F_GETLK`, and `lockf`), held by the process, which go as it ends or closes any descriptor of the file; and OFD locks (`F_OFD_SETLK`, `F_OFD_SETLKW`, `F_OFD_GETLK`). `F_SETLKW` reports `EDEADLK` where Linux does, and its wait is not ended by a signal, as other blocking calls are not ([Processes and signals](#processes-and-signals)). Only files take locks: on a directory, a pipe, a socket or a memory file a lock fails with `ENOLCK` (unlocking succeeds), as it does past 4096 locks on a file or 65536 in all. SQLite, in the web engine and in Python, locks its databases with them, as on Linux, without a write-ahead log (Shared file mappings, below) |
+| File locks | Advisory, as Linux has them, which the VFS arbitrates between processes: `flock`'s, held by the open file description; record locks (`F_SETLK`, `F_SETLKW`, `F_GETLK`, and `lockf`), held by the process, which go as it ends or closes any descriptor of the file; and OFD locks (`F_OFD_SETLK`, `F_OFD_SETLKW`, `F_OFD_GETLK`). `F_SETLKW` reports `EDEADLK` where Linux does, and a signal ends its wait as it ends other blocking calls ([Processes and signals](#processes-and-signals)). Only files take locks: on a directory, a pipe, a socket or a memory file a lock fails with `ENOLCK` (unlocking succeeds), as it does past 4096 locks on a file or 65536 in all. SQLite, in the web engine and in Python, locks its databases with them, as on Linux, without a write-ahead log (Shared file mappings, below) |
 | Shared libraries | Static linking only, no `dlopen` |
-| Timers | No `alarm` or interval timers: `setitimer` and `timer_create` fail with `ENOSYS`; `timerfd` is there |
-| Shared file mappings | Read-only, as changes would never reach the file: `PROT_WRITE` fails with `ENODEV`, and `mprotect` cannot add it (`EACCES`). Memory files and shared memory objects are memory: their shared mappings are it. SQLite, whose write-ahead log's index is a shared mapping of a file beside the database, is built without the log (`SQLITE_OMIT_WAL`): `PRAGMA journal_mode = WAL` leaves the journal as it is |
+| Timers | A timer of processor time (`ITIMER_VIRTUAL`, `ITIMER_PROF`, a POSIX timer on a CPU-time clock) counts user and system time as one, and expires within 10 ms of its time |
+| Shared file mappings | Read-only, as changes would never reach the file: `PROT_WRITE` fails with `ENODEV`, and `mprotect` cannot add it (`EACCES`). Memory files and shared memory objects are memory: their shared mappings are it |
 | Network sockets | TCP and UDP only. No raw or ICMP sockets (`EPROTONOSUPPORT`; `ping` is the network service's), multicast (`ENOPROTOOPT`), out-of-band data (`MSG_OOB`: `EOPNOTSUPP` to send, `EINVAL` to receive), ancillary data such as `IP_PKTINFO` (`sendmsg` with control messages: `EOPNOTSUPP`) or list of the interfaces (`getifaddrs` fails: there is no netlink) |
 | `/etc/resolv.conf` | None: the C library asks the network service, and programs that read it themselves find no DNS servers |
 | C++ | No compiler for it in the image; the cross toolchain compiles C++, with libstdc++ and libatomic |
@@ -193,23 +195,49 @@ program the Terminal runs.
   ignored, and the mask), as `POSIX_SPAWN_SETSIGDEF` and
   `POSIX_SPAWN_SETSIGMASK` change them; the other attributes (process
   groups, sessions, ids, scheduling) change nothing.
-- **Signals are synchronous.** A program gets those it raises itself
-  (`raise`, `abort`, `SIGPIPE`) and those its threads send each other
-  (`pthread_kill`, `tgkill`, and the C library's for `pthread_cancel`,
-  `setrlimit` and the `set*id` calls), which a thread takes as its next
-  system call returns; handlers and per-thread masks work. Signals end a
-  wait for signals (`sigsuspend`, `sigwait`, `pause`, a `poll` of nothing),
-  a sleep (`nanosleep`, `clock_nanosleep`) or a wait on a lock, a
-  condition or a thread (`EINTR`, after the handler); other blocking
-  calls, such as a read from a pipe, carry on, and the signal waits for
-  them. A signal a program sends itself (`kill` of its own process) is the
-  calling thread's unless it blocks it, then another thread's; while every
-  thread blocks it, it is pending for the process, for the first thread
-  that unblocks it or waits for it (`sigwait`).
-- **`kill`** reaches only the program and its children (`ESRCH`
-  otherwise), and does not signal a child: a signal that ends a process
-  by default ends it, as the child's wait status says (`WTERMSIG`), and
-  another leaves it alone.
+- **Signals** are Linux's. They come from the program itself (`raise`,
+  `abort`, `SIGPIPE`, `kill` of its own process), from its threads
+  (`pthread_kill`, `tgkill`, the C library's for `pthread_cancel`,
+  `setrlimit` and the `set*id` calls), from its timers (`alarm`,
+  `setitimer`, `timer_create`) and from other processes (`kill`, the
+  Terminal's Ctrl+C). A thread acts on one as its system call returns, or
+  at once if it runs the program's code; handlers get the registers of
+  the code they interrupted (`ucontext_t`), and where it resumes is what
+  they leave there. A signal for the process goes to a thread that does
+  not block it (the main thread first, for another process's), and while
+  every thread blocks it, it is pending for the first that unblocks it or
+  waits for it (`sigwait`).
+- **A signal ends a blocking call**, as on Linux: a read or write of a
+  pipe, the terminal or a socket, `send`, `recv`, `accept`, `connect`,
+  `waitpid`, a wait on a lock, a condition or a thread, a file's lock
+  (`flock`, `F_SETLKW`), an `eventfd` or a timer descriptor return what
+  they moved, or fail with `EINTR`, or start
+  again after the handler if it had `SA_RESTART` (`siginterrupt`), but for
+  a socket with a time-out (`SO_RCVTIMEO`, `SO_SNDTIMEO`) and a futex wait
+  with one, and `connect`, which go on without the caller. `poll`,
+  `select`, `epoll_wait`, `nanosleep` and the waits for signals
+  (`sigsuspend`, `sigtimedwait`, `pause`) always fail with `EINTR`;
+  `ppoll`, `pselect` and `epoll_pwait` wait with the mask they give, as
+  `sigsuspend` does. What the file system does for a program (a read or
+  write of a file, an `open`, a name looked up) finishes first.
+- **Not Linux's**: nothing stops a process (`SIGSTOP`, `SIGTSTP`,
+  `SIGTTIN` and `SIGTTOU` do nothing, nor does `SIGCONT`); a child's end
+  sends its parent no `SIGCHLD` (`waitpid`, or a child's descriptor,
+  `pidfd_open`, says it); a pending real-time signal is pending once, as
+  the others are, not queued, and the value `sigqueue` gives a signal
+  reaches only the program itself; there is no signal stack (`sigaltstack`
+  says none, and handlers run on the thread's stack); and a fault ends the
+  program as the signal it stands for ends it (a bad access as
+  `SIGSEGV`), which no handler takes.
+- **`kill`** reaches the program, its children, and the program that
+  started it, if that one did with `posix_spawn` (`EPERM` otherwise:
+  the Terminal, which starts the programs typed, gives them none);
+  `ESRCH` for the others. A program that takes no signals yet (it has not
+  begun to run, or is no POSIX program) has those it was started with
+  blocked or ignored so, as a program has them after `exec` on Linux: a
+  blocked one waits for it, an ignored one does nothing; another ends it
+  if it ends a program by default, as its wait status says (`WTERMSIG`),
+  and leaves it alone if not.
 
 ### Sockets and epoll
 
@@ -241,8 +269,6 @@ program the Terminal runs.
   polled either. Edge-triggered, a listening or UDP socket is reported
   when a connection or datagram comes to wait where none did, not for
   each one: accepting or receiving until `EAGAIN` misses none.
-  `epoll_pwait` leaves the signal mask as it is, as `ppoll` and `pselect`
-  do.
 
 ## The toolchain
 

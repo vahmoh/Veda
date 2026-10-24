@@ -43,6 +43,7 @@ pub unsafe fn uname(buf: usize) -> SysResult {
 /// private memory and to the memory objects it maps, each once.
 #[unsafe(no_mangle)]
 pub extern "C" fn veda_process_memory() -> usize {
+    let _layer = crate::interrupt::Layer::enter();
     rt::object::process_self_info().map_or(0, |i| i.memory_bytes as usize)
 }
 
@@ -52,6 +53,7 @@ pub extern "C" fn veda_process_memory() -> usize {
 /// runs out. EINVAL for no such class, EACCES for a less expendable one.
 #[unsafe(no_mangle)]
 pub extern "C" fn veda_process_set_memory_class(class: core::ffi::c_int) -> core::ffi::c_int {
+    let _layer = crate::interrupt::Layer::enter();
     let Ok(class) = usize::try_from(class) else { return EINVAL as core::ffi::c_int };
     match rt::process::set_memory_class(None, class) {
         Ok(()) => 0,
@@ -67,6 +69,7 @@ pub extern "C" fn veda_process_set_memory_class(class: core::ffi::c_int) -> core
 /// `vmo` has room for a handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn veda_memory_file(fd: core::ffi::c_int, vmo: *mut abi::RawHandle) -> core::ffi::c_int {
+    let _layer = crate::interrupt::Layer::enter();
     let handle = fd::get(fd).and_then(|desc| match &desc.object {
         fd::Object::Memfd(m) => m.memory(),
         _ => Err(EINVAL),

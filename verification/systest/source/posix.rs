@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Tests of what C programs stand on: sockets, memory protection, private
-//! memory, the thread exit futex and futexes in shared memory, the VFS's open-file
-//! connections and shared memory objects, ending a job, and the C programs
-//! themselves (`/system/tests/c`, built by the cross
+//! memory, the thread exit futex and futexes in shared memory, the VFS's
+//! open-file connections and shared memory objects, ending a job, signals
+//! between processes and the interruptions they come with, and the C
+//! programs themselves (`/system/tests/c`, built by the cross
 //! toolchain), and the Rust programs on its standard library, which stand
 //! on the C library too (`/system/tests/rust`, built by Rust's), as Python
 //! does (`/system/tests/python`).
@@ -386,8 +387,7 @@ fn running(koid: u64) -> bool {
     list[..n].iter().any(|p| p.koid == koid && p.state == abi::process_state::RUNNING)
 }
 
-/// Killing a job (`kill_tree`, as the Terminal's Ctrl+C does) ends the
-/// processes its leader started too.
+/// Killing a job (`kill_tree`) ends the processes its leader started too.
 pub fn test_kill_job() -> TestResult {
     let leader = start_copy("job")?;
     let koid = leader.0.koid();
@@ -411,6 +411,89 @@ pub fn test_kill_job() -> TestResult {
         rt::time::sleep(rt::time::Duration::from_millis(20));
     }
     Ok(())
+}
+
+/// A signal for a job (`process_signal` with `kill_flags::DESCENDANTS`, as
+/// the Terminal's Ctrl+C sends `SIGINT`) reaches the processes its leader
+/// started too: these take no signals (no signal entry), so one that ends
+/// a process by default ends them, as that signal ends a program, and one
+/// that does nothing by default leaves them alone. Sending one takes
+/// `Rights::SIGNAL`; a job's, `Rights::MANAGE` too.
+pub fn test_signal_job() -> TestResult {
+    const SIGTERM: usize = 15;
+    const SIGWINCH: usize = 28;
+    let leader = start_copy("job")?;
+    let koid = leader.0.koid();
+    let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(20));
+    let member = loop {
+        if let Some(c) = child_of(koid) {
+            break c;
+        }
+        if rt::time::now_ns() > deadline {
+            let _ = leader.kill_tree();
+            return Err("the job's leader started nothing".into());
+        }
+        rt::time::sleep(rt::time::Duration::from_millis(20));
+    };
+    let outcome = (|| {
+        let signal_only = Process(leader.0.duplicate(Some(Rights(Rights::SIGNAL.0 | Rights::WAIT.0))).map_err(s)?);
+        let job = abi::kill_flags::DESCENDANTS;
+        check(signal_only.signal(SIGTERM, job) == Err(Error::AccessDenied), "a job's signal without MANAGE")?;
+        let watching = Process(leader.0.duplicate(Some(Rights::WAIT)).map_err(s)?);
+        check(watching.signal(SIGTERM, 0) == Err(Error::AccessDenied), "a signal without SIGNAL")?;
+        check(leader.signal(0, 0) == Err(Error::InvalidArgs), "signal 0")?;
+        check(leader.signal(abi::posix_signal::MAX + 1, 0) == Err(Error::InvalidArgs), "a signal past the last")?;
+        signal_only.signal(SIGWINCH, 0).map_err(s)?;
+        leader.signal(SIGWINCH, job).map_err(s)?;
+        rt::time::sleep(rt::time::Duration::from_millis(100));
+        check(running(koid) && running(member), "a signal that does nothing by default ended the job")?;
+        leader.signal(SIGTERM, job).map_err(s)?;
+        let code = leader.join(deadline).map_err(s)?;
+        check(abi::exit_signal(code) == Some(SIGTERM as u32), "the leader did not end as SIGTERM ends a program")?;
+        while running(member) {
+            if rt::time::now_ns() > deadline {
+                return Err("the process the leader started still runs".into());
+            }
+            rt::time::sleep(rt::time::Duration::from_millis(20));
+        }
+        Ok(())
+    })();
+    if outcome.is_err() {
+        let _ = leader.kill_tree();
+    }
+    outcome
+}
+
+/// A thread's interruption (`thread_interrupt`) is for a process that acts
+/// on it (one with a signal entry, which systest has not): this one's
+/// waits go on, as though nothing came; and only a thread of the caller's
+/// own process is interrupted.
+pub fn test_interruptions() -> TestResult {
+    static WORD: AtomicU32 = AtomicU32::new(1);
+    let me = call(nr::THREAD_SELF, [0; 6]).map_err(s)?;
+    // SAFETY: a fresh handle from the kernel.
+    let me = rt::object::Thread(unsafe { rt::object::Handle::from_raw(me as u32) });
+    call(nr::THREAD_INTERRUPT, [me.raw() as usize, 0, 0, 0, 0, 0]).map_err(s)?;
+    let deadline = rt::time::deadline_after(rt::time::Duration::from_millis(50));
+    let deferred = abi::wait_flags::DEFERRED;
+    let waited = call(nr::FUTEX_WAIT, [WORD.as_ptr() as usize, 1, deadline as usize, deferred, 0, 0]);
+    check(waited == Err(Error::TimedOut), "a wait of a process without a signal entry was interrupted")?;
+    let waited =
+        call(nr::SLEEP, [rt::time::deadline_after(rt::time::Duration::from_millis(20)) as usize, 0, 0, 0, 0, 0]);
+    check(waited == Ok(0), "a sleep of a process without a signal entry was interrupted")?;
+    check(call(nr::SLEEP, [0, 1 << 3, 0, 0, 0, 0]) == Err(Error::InvalidArgs), "a wait's flags it has not")?;
+    // Another process's thread is not this one's to interrupt.
+    let copy = start_copy("wait")?;
+    let outcome = (|| {
+        let theirs = call(nr::THREAD_CREATE, [copy.raw() as usize, b"t".as_ptr() as usize, 1, 0, 0, 0]);
+        let theirs = theirs.map_err(|e| format!("a thread of the copy: {e}"))?;
+        // SAFETY: a fresh handle from the kernel.
+        let theirs = rt::object::Thread(unsafe { rt::object::Handle::from_raw(theirs as u32) });
+        let r = call(nr::THREAD_INTERRUPT, [theirs.raw() as usize, 0, 0, 0, 0, 0]);
+        check(r == Err(Error::AccessDenied), "another process's thread was interrupted")
+    })();
+    let _ = copy.kill();
+    outcome
 }
 
 /// `systest job`: the leader of [`test_kill_job`]'s job, which starts a

@@ -120,7 +120,7 @@ impl TimerFd {
                 return Err(EAGAIN);
             }
             // The timers' thread signals the expiration.
-            self.timer.event.wait(READABLE, abi::DEADLINE_INFINITE).map_err(error::kernel)?;
+            crate::stream::wait_signal(&self.timer.event.0, READABLE)?;
         }
     }
 }

@@ -31,6 +31,15 @@
 //! 32-bit names that carry a set of [`Rights`].
 //! Handles are capabilities — the only way to gain access to an object is to
 //! be given a handle to it (through a channel message or at process start).
+//!
+//! # Waits and interruptions
+//!
+//! The calls that wait (`sleep`, `object_wait_one`, `object_wait_many`,
+//! `port_wait`, `futex_wait`) end early with [`Error::Interrupted`] when
+//! the thread is interrupted ([`nr::THREAD_INTERRUPT`]): how a POSIX
+//! signal reaches a thread that waits. Only the threads of a process with
+//! a signal entry ([`nr::SIGNAL_ENTRY_SET`]) that have a thread pointer
+//! are. Each of those calls takes [`wait_flags`] as its last argument.
 
 #![no_std]
 
@@ -86,7 +95,8 @@ pub mod nr {
     pub const LOG_READ: usize = 1;
     /// `clock_get(clock_id) -> nanoseconds`.
     pub const CLOCK_GET: usize = 2;
-    /// `sleep(deadline_ns)`.
+    /// `sleep(deadline_ns, flags)`: until `deadline_ns`, unless
+    /// interrupted.
     pub const SLEEP: usize = 3;
     /// `yield()`.
     pub const YIELD: usize = 4;
@@ -112,9 +122,10 @@ pub mod nr {
     pub const OBJECT_INFO: usize = 13;
     /// `object_signal(h, clear_mask, set_mask)`: user signals only.
     pub const OBJECT_SIGNAL: usize = 14;
-    /// `object_wait_one(h, signals, deadline) -> observed`.
+    /// `object_wait_one(h, signals, deadline, flags) -> observed`.
     pub const OBJECT_WAIT_ONE: usize = 15;
-    /// `object_wait_many(items: *mut WaitItem, count, deadline) -> satisfied`.
+    /// `object_wait_many(items: *mut WaitItem, count, deadline, flags) ->
+    /// satisfied`.
     pub const OBJECT_WAIT_MANY: usize = 16;
 
     // --- channels -----------------------------------------------------
@@ -289,13 +300,14 @@ pub mod nr {
     pub const PROCESS_SET_MEMORY_CLASS: usize = 79;
 
     // --- futexes ------------------------------------------------------
-    /// `futex_wait(addr, expected, deadline)`: waits on the futex of the
-    /// 32-bit word at `addr` while the word holds `expected` (`ShouldWait`
-    /// at once if it does not), until a `futex_wake` or the deadline. A
-    /// futex is the word in the memory that holds it: a word of a VMO is
-    /// one futex in every mapping of the VMO, in every process that maps
-    /// it (what process-shared locks and semaphores wait on); one of
-    /// private memory (`vm_allocate`) is the process's.
+    /// `futex_wait(addr, expected, deadline, flags)`: waits on the futex of
+    /// the 32-bit word at `addr` while the word holds `expected`
+    /// (`ShouldWait` at once if it does not), until a `futex_wake`, the
+    /// deadline or an interruption. A futex is the word in the memory that
+    /// holds it: a word of a VMO is one futex in every mapping of the VMO,
+    /// in every process that maps it (what process-shared locks and
+    /// semaphores wait on); one of private memory (`vm_allocate`) is the
+    /// process's.
     pub const FUTEX_WAIT: usize = 75;
     /// `futex_wake(addr, count) -> woken`: wakes up to `count` threads
     /// waiting on the futex of the word at `addr`.
@@ -398,11 +410,68 @@ pub mod nr {
     /// on `h`'s object with `key`, and drops the packets of `key` the port
     /// holds. It is not an error that there are none.
     pub const OBJECT_WAIT_ASYNC_CANCEL: usize = 101;
-    /// `port_wait(port, packets: *mut PortPacket, max, deadline) -> count`:
+    /// `port_wait(port, packets: *mut PortPacket, max, deadline, flags) ->
+    /// count`:
     /// waits until the port holds a packet, or `deadline`; takes up to
     /// `max` (at most [`super::PORT_WAIT_MAX`]), oldest first. The port
     /// needs `READ`.
     pub const PORT_WAIT: usize = 102;
+
+    // --- signals ------------------------------------------------------
+    /// `signal_entry_set(entry)`: where the calling process's threads go
+    /// when they are interrupted (`thread_interrupt`, or a signal another
+    /// process sends: `process_signal`), as the architecture's "Signal
+    /// entry" says ([`architecture`](crate::architecture)); the calling
+    /// thread becomes the one that other processes' signals interrupt
+    /// (another of the process's, once it has ended), and is interrupted
+    /// at once if signals wait for it. Until a process has an entry, a
+    /// signal another sends it does as [`PROCESS_SIGNALS_INHERITED`] says
+    /// of it, or else ends it if it ends a process by default
+    /// ([`posix_signal::ends_process`](crate::posix_signal::ends_process)),
+    /// and does nothing otherwise.
+    pub const SIGNAL_ENTRY_SET: usize = 103;
+    /// `process_signal(h, signal, flags)`: sends the process POSIX signal
+    /// `signal` (1 to [`posix_signal::MAX`](crate::posix_signal::MAX)); `h`
+    /// needs `SIGNAL`, and `MANAGE` with
+    /// [`kill_flags::DESCENDANTS`](crate::kill_flags::DESCENDANTS), which
+    /// sends it to the processes it started too, and those they started.
+    /// A process with a signal entry finds it among the signals it takes
+    /// (`signal_take`), and its receiving thread is interrupted; one
+    /// without is ended or not as [`SIGNAL_ENTRY_SET`] says.
+    /// [`posix_signal::KILL`](crate::posix_signal::KILL) ends a process
+    /// whatever it has.
+    pub const PROCESS_SIGNAL: usize = 104;
+    /// `signal_take(out: *mut SentSignals) -> count`: takes the signals
+    /// other processes sent the calling process since it last took them
+    /// ([`super::SentSignals`]), and says how many; an interruption the
+    /// calling thread deferred is over.
+    pub const SIGNAL_TAKE: usize = 105;
+    /// `thread_interrupt(h)`: interrupts a thread of the calling process
+    /// (`MANAGE`): the wait it is in or begins ends with
+    /// [`Interrupted`](crate::Error::Interrupted), and once it has a
+    /// thread pointer, its next return to user code runs its process's
+    /// signal entry. Interruptions until then are one.
+    pub const THREAD_INTERRUPT: usize = 106;
+    /// `signal_return(registers, flags) -> !`: resumes the user registers
+    /// at `registers`, which the signal entry was given (as they were, or
+    /// changed), every one as it is: the architecture's
+    /// [`ThreadState`](crate::ThreadState), whose thread pointer is not
+    /// taken. `InvalidArgs` for registers user code cannot have. With
+    /// [`signal_return_flags::DEFER`](crate::signal_return_flags::DEFER),
+    /// the thread could not act on its interruption where it was.
+    pub const SIGNAL_RETURN: usize = 107;
+    /// `process_self() -> h`: a handle to the calling process, with the
+    /// rights of one to a process it started.
+    pub const PROCESS_SELF: usize = 108;
+    /// `process_signals_inherited(h, ignored, blocked)`: the signals a
+    /// process not started yet (`MANAGE`; `BadState` once started) has
+    /// from the one starting it as ignored and as blocked, as a program
+    /// keeps them over `exec`: until it has a signal entry, another
+    /// process's signal of `ignored` does nothing to it, and one of
+    /// `blocked` waits among the signals it takes. Bit `n - 1` is signal
+    /// `n`; [`posix_signal::KILL`](crate::posix_signal::KILL) is never
+    /// ignored or blocked.
+    pub const PROCESS_SIGNALS_INHERITED: usize = 109;
 }
 
 /// Error codes returned (negated) by system calls.
@@ -451,11 +520,13 @@ pub enum Error {
     Fault = 20,
     /// Unknown system call number.
     UnknownSyscall = 21,
+    /// The thread was interrupted while it waited (`thread_interrupt`).
+    Interrupted = 22,
 }
 
 impl Error {
     /// All error codes, for lookups.
-    pub const ALL: [Error; 21] = [
+    pub const ALL: [Error; 22] = [
         Error::InvalidArgs,
         Error::BadHandle,
         Error::WrongType,
@@ -477,6 +548,7 @@ impl Error {
         Error::Internal,
         Error::Fault,
         Error::UnknownSyscall,
+        Error::Interrupted,
     ];
 
     /// Converts a positive error code back into an [`Error`].
@@ -517,6 +589,7 @@ impl Error {
             Error::Internal => "internal error",
             Error::Fault => "invalid user pointer",
             Error::UnknownSyscall => "unknown system call",
+            Error::Interrupted => "interrupted",
         }
     }
 }
@@ -551,7 +624,7 @@ impl Rights {
     pub const MAP: Rights = Rights(1 << 5);
     /// May query object information.
     pub const GET_INFO: Rights = Rights(1 << 6);
-    /// May change user signals.
+    /// May change user signals; may send a process POSIX signals.
     pub const SIGNAL: Rights = Rights(1 << 7);
     /// May wait on the object.
     pub const WAIT: Rights = Rights(1 << 8);
@@ -764,11 +837,81 @@ pub mod memory_class {
     pub const EXPENDABLE: usize = 2;
 }
 
-/// Flags of `process_kill`.
+/// Flags of the calls that wait (`object_wait_one`, `object_wait_many`,
+/// `port_wait`, `futex_wait`, `sleep`): the high half of their last
+/// argument, whose low half is for a call's flags of its own.
+pub mod wait_flags {
+    /// An interruption the thread deferred
+    /// ([`signal_return_flags::DEFER`](crate::signal_return_flags::DEFER))
+    /// ends the wait too, at once, until the thread takes its signals
+    /// (`signal_take`): the waits of the blocking calls a POSIX signal
+    /// ends, which the thread may begin after its interruption came.
+    pub const DEFERRED: usize = 1 << 16;
+}
+
+/// Flags of `signal_return`.
+pub mod signal_return_flags {
+    /// The thread could not act on its interruption where it was (inside
+    /// its POSIX layer, which acts on signals as its calls end): until it
+    /// takes its signals (`signal_take`), its waits with
+    /// [`wait_flags::DEFERRED`](crate::wait_flags::DEFERRED) end at once.
+    pub const DEFER: usize = 1 << 0;
+}
+
+/// Flags of `process_kill` and `process_signal`.
 pub mod kill_flags {
     /// The processes it started too, those they started, and so on: a
     /// job, as a terminal ends one.
     pub const DESCENDANTS: usize = 1 << 0;
+}
+
+/// POSIX signals, which the kernel knows by their numbers (1 to [`MAX`]):
+/// those processes send each other (`process_signal`), and those that
+/// ended a process ([`EXIT_CODE_SIGNALED`]).
+pub mod posix_signal {
+    /// The highest signal number.
+    pub const MAX: usize = 64;
+    /// `SIGKILL`, which ends a process: no process can take it otherwise.
+    pub const KILL: usize = 9;
+
+    /// Whether signal `s` ends a process that does not take it (its
+    /// default action): all but `SIGCHLD`, `SIGURG` and `SIGWINCH`, which
+    /// do nothing, and the signals that stop and continue a process
+    /// (`SIGSTOP`, `SIGTSTP`, `SIGTTIN`, `SIGTTOU`, `SIGCONT`), which do
+    /// nothing either, as no process is stopped.
+    pub const fn ends_process(s: usize) -> bool {
+        !matches!(s, 17 | 18 | 19 | 20 | 21 | 22 | 23 | 28)
+    }
+}
+
+/// The signals other processes sent a process (`signal_take`).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SentSignals {
+    /// Signal `n` is bit `n - 1`.
+    pub set: u64,
+    /// For each signal of `set`, the kernel object id of the first process
+    /// that sent it, at `n - 1`.
+    pub senders: [u64; posix_signal::MAX],
+}
+
+impl Default for SentSignals {
+    fn default() -> SentSignals {
+        SentSignals { set: 0, senders: [0; posix_signal::MAX] }
+    }
+}
+
+impl SentSignals {
+    /// Adds signal `s` (1 to [`posix_signal::MAX`]) from process `sender`,
+    /// unless it is there already: the first sender is kept, as a signal
+    /// pending is pending once.
+    pub fn add(&mut self, s: usize, sender: u64) {
+        let bit = 1 << (s - 1);
+        if self.set & bit == 0 {
+            self.set |= bit;
+            self.senders[s - 1] = sender;
+        }
+    }
 }
 
 /// Process states reported in [`ProcessInfo::state`].
@@ -1138,5 +1281,39 @@ mod tests {
         assert_eq!(exit_signal(EXIT_CODE_SIGNALED - 6), Some(6));
         // Ended for memory: SIGKILL, as Linux's OOM killer ends a process.
         assert_eq!(exit_signal(EXIT_CODE_OUT_OF_MEMORY), Some(9));
+    }
+
+    #[test]
+    fn errors_round_trip_through_their_codes() {
+        for e in Error::ALL {
+            assert_eq!(Error::from_code(e as i32), Some(e));
+            assert_eq!(Error::from_return(e.as_return()), Err(e));
+        }
+        assert_eq!(Error::from_return(Error::Interrupted.as_return()), Err(Error::Interrupted));
+    }
+
+    #[test]
+    fn a_signal_sent_twice_before_it_is_taken_keeps_its_first_sender() {
+        let mut sent = SentSignals::default();
+        sent.add(10, 7);
+        sent.add(10, 8);
+        sent.add(posix_signal::MAX, 9);
+        sent.add(1, 3);
+        assert_eq!(sent.set, (1 << 9) | (1 << 63) | 1);
+        assert_eq!((sent.senders[9], sent.senders[63], sent.senders[0]), (7, 9, 3));
+    }
+
+    #[test]
+    fn signals_that_stop_or_change_nothing_end_no_process() {
+        // SIGHUP, SIGINT, SIGQUIT, SIGKILL, SIGUSR1, SIGALRM, SIGTERM, a
+        // real-time signal: ended.
+        for s in [1, 2, 3, 9, 10, 14, 15, 34, posix_signal::MAX] {
+            assert!(posix_signal::ends_process(s), "{s}");
+        }
+        // SIGCHLD, SIGCONT, SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU, SIGURG,
+        // SIGWINCH: not.
+        for s in [17, 18, 19, 20, 21, 22, 23, 28] {
+            assert!(!posix_signal::ends_process(s), "{s}");
+        }
     }
 }

@@ -67,6 +67,7 @@ fn status(r: Result<(), isize>) -> c_int {
 /// are NUL-terminated.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn veda_confine_files(places: *const VedaPlace, count: usize) -> c_int {
+    let _layer = crate::interrupt::Layer::enter();
     status((|| {
         if count > MAX_PLACES {
             return Err(EINVAL);
@@ -114,6 +115,7 @@ unsafe fn absolute(path: *const c_char) -> Result<String, isize> {
 /// `path` is NUL-terminated; `loan` has room for `LOAN_SIZE` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn veda_lend_files(path: *const c_char, loan: *mut u8) -> c_int {
+    let _layer = crate::interrupt::Layer::enter();
     status((|| {
         // SAFETY: as the caller promises.
         let path = unsafe { absolute(path) }?;
@@ -138,6 +140,7 @@ pub unsafe extern "C" fn veda_lend_files(path: *const c_char, loan: *mut u8) -> 
 /// `path` is NUL-terminated; `loan` holds `LOAN_SIZE` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn veda_borrow_files(path: *const c_char, loan: *const u8) -> c_int {
+    let _layer = crate::interrupt::Layer::enter();
     status((|| {
         // SAFETY: as the caller promises.
         let path = unsafe { absolute(path) }?;
@@ -158,6 +161,7 @@ pub unsafe extern "C" fn veda_borrow_files(path: *const c_char, loan: *const u8)
 /// `loan` holds `LOAN_SIZE` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn veda_take_back_files(loan: *const u8) -> c_int {
+    let _layer = crate::interrupt::Layer::enter();
     status((|| {
         if loan.is_null() {
             return Err(EFAULT);
@@ -175,6 +179,7 @@ pub unsafe extern "C" fn veda_take_back_files(loan: *const u8) -> c_int {
 /// `names` holds `count` NUL-terminated names (it may be null for none).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn veda_confine_services(names: *const *const c_char, count: usize) -> c_int {
+    let _layer = crate::interrupt::Layer::enter();
     status((|| {
         if names.is_null() && count > 0 {
             return Err(EFAULT);
@@ -207,6 +212,7 @@ pub unsafe extern "C" fn veda_confine_services(names: *const *const c_char, coun
 /// `VEDA_RESTRICT_*`) from the process, for good.
 #[unsafe(no_mangle)]
 pub extern "C" fn veda_process_restrict(flags: c_uint) -> c_int {
+    let _layer = crate::interrupt::Layer::enter();
     match rt::process::restrict(flags as usize) {
         Ok(()) => 0,
         Err(e) => error::kernel(e) as c_int,

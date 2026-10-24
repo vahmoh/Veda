@@ -22,8 +22,9 @@
 //! Only the VFS's files take locks: on other descriptors (directories,
 //! pipes, sockets, memory files) every lock is refused with `ENOLCK`, and
 //! unlocking succeeds. A wait for a lock (`F_SETLKW`, `F_OFD_SETLKW`,
-//! `flock` without `LOCK_NB`) reports `EDEADLK` where Linux does, and is
-//! not ended by a signal, as other blocking calls are not ([`crate::signal`]).
+//! `flock` without `LOCK_NB`) reports `EDEADLK` where Linux does, and a
+//! signal ends it as it ends other blocking calls ([`crate::interrupt`]):
+//! `EINTR`, or the call made again after a handler with `SA_RESTART`.
 
 use alloc::collections::BTreeMap;
 

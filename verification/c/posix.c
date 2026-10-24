@@ -795,6 +795,323 @@ static void check_signals(void)
 	CHECK("setjmp/longjmp", jumped, "no jump");
 }
 
+/* What the handlers of the asynchronous signals' checks saw. */
+static volatile sig_atomic_t async_signal, async_code, async_pid, alarms, give_up;
+
+static void on_async_signal(int s, siginfo_t *si, void *context)
+{
+	(void)context;
+	async_signal = s;
+	async_code = si->si_code;
+	async_pid = si->si_pid;
+}
+
+static void on_alarm(int s)
+{
+	(void)s;
+	alarms++;
+}
+
+/* Gives a loop that waits for a signal, and makes no call meanwhile, up
+   after ten seconds. */
+static void *give_up_later(void *arg)
+{
+	(void)arg;
+	sleep(10);
+	give_up = 1;
+	return 0;
+}
+
+/* Writes a byte to the pipe ARG a moment later. */
+static void *write_byte_later(void *arg)
+{
+	usleep(300000);
+	if (write(*(int *)arg, "x", 1) != 1)
+		return (void *)1;
+	return 0;
+}
+
+/* Starts `posix child MODE` with its standard output on a pipe, whose
+   reading end goes to READ; returns its id, or -1. */
+static pid_t start_child(const char *mode, int *read_end)
+{
+	int p[2];
+	if (pipe(p))
+		return -1;
+	posix_spawn_file_actions_t fa;
+	posix_spawn_file_actions_init(&fa);
+	posix_spawn_file_actions_adddup2(&fa, p[1], 1);
+	posix_spawn_file_actions_addclose(&fa, p[0]);
+	char *argv[] = { "posix", "child", (char *)mode, 0 };
+	char *envp[] = { 0 };
+	pid_t pid;
+	int r = posix_spawn(&pid, program, &fa, 0, argv, envp);
+	posix_spawn_file_actions_destroy(&fa);
+	close(p[1]);
+	if (r) {
+		close(p[0]);
+		return -1;
+	}
+	*read_end = p[0];
+	return pid;
+}
+
+/* Arms ITIMER_REAL for MS milliseconds, once. */
+static int alarm_in_ms(long ms)
+{
+	struct itimerval t = { .it_value = { .tv_sec = ms / 1000, .tv_usec = ms % 1000 * 1000 } };
+	return setitimer(ITIMER_REAL, &t, 0);
+}
+
+/* Signals that come whatever a thread is doing, as on Linux: another
+   process's (a child's kill of its parent runs the parent's handler, while
+   it waits or while it runs its own code, which nothing interrupts
+   otherwise; a handler of the child's runs on its parent's kill), and the
+   timers' (alarm, setitimer), which end a blocking call with EINTR unless
+   the handler has SA_RESTART: then the call goes on. */
+static void check_asynchronous_signals(void)
+{
+	struct sigaction sa = { .sa_sigaction = on_async_signal, .sa_flags = SA_SIGINFO | SA_RESTART };
+	sigemptyset(&sa.sa_mask);
+	sigaction(SIGUSR1, &sa, 0);
+	int out = -1, status = 0;
+	char buf[64] = { 0 };
+	async_signal = async_code = async_pid = 0;
+	pid_t pid = start_child("kill-parent", &out);
+	int waited = pid > 0 && waitpid(pid, &status, 0) == pid;
+	if (out >= 0)
+		close(out);
+	CHECK("a child's kill runs its parent's handler", waited && async_signal == SIGUSR1 && async_pid == pid &&
+	      async_code == SI_USER, "signal %d from %d (code %d), the child %d", (int)async_signal, (int)async_pid,
+	      (int)async_code, (int)pid);
+	/* While this thread runs its own code, making no call: the handler
+	   runs there and then. */
+	async_signal = 0;
+	give_up = 0;
+	pthread_t watchdog;
+	int watching = pthread_create(&watchdog, 0, give_up_later, 0) == 0;
+	pid = start_child("kill-parent-later", &out);
+	while (pid > 0 && watching && !async_signal && !give_up)
+		;
+	int interrupted = async_signal == SIGUSR1 && !give_up;
+	if (pid > 0)
+		waitpid(pid, &status, 0);
+	if (out >= 0)
+		close(out);
+	CHECK("a signal interrupts code that makes no call", interrupted, "signal %d, gave up %d", (int)async_signal,
+	      (int)give_up);
+	/* The watchdog's sleep ends with its cancellation, which a signal
+	   brings it. */
+	if (watching) {
+		pthread_cancel(watchdog);
+		pthread_join(watchdog, 0);
+	}
+	/* A child's handler runs on its parent's kill. */
+	pid = start_child("handle", &out);
+	ssize_t n = pid > 0 ? read(out, buf, sizeof buf - 1) : -1;
+	int ready = n > 0 && !strncmp(buf, "ready", 5);
+	int sent = ready && kill(pid, SIGUSR1) == 0;
+	memset(buf, 0, sizeof buf);
+	n = sent ? read(out, buf, sizeof buf - 1) : -1;
+	waited = pid > 0 && waitpid(pid, &status, 0) == pid;
+	if (out >= 0)
+		close(out);
+	CHECK("a parent's kill runs its child's handler", sent && n > 0 && !strncmp(buf, "handled", 7) && waited &&
+	      WIFEXITED(status) && WEXITSTATUS(status) == 3, "ready %d, said '%s', status %#x", ready, buf, status);
+	/* A child started with SIGTERM blocked and SIGINT ignored has them so
+	   from its start, before its own code runs: signals sent it at once
+	   wait for it, or do nothing. */
+	sigset_t term, before;
+	sigemptyset(&term);
+	sigaddset(&term, SIGTERM);
+	sigprocmask(SIG_BLOCK, &term, &before);
+	struct sigaction ignore = { .sa_handler = SIG_IGN }, old_int;
+	sigemptyset(&ignore.sa_mask);
+	sigaction(SIGINT, &ignore, &old_int);
+	pid = start_child("inherited", &out);
+	int signalled = pid > 0 && kill(pid, SIGINT) == 0 && kill(pid, SIGTERM) == 0;
+	sigaction(SIGINT, &old_int, 0);
+	sigprocmask(SIG_SETMASK, &before, 0);
+	waited = pid > 0 && waitpid(pid, &status, 0) == pid;
+	if (out >= 0)
+		close(out);
+	CHECK("a child has the signals it inherits blocked or ignored from its start", signalled && waited &&
+	      WIFEXITED(status) && WEXITSTATUS(status) == 4, "status %#x", status);
+
+	/* alarm: SIGALRM a second later, which ends pause. */
+	signal(SIGALRM, on_alarm);
+	alarms = 0;
+	struct timespec t0, t1;
+	clock_gettime(CLOCK_MONOTONIC, &t0);
+	unsigned left = alarm(1);
+	int paused = pause() == -1 && errno == EINTR;
+	clock_gettime(CLOCK_MONOTONIC, &t1);
+	long ms = ns_between(t0, t1) / 1000000;
+	CHECK("alarm", left == 0 && paused && alarms == 1 && ms >= 900 && ms < 5000, "alarms %d, %ld ms",
+	      (int)alarms, ms);
+	CHECK("alarm says what is left", alarm(100) == 0 && alarm(0) >= 99, "it did not");
+	/* setitimer: SIGALRM interrupts code that makes no call, periodically. */
+	alarms = 0;
+	give_up = 0;
+	watching = pthread_create(&watchdog, 0, give_up_later, 0) == 0;
+	struct itimerval every = { .it_interval = { .tv_usec = 20000 }, .it_value = { .tv_usec = 20000 } };
+	int armed = setitimer(ITIMER_REAL, &every, 0) == 0;
+	while (armed && watching && alarms < 3 && !give_up)
+		;
+	struct itimerval off = { 0 }, was;
+	setitimer(ITIMER_REAL, &off, &was);
+	CHECK("setitimer", armed && alarms >= 3 && !give_up && was.it_interval.tv_usec == 20000,
+	      "alarms %d, gave up %d", (int)alarms, (int)give_up);
+	if (watching) {
+		pthread_cancel(watchdog);
+		pthread_join(watchdog, 0);
+	}
+
+	/* A read of a pipe nothing comes on ends with EINTR as a handler
+	   without SA_RESTART runs... */
+	struct sigaction stop = { .sa_handler = on_alarm }, restart = { .sa_handler = on_alarm, .sa_flags = SA_RESTART };
+	sigemptyset(&stop.sa_mask);
+	sigemptyset(&restart.sa_mask);
+	sigaction(SIGALRM, &stop, 0);
+	int p[2];
+	if (pipe(p) == 0) {
+		alarms = 0;
+		alarm_in_ms(100);
+		n = read(p[0], buf, 1);
+		CHECK("a signal ends a pipe's read", n == -1 && errno == EINTR && alarms == 1, "read %zd (%s), alarms %d",
+		      n, strerror(errno), (int)alarms);
+		/* ... and goes on after one with SA_RESTART, until what comes. */
+		sigaction(SIGALRM, &restart, 0);
+		alarms = 0;
+		pthread_t writer;
+		int writing = pthread_create(&writer, 0, write_byte_later, &p[1]) == 0;
+		alarm_in_ms(50);
+		n = writing ? read(p[0], buf, 1) : -1;
+		if (writing)
+			pthread_join(writer, 0);
+		CHECK("SA_RESTART carries a pipe's read on", n == 1 && buf[0] == 'x' && alarms == 1,
+		      "read %zd (%s), alarms %d", n, strerror(errno), (int)alarms);
+		close(p[0]);
+		close(p[1]);
+	}
+	/* A send that waits for room on a full socket ends with EINTR. */
+	sigaction(SIGALRM, &stop, 0);
+	int sv[2];
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0) {
+		static char chunk[4096];
+		while (send(sv[0], chunk, sizeof chunk, MSG_DONTWAIT) > 0)
+			;
+		alarms = 0;
+		alarm_in_ms(100);
+		n = send(sv[0], chunk, sizeof chunk, 0);
+		CHECK("a signal ends a socket's send", n == -1 && errno == EINTR && alarms == 1,
+		      "send %zd (%s), alarms %d", n, strerror(errno), (int)alarms);
+		close(sv[0]);
+		close(sv[1]);
+	}
+	signal(SIGALRM, SIG_DFL);
+	signal(SIGUSR1, SIG_DFL);
+}
+
+/* Reads the pipe ARG, where nothing comes: what a thread that is cancelled
+   while it waits does. */
+static void *read_forever(void *arg)
+{
+	char c;
+	ssize_t n = read(*(int *)arg, &c, 1);
+	return (void *)(intptr_t)n;
+}
+
+static atomic_int timer_notified;
+static volatile sig_atomic_t timer_value;
+
+static void on_timer_thread(union sigval v)
+{
+	timer_value = v.sival_int;
+	atomic_fetch_add(&timer_notified, 1);
+}
+
+static void on_timer_signal(int s, siginfo_t *si, void *context)
+{
+	(void)s;
+	(void)context;
+	if (si->si_code == SI_TIMER)
+		timer_value = si->si_value.sival_int;
+	alarms++;
+}
+
+/* What the C library builds on signals: cancelling a thread that waits in
+   a cancellation point (a read), which its handler sends to the point's
+   exit; POSIX timers, which signal the process, or run a function in a
+   thread of the C library's, which waits for their signals; and
+   sigsuspend, which waits with a mask of its own, the thread's back once
+   the handler has run. */
+static void check_signals_in_the_c_library(void)
+{
+	int p[2];
+	if (pipe(p) == 0) {
+		pthread_t reader;
+		void *result = 0;
+		int started = pthread_create(&reader, 0, read_forever, &p[0]) == 0;
+		usleep(100000);
+		int cancelled = started && pthread_cancel(reader) == 0 && pthread_join(reader, &result) == 0;
+		CHECK("cancelling a thread in a read", cancelled && result == PTHREAD_CANCELED, "joined %d, result %p",
+		      cancelled, result);
+		close(p[0]);
+		close(p[1]);
+	}
+	struct sigevent thread_event = { .sigev_notify = SIGEV_THREAD, .sigev_notify_function = on_timer_thread,
+					 .sigev_value = { .sival_int = 42 } };
+	timer_t t;
+	timer_value = 0;
+	atomic_store(&timer_notified, 0);
+	if (timer_create(CLOCK_MONOTONIC, &thread_event, &t) == 0) {
+		struct itimerspec soon = { .it_value = { .tv_nsec = 50000000 } };
+		timer_settime(t, 0, &soon, 0);
+		for (int i = 0; i < 200 && !atomic_load(&timer_notified); i++)
+			usleep(10000);
+		CHECK("a timer that runs a function in a thread", atomic_load(&timer_notified) == 1 && timer_value == 42,
+		      "notified %d, value %d", atomic_load(&timer_notified), (int)timer_value);
+		timer_delete(t);
+	} else {
+		CHECK("a timer that runs a function in a thread", 0, "timer_create: %s", strerror(errno));
+	}
+	struct sigaction sa = { .sa_sigaction = on_timer_signal, .sa_flags = SA_SIGINFO };
+	sigemptyset(&sa.sa_mask);
+	sigaction(SIGUSR2, &sa, 0);
+	struct sigevent signal_event = { .sigev_notify = SIGEV_SIGNAL, .sigev_signo = SIGUSR2,
+					 .sigev_value = { .sival_int = 7 } };
+	alarms = 0;
+	timer_value = 0;
+	if (timer_create(CLOCK_REALTIME, &signal_event, &t) == 0) {
+		struct itimerspec every = { .it_interval = { .tv_nsec = 10000000 }, .it_value = { .tv_nsec = 10000000 } };
+		timer_settime(t, 0, &every, 0);
+		for (int i = 0; i < 300 && alarms < 3; i++)
+			usleep(10000);
+		struct itimerspec left;
+		int armed = timer_gettime(t, &left) == 0 && left.it_interval.tv_nsec == 10000000;
+		timer_delete(t);
+		CHECK("a timer that signals the process", alarms >= 3 && timer_value == 7 && armed, "signals %d, value %d",
+		      (int)alarms, (int)timer_value);
+	} else {
+		CHECK("a timer that signals the process", 0, "timer_create: %s", strerror(errno));
+	}
+	/* sigsuspend: SIGUSR2 waits blocked; the mask sigsuspend gives lets the
+	   handler run, and the thread's comes back after. */
+	sigset_t usr2, old, none, now;
+	sigemptyset(&usr2);
+	sigaddset(&usr2, SIGUSR2);
+	sigemptyset(&none);
+	sigprocmask(SIG_BLOCK, &usr2, &old);
+	alarms = 0;
+	raise(SIGUSR2);
+	int waited = alarms == 0 && sigsuspend(&none) == -1 && errno == EINTR;
+	sigprocmask(SIG_SETMASK, 0, &now);
+	CHECK("sigsuspend", waited && alarms == 1 && sigismember(&now, SIGUSR2), "alarms %d", (int)alarms);
+	sigprocmask(SIG_SETMASK, &old, 0);
+	signal(SIGUSR2, SIG_DFL);
+}
+
 /* Starts `program child MODE ARG` with its output on a pipe, and `given`
    as its descriptor 3 unless it is -1; returns what it wrote and stores its
    wait status. */
@@ -3139,6 +3456,40 @@ static int child(const char *mode, const char *arg)
 		/* The parent's scratch directory, where notes.txt is. */
 		return access("notes.txt", R_OK) == 0 ? 0 : 1;
 	}
+	if (!strcmp(mode, "kill-parent"))
+		return kill(getppid(), SIGUSR1) == 0 ? 0 : 1;
+	if (!strcmp(mode, "kill-parent-later")) {
+		usleep(100000);
+		return kill(getppid(), SIGUSR1) == 0 ? 0 : 1;
+	}
+	if (!strcmp(mode, "handle")) {
+		/* Says it is ready once its handler is there, and that it ran
+		   once it has. */
+		struct sigaction sa = { .sa_sigaction = on_async_signal, .sa_flags = SA_SIGINFO };
+		sigemptyset(&sa.sa_mask);
+		sigaction(SIGUSR1, &sa, 0);
+		if (write(1, "ready", 5) != 5)
+			return 1;
+		while (!async_signal)
+			pause();
+		return write(1, "handled", 7) == 7 && async_pid == getppid() ? 3 : 2;
+	}
+	if (!strcmp(mode, "inherited")) {
+		/* Started with SIGTERM blocked and SIGINT ignored, and sent both
+		   at once: SIGINT did nothing, and SIGTERM waits for the handler
+		   it gets once unblocked. */
+		struct sigaction sa = { .sa_sigaction = on_async_signal, .sa_flags = SA_SIGINFO };
+		sigemptyset(&sa.sa_mask);
+		sigaction(SIGTERM, &sa, 0);
+		usleep(200000);
+		sigset_t pending, term;
+		sigpending(&pending);
+		int waited = sigismember(&pending, SIGTERM) == 1 && !async_signal;
+		sigemptyset(&term);
+		sigaddset(&term, SIGTERM);
+		sigprocmask(SIG_UNBLOCK, &term, 0);
+		return waited && async_signal == SIGTERM ? 4 : 5;
+	}
 	return 99;
 }
 
@@ -3169,6 +3520,8 @@ int main(int argc, char **argv)
 	check_time();
 	check_signals();
 	check_processes();
+	check_asynchronous_signals();
+	check_signals_in_the_c_library();
 	check_file_locks();
 	check_veda_interfaces();
 	check_epoll();

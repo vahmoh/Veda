@@ -17,7 +17,11 @@ use abi::{Error, nr};
 use crate::sys::call;
 
 fn futex_wait(word: &AtomicU32, expected: u32, deadline: u64) -> Result<(), Error> {
-    call(nr::FUTEX_WAIT, [word as *const AtomicU32 as usize, expected as usize, deadline as usize, 0, 0, 0]).map(|_| ())
+    crate::sys::call_waiting(
+        nr::FUTEX_WAIT,
+        [word as *const AtomicU32 as usize, expected as usize, deadline as usize, 0, 0, 0],
+    )
+    .map(|_| ())
 }
 
 fn futex_wake(word: &AtomicU32, count: usize) {

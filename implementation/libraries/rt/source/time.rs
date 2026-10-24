@@ -102,7 +102,7 @@ pub fn sleep(d: Duration) {
 }
 
 pub fn sleep_until(deadline: u64) {
-    let _ = call(nr::SLEEP, [deadline as usize, 0, 0, 0, 0, 0]);
+    let _ = crate::sys::call_waiting(nr::SLEEP, [deadline as usize, 0, 0, 0, 0, 0]);
 }
 
 /// Wall-clock time: nanoseconds since 1970-01-01 in local time.

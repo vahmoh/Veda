@@ -2,13 +2,35 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Byte streams: pipes and the terminal, both socket endpoints.
+//!
+//! A signal ends a read or write that waits (as on Linux, a pipe's and a
+//! terminal's are "slow"): with what it moved so far, or `ERESTARTSYS`
+//! (started again after the handler if it had `SA_RESTART`); with
+//! `EINTR` where a time-out is set, which starting again would stretch.
 
 use abi::Error;
 use abi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE, WRITABLE};
 use rt::object::Socket;
 
-use crate::linux::errno::{EAGAIN, EPIPE};
-use crate::{error, signal, tty};
+use crate::linux::errno::{EAGAIN, EINTR, EPIPE, ERESTARTSYS};
+use crate::{error, interrupt, signal, tty};
+
+/// What a wait a signal ended makes a call that moved nothing return:
+/// `ERESTARTSYS`, or `EINTR` for one with a time-out (`deadline`).
+pub fn interrupted(deadline: u64) -> isize {
+    if deadline == abi::DEADLINE_INFINITE { ERESTARTSYS } else { EINTR }
+}
+
+/// Waits as a blocking read or write of an eventfd or a timer does, until
+/// `handle` has one of `signals`, or a signal is to be acted on
+/// (`ERESTARTSYS`).
+pub fn wait_signal(handle: &rt::object::Handle, signals: u32) -> Result<(), isize> {
+    match interrupt::wait_one(handle, signals, abi::DEADLINE_INFINITE) {
+        Ok(_) => Ok(()),
+        Err(Error::Interrupted) => Err(ERESTARTSYS),
+        Err(e) => Err(error::kernel(e)),
+    }
+}
 
 pub struct Stream {
     pub socket: Socket,
@@ -75,7 +97,11 @@ impl Stream {
                 // The end of the input: what there is of the line.
                 Err(Error::PeerClosed) => break,
                 Err(Error::ShouldWait) if nonblock => return if got > 0 { Ok(got) } else { Err(EAGAIN) },
-                Err(Error::ShouldWait) => self.wait_readable(abi::DEADLINE_INFINITE)?,
+                Err(Error::ShouldWait) => match self.wait_readable(abi::DEADLINE_INFINITE) {
+                    Ok(()) => {}
+                    Err(_) if got > 0 => break,
+                    Err(e) => return Err(e),
+                },
                 Err(_) if got > 0 => break,
                 Err(e) => return Err(error::kernel(e)),
             }
@@ -114,16 +140,24 @@ impl Stream {
                 (m, _) if m > 0 && got == 0 => abi::DEADLINE_INFINITE,
                 _ => deadline,
             };
-            match self.socket.wait(READABLE | PEER_CLOSED | PEER_WRITE_DISABLED, wait_until) {
+            match interrupt::wait_one(&self.socket.0, READABLE | PEER_CLOSED | PEER_WRITE_DISABLED, wait_until) {
                 Ok(_) => {}
                 Err(Error::TimedOut) => return Ok(got),
+                Err(Error::Interrupted) if got > 0 => return Ok(got),
+                Err(Error::Interrupted) => return Err(ERESTARTSYS),
                 Err(e) => return Err(error::kernel(e)),
             }
         }
     }
 
-    fn wait_readable(&self, deadline: u64) -> Result<(), isize> {
-        self.socket.wait(READABLE | PEER_CLOSED | PEER_WRITE_DISABLED, deadline).map(|_| ()).map_err(error::kernel)
+    /// Waits until a read would not wait, `deadline` passes, or a signal
+    /// is to be acted on (`ERESTARTSYS`, or `EINTR` with a deadline).
+    pub fn wait_readable(&self, deadline: u64) -> Result<(), isize> {
+        match interrupt::wait_one(&self.socket.0, READABLE | PEER_CLOSED | PEER_WRITE_DISABLED, deadline) {
+            Ok(_) => Ok(()),
+            Err(Error::Interrupted) => Err(interrupted(deadline)),
+            Err(e) => Err(error::kernel(e)),
+        }
     }
 
     /// Writes `data`: all of it, waiting for room, unless `nonblock` (then
@@ -148,9 +182,10 @@ impl Stream {
             match self.socket.write(&data[done..]) {
                 Ok(n) => done += n,
                 Err(Error::ShouldWait) if nonblock => return failed(done, EAGAIN),
-                Err(Error::ShouldWait) => match self.socket.wait(WRITABLE | PEER_CLOSED, deadline) {
+                Err(Error::ShouldWait) => match interrupt::wait_one(&self.socket.0, WRITABLE | PEER_CLOSED, deadline) {
                     Ok(_) => {}
                     Err(Error::TimedOut) => return failed(done, EAGAIN),
+                    Err(Error::Interrupted) => return failed(done, interrupted(deadline)),
                     Err(e) => return failed(done, error::kernel(e)),
                 },
                 Err(Error::PeerClosed | Error::BadState) => {

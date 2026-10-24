@@ -40,16 +40,16 @@ pub fn clock_info(out: usize) -> SysResult {
     ok(0)
 }
 
-pub fn sleep(d: usize) -> SysResult {
-    match deadline(d as u64) {
-        Some(d) => match scheduler::sleep_until(d) {
-            WakeReason::Killed => Err(Error::Canceled),
-            _ => ok(0),
-        },
-        None => match scheduler::block(None) {
-            WakeReason::Killed => Err(Error::Canceled),
-            _ => ok(0),
-        },
+pub fn sleep(d: usize, flags: usize) -> SysResult {
+    let how = scheduler::Interruptible::from_flags(flags, 0)?;
+    let reason = match deadline(d as u64) {
+        Some(d) => scheduler::sleep_until(d, how),
+        None => scheduler::block_interruptible(None, how),
+    };
+    match reason {
+        WakeReason::Killed => Err(Error::Canceled),
+        WakeReason::Interrupted => Err(Error::Interrupted),
+        _ => ok(0),
     }
 }
 

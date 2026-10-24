@@ -23,7 +23,7 @@ In Veda's terms:
   through `std`, does not fit them. On the soft-float kernel and loader,
   crates run their portable code. Programs on Rust's standard library, the
   build machine's tools and the driver VM's Linux programs have `std`, on
-  Veda's own target without `fork`, multicast or asynchronous signals
+  Veda's own target without `fork` or multicast
   ([Rust on Veda](RUST.md#limits)).
 * **Little in every program.** Linking is static and without whole-program
   LTO, so what a crate makes reachable is in every program that calls it:

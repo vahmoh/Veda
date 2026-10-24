@@ -77,6 +77,11 @@ pub mod errno {
     pub const EPROTOTYPE: isize = linux_raw_sys::errno::EPROTOTYPE as isize;
     pub const ESOCKTNOSUPPORT: isize = linux_raw_sys::errno::ESOCKTNOSUPPORT as isize;
     pub const ETOOMANYREFS: isize = linux_raw_sys::errno::ETOOMANYREFS as isize;
+    /// Not `errno` but Linux's own word inside the kernel, which no program
+    /// sees: a blocking call a signal interrupted, which ends with `EINTR`
+    /// or starts again once the handlers have run, as their `SA_RESTART`
+    /// says (`crate::signal`).
+    pub const ERESTARTSYS: isize = 512;
 }
 
 /// `open` flags.
@@ -346,14 +351,11 @@ pub mod sig {
     pub const ABRT: u32 = linux_raw_sys::general::SIGABRT;
     pub const KILL: u32 = linux_raw_sys::general::SIGKILL;
     pub const PIPE: u32 = linux_raw_sys::general::SIGPIPE;
+    pub const ALRM: u32 = linux_raw_sys::general::SIGALRM;
+    pub const VTALRM: u32 = linux_raw_sys::general::SIGVTALRM;
+    pub const PROF: u32 = linux_raw_sys::general::SIGPROF;
     pub const CHLD: u32 = linux_raw_sys::general::SIGCHLD;
-    pub const CONT: u32 = linux_raw_sys::general::SIGCONT;
     pub const STOP: u32 = linux_raw_sys::general::SIGSTOP;
-    pub const TSTP: u32 = linux_raw_sys::general::SIGTSTP;
-    pub const TTIN: u32 = linux_raw_sys::general::SIGTTIN;
-    pub const TTOU: u32 = linux_raw_sys::general::SIGTTOU;
-    pub const URG: u32 = linux_raw_sys::general::SIGURG;
-    pub const WINCH: u32 = linux_raw_sys::general::SIGWINCH;
     /// Signals are numbered 1 to `NSIG - 1` (musl's `NSIG`: one past the
     /// kernel's `_NSIG` signals).
     pub const NSIG: u32 = linux_raw_sys::general::_NSIG + 1;
@@ -364,9 +366,53 @@ pub mod sig {
     pub const SA_SIGINFO: u64 = linux_raw_sys::general::SA_SIGINFO as u64;
     pub const SA_NODEFER: u64 = linux_raw_sys::general::SA_NODEFER as u64;
     pub const SA_RESETHAND: u64 = linux_raw_sys::general::SA_RESETHAND as u64;
+    pub const SA_RESTART: u64 = linux_raw_sys::general::SA_RESTART as u64;
     pub const BLOCK: u32 = linux_raw_sys::general::SIG_BLOCK;
     pub const UNBLOCK: u32 = linux_raw_sys::general::SIG_UNBLOCK;
     pub const SETMASK: u32 = linux_raw_sys::general::SIG_SETMASK;
+    /// `si_code`s: sent by `kill` (`SI_USER`, 0), by the kernel
+    /// (`SI_KERNEL`: an interval timer's), by `sigqueue`, by a POSIX timer,
+    /// by `tkill` or `tgkill`.
+    pub const SI_USER: i32 = linux_raw_sys::general::SI_USER as i32;
+    pub const SI_KERNEL: i32 = linux_raw_sys::general::SI_KERNEL as i32;
+    pub const SI_QUEUE: i32 = linux_raw_sys::general::SI_QUEUE;
+    pub const SI_TIMER: i32 = linux_raw_sys::general::SI_TIMER;
+    pub const SI_TKILL: i32 = linux_raw_sys::general::SI_TKILL;
+    /// `ss_flags` of a signal stack there is not (`sigaltstack`).
+    pub const SS_DISABLE: i32 = linux_raw_sys::general::SS_DISABLE as i32;
+}
+
+/// Interval and POSIX timers: `setitimer`'s timers, `sigevent`'s ways of
+/// telling of an expiration, `timer_settime`'s flag.
+pub mod timer {
+    pub const ITIMER_REAL: u32 = linux_raw_sys::general::ITIMER_REAL;
+    pub const ITIMER_VIRTUAL: u32 = linux_raw_sys::general::ITIMER_VIRTUAL;
+    pub const ITIMER_PROF: u32 = linux_raw_sys::general::ITIMER_PROF;
+    pub const SIGEV_SIGNAL: i32 = linux_raw_sys::general::SIGEV_SIGNAL as i32;
+    pub const SIGEV_NONE: i32 = linux_raw_sys::general::SIGEV_NONE as i32;
+    pub const SIGEV_THREAD_ID: i32 = linux_raw_sys::general::SIGEV_THREAD_ID as i32;
+    pub const TIMER_ABSTIME: u32 = linux_raw_sys::general::TIMER_ABSTIME;
+}
+
+/// `struct itimerval`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Itimerval {
+    pub interval: Timeval,
+    pub value: Timeval,
+}
+
+/// The kernel's `struct sigevent`: how a POSIX timer tells of its
+/// expirations (`notify`): with signal `signo` and `value`, to the process
+/// or (`SIGEV_THREAD_ID`) thread `tid`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct Sigevent {
+    pub value: u64,
+    pub signo: i32,
+    pub notify: i32,
+    pub tid: i32,
+    pub _pad: [i32; 11],
 }
 
 #[repr(C)]
@@ -400,7 +446,7 @@ pub struct Itimerspec {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Timeval {
     pub sec: i64,
     pub usec: i64,
@@ -727,7 +773,9 @@ pub struct Flock {
 }
 
 /// `siginfo_t`, as `waitid` fills it in for a child and signal handlers
-/// get it.
+/// get it. A POSIX timer's signal has the timer's id where `pid` is, its
+/// overruns where `uid` is, and its value ([`Siginfo::set_value`]) where
+/// `status` is.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct Siginfo {
@@ -744,6 +792,22 @@ pub struct Siginfo {
 impl Default for Siginfo {
     fn default() -> Siginfo {
         Siginfo { signo: 0, errno: 0, code: 0, _pad: 0, pid: 0, uid: 0, status: 0, _rest: [0; 100] }
+    }
+}
+
+impl Siginfo {
+    /// Sets `si_value` (a `union sigval`: 8 bytes, where `status` begins).
+    pub fn set_value(&mut self, value: u64) {
+        let bytes = value.to_ne_bytes();
+        self.status = i32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        self._rest[..4].copy_from_slice(&bytes[4..]);
+    }
+
+    /// `si_value` ([`Siginfo::set_value`]).
+    pub fn value(&self) -> u64 {
+        let low = self.status.to_ne_bytes();
+        let high = &self._rest[..4];
+        u64::from_ne_bytes([low[0], low[1], low[2], low[3], high[0], high[1], high[2], high[3]])
     }
 }
 
@@ -797,6 +861,19 @@ mod tests {
         assert_eq!(offset_of!(Cmsghdr, kind), 12);
         assert_eq!(size_of::<Mmsghdr>(), 64);
         assert_eq!(size_of::<EpollEvent>(), 12);
+        assert_eq!(size_of::<Itimerval>(), 32);
+        assert_eq!(size_of::<Sigevent>(), 64);
+        assert_eq!(offset_of!(Sigevent, tid), 16);
+    }
+
+    #[test]
+    fn a_timers_value_is_where_siginfo_keeps_sigval() {
+        let mut info = Siginfo::default();
+        info.set_value(0x1122_3344_5566_7788);
+        assert_eq!(info.value(), 0x1122_3344_5566_7788);
+        // `si_value` is the 8 bytes from offset 24.
+        let bytes = unsafe { core::slice::from_raw_parts(&info as *const Siginfo as *const u8, 128) };
+        assert_eq!(bytes[24..32], 0x1122_3344_5566_7788u64.to_ne_bytes());
     }
 
     #[test]

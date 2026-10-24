@@ -12,7 +12,10 @@
 //! go to it — a line at a time, edited in the window, in canonical mode;
 //! key by key otherwise. What is typed or pasted waits in the [`Console`]
 //! until the program has room for it, so that nothing is lost when it reads
-//! slowly. Ctrl+C ends it. Redirections give it files instead of the
+//! slowly. Ctrl+C sends it `SIGINT`, with the programs it started, as a
+//! Unix terminal sends its foreground job: those that do not handle it end
+//! (a program it ends stops the command line, as a shell stops once its
+//! child dies of it). Redirections give it files instead of the
 //! terminal, and text piped from or to a built-in command travels through a
 //! socket of its own; what it pipes on is kept up to [`PIPE_LIMIT`].
 
@@ -31,7 +34,10 @@ use rt::sync::Mutex;
 use terminal_core::text::{Capture, Utf8Stream};
 
 use crate::job::Output;
-use crate::shell::{INTERRUPTED, PIPE_LIMIT};
+use crate::shell::PIPE_LIMIT;
+
+/// `SIGINT`, which Ctrl+C sends.
+const SIGINT: usize = 2;
 
 /// What was typed for the foreground program and not yet written to it.
 #[derive(Default)]
@@ -212,6 +218,8 @@ fn drain(s: &Socket, mut f: impl FnMut(&[u8])) -> Option<()> {
 fn ended(code: i64) -> (i32, Option<&'static str>) {
     match abi::exit_signal(code) {
         None => ((code & 0xff) as i32, None),
+        // Ctrl+C, which the screen shows (^C).
+        Some(s) if s as usize == SIGINT && code != abi::EXIT_CODE_KILLED => (128 + s as i32, None),
         Some(s) => {
             let what = match s {
                 // Killed, as a shell says of SIGKILL, and why.
@@ -285,7 +293,9 @@ fn program(fs: &vfs::Client, cwd: &str, path: &str, args: &[String]) -> Result<P
 }
 
 /// Starts `run` and waits for it, showing its output in `out`. Ctrl+C
-/// (`interrupt`, with [`Console::wake`]) ends it.
+/// (`interrupt`, with [`Console::wake`]) sends it `SIGINT` each time, with
+/// the programs it started; the flag stays set once it is over only if
+/// that ended it, which stops the command line.
 pub fn run(console: &Console, run: Run, out: &Output, interrupt: &AtomicBool) -> Result<Ended, String> {
     // The program's image.
     let fs = proto::connect(vfs::NAME).map(vfs::Client::new).map_err(|_| "the file system is unavailable")?;
@@ -370,7 +380,6 @@ pub fn run(console: &Console, run: Run, out: &Output, interrupt: &AtomicBool) ->
     let mut screen = Utf8Stream::new();
     let mut term_open = true;
     let mut typed_left = console.feed(&term);
-    let mut killed = false;
     const TERM: u64 = 1;
     const PROCESS: u64 = 2;
     const WAKE: u64 = 3;
@@ -426,11 +435,10 @@ pub fn run(console: &Console, run: Run, out: &Output, interrupt: &AtomicBool) ->
                 }
                 WAKE => {
                     let _ = console.wake.clear();
-                    if interrupt.load(Ordering::Relaxed) && !killed {
+                    if interrupt.swap(false, Ordering::Relaxed) {
                         // The whole job, as on a Unix terminal: `gcc` with the
                         // `cc1` and `as` it is running.
-                        let _ = process.kill_tree();
-                        killed = true;
+                        let _ = process.signal(SIGINT, abi::kill_flags::DESCENDANTS);
                     }
                     typed_left = term_open && console.feed(&term);
                 }
@@ -458,7 +466,10 @@ pub fn run(console: &Console, run: Run, out: &Output, interrupt: &AtomicBool) ->
         });
     }
     let code = process.info().map(|i| i.exit_code).unwrap_or(abi::EXIT_CODE_CRASHED);
-    let (status, mut reason) = if killed { (INTERRUPTED, None) } else { ended(code) };
+    let (status, mut reason) = ended(code);
+    if abi::exit_signal(code) == Some(SIGINT as u32) {
+        interrupt.store(true, Ordering::Relaxed);
+    }
     // Ended by the pipe the shell closed: that is said already.
     if captured.cut() && reason == Some("Broken pipe") {
         reason = None;

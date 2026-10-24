@@ -350,7 +350,7 @@ What the patch changes:
   `configure`, generated from it by Autoconf 2.72; `config.sub`,
   `Misc/platform_triplet.c`): `x86_64-veda`, its modules built into the
   interpreter, without the functions musl has that Veda does not carry
-  out (`fork`, `exec*`, `dlopen`, links, alarms, pseudo-terminals,
+  out (`fork`, `exec*`, `dlopen`, links, pseudo-terminals,
   `if_nameindex`); programs started with `posix_spawn`
   (`Modules/_posixsubprocess.c`, `Lib/os.py`'s `spawn*`, `multiprocessing`
   spawning alone); the interpreter's own path from the loader

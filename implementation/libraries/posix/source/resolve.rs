@@ -122,6 +122,7 @@ pub unsafe extern "C" fn __veda_lookup_name(
     name: *const c_char,
     family: c_int,
 ) -> c_int {
+    let _layer = crate::interrupt::Layer::enter();
     let family = match u16::try_from(family) {
         Ok(AF_UNSPEC) => AddrFamily::Any,
         Ok(AF_INET) => AddrFamily::V4,
@@ -160,6 +161,7 @@ pub unsafe extern "C" fn __veda_lookup_name(
 /// `out` must have room for `max` addresses.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __veda_dns_servers(out: *mut Address, max: c_int) -> c_int {
+    let _layer = crate::interrupt::Layer::enter();
     let Ok(status) = netd::with(|c| c.status()) else { return 0 };
     let n = status.dns_servers.len().min(usize::try_from(max).unwrap_or(0));
     for (i, ip) in status.dns_servers.into_iter().take(n).enumerate() {
