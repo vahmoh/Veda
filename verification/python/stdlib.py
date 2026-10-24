@@ -12,8 +12,8 @@ and the empty input as its standard input: `python3 stdlib.py`, or
 `python3 stdlib.py host ADDRESS TCP-PORT UDP-PORT` to reach the host
 machine's servers too (see `check_host`).
 
-What Veda does not have (fork, file locks, POSIX shared memory, dynamic
-loading...) is checked too: it must fail as documentation/PYTHON.md says.
+What Veda does not have (fork, file locks, dynamic loading...) is checked
+too: it must fail as documentation/PYTHON.md says.
 """
 
 import errno
@@ -119,9 +119,9 @@ def check_startup():
 # those every build of CPython has.
 BUILT_IN = (
     "_asyncio _bisect _blake2 _bz2 _contextvars _csv _datetime _decimal _elementtree _hashlib _heapq _hmac _json "
-    "_lsprof _lzma _md5 _multibytecodec _multiprocessing _opcode _pickle _posixsubprocess _queue _random _sha1 "
-    "_sha2 _sha3 _socket _sqlite3 _ssl _statistics _struct _zoneinfo _zstd array binascii cmath fcntl grp math "
-    "mmap pyexpat resource select termios unicodedata zlib"
+    "_lsprof _lzma _md5 _multibytecodec _multiprocessing _opcode _pickle _posixshmem _posixsubprocess _queue "
+    "_random _sha1 _sha2 _sha3 _socket _sqlite3 _ssl _statistics _struct _zoneinfo _zstd array binascii cmath "
+    "fcntl grp math mmap pyexpat resource select termios unicodedata zlib"
 ).split()
 
 # What Veda has not, and why a traceback says it is missing.
@@ -131,7 +131,6 @@ MISSING = {
     "readline": "edits each line itself",
     "tkinter": "has no Tk",
     "dbm.gnu": "dbm.sqlite3",
-    "multiprocessing.shared_memory": "no POSIX shared memory",
     "pty": "no pseudo-terminals",
     "syslog": "standard error",
 }
@@ -325,6 +324,19 @@ def child_of_multiprocessing(connection, value):
     connection.close()
 
 
+def child_with_a_lock(lock, event, results):
+    # The parent holds the lock until the child says it waits.
+    results.put(lock.acquire(timeout=0.1))
+    event.set()
+    results.put(lock.acquire(timeout=60))
+    lock.release()
+    results.put("done")
+
+
+def square(n):
+    return n * n
+
+
 def check_multiprocessing():
     import multiprocessing
 
@@ -336,9 +348,71 @@ def check_multiprocessing():
     ensure(ours.poll(60) and ours.recv() == 42, "the child's answer")
     p.join(60)
     ensure(p.exitcode == 0, f"the child exited with {p.exitcode}")
-    # Locks between processes are named semaphores, which Veda has not.
-    e = raises(ImportError, multiprocessing.Lock)
-    ensure("sem_open" in str(e), f"Lock() failed with {e}")
+    # A lock, an event and a queue between processes: named semaphores.
+    lock, event, results = multiprocessing.Lock(), multiprocessing.Event(), multiprocessing.Queue()
+    lock.acquire()
+    p = multiprocessing.Process(target=child_with_a_lock, args=(lock, event, results))
+    p.start()
+    ensure(results.get(timeout=60) is False, "the child took the lock this process holds")
+    ensure(event.wait(60), "the child's event")
+    lock.release()
+    ensure(results.get(timeout=60) is True, "the child did not get the lock once it was free")
+    ensure(results.get(timeout=60) == "done", "the child's last word")
+    p.join(60)
+    ensure(p.exitcode == 0, f"the child with the lock exited with {p.exitcode}")
+
+
+def check_process_pools():
+    import concurrent.futures
+    import multiprocessing
+
+    expected = [n * n for n in range(10)]
+    with multiprocessing.Pool(2) as pool:
+        squares = pool.map(square, range(10))
+        ensure(pool.apply_async(square, (11,)).get(60) == 121, "an asynchronous result")
+    ensure(squares == expected, f"Pool.map gave {squares}")
+    with concurrent.futures.ProcessPoolExecutor(2) as executor:
+        squares = list(executor.map(square, range(10)))
+        ensure(executor.submit(square, 12).result(timeout=60) == 144, "a future of the executor")
+    ensure(squares == expected, f"ProcessPoolExecutor.map gave {squares}")
+
+
+def child_of_shared_memory(name):
+    from multiprocessing import shared_memory
+
+    memory = shared_memory.SharedMemory(name)
+    memory.buf[:5] = bytes(memory.buf[:5]).upper()
+    memory.close()
+
+
+def check_shared_memory():
+    import multiprocessing
+    from multiprocessing import shared_memory
+
+    memory = shared_memory.SharedMemory(create=True, size=1000)
+    path = f"/dev/shm/{memory.name}"
+    try:
+        ensure(memory.size == 1000 and os.path.exists(path), f"{path} is not there")
+        memory.buf[:5] = b"hello"
+        p = multiprocessing.Process(target=child_of_shared_memory, args=(memory.name,))
+        p.start()
+        p.join(60)
+        ensure(p.exitcode == 0, f"the child exited with {p.exitcode}")
+        ensure(bytes(memory.buf[:5]) == b"HELLO", f"the memory holds {bytes(memory.buf[:5])!r}")
+        # A list in shared memory, found by its name.
+        items = shared_memory.ShareableList([1, "two", 3.0])
+        try:
+            again = shared_memory.ShareableList(name=items.shm.name)
+            again[0] = 10
+            ensure(items[0] == 10 and list(again) == [10, "two", 3.0], f"the lists hold {list(again)}")
+            again.shm.close()
+        finally:
+            items.shm.close()
+            items.shm.unlink()
+    finally:
+        memory.close()
+        memory.unlink()
+    ensure(not os.path.exists(path), f"{path} is still there")
 
 
 def check_signals():
@@ -782,6 +856,8 @@ CHECKS = [
     ("threads", check_threads),
     ("subprocess", check_subprocess),
     ("multiprocessing", check_multiprocessing),
+    ("process pools", check_process_pools),
+    ("shared memory", check_shared_memory),
     ("signals", check_signals),
     ("time", check_time),
     ("sockets", check_sockets),

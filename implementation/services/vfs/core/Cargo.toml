@@ -3,7 +3,7 @@
 
 [package]
 name = "vfs-core"
-description = "The VFS's file systems apart from the service, testable on the host: the in-memory tree, the home directory's snapshots, and who may reach what"
+description = "The VFS's file systems apart from the service, testable on the host: the in-memory tree, the home directory's snapshots, who may reach what, and /dev/shm's shared memory objects"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

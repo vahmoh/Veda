@@ -249,8 +249,8 @@ library openssl @OPENSSL_OPTIONS @OPENSSL_ARCH
 # writes whether each can be built, and the build fails if one of these
 # cannot.
 PYTHON_MODULES=(
-	_bz2 _decimal _elementtree _hashlib _lzma _multiprocessing _posixsubprocess _socket _sqlite3 _ssl _zstd mmap
-	pyexpat resource select termios zlib
+	_bz2 _decimal _elementtree _hashlib _lzma _multiprocessing _posixshmem _posixsubprocess _socket _sqlite3 _ssl
+	_zstd mmap pyexpat resource select termios zlib
 )
 
 # Why a module of the standard library is missing on Veda, which a
@@ -264,7 +264,6 @@ MISSING_MODULES='{
   "_curses_panel": "curses is not available on Veda: its Terminal cannot move the cursor yet",
   "_dbm": "dbm.ndbm is not available on Veda: dbm.sqlite3 and dbm.dumb are",
   "_gdbm": "dbm.gnu is not available on Veda: dbm.sqlite3 and dbm.dumb are",
-  "_posixshmem": "multiprocessing.shared_memory is not available on Veda: it has no POSIX shared memory",
   "_remote_debugging": "remote debugging is not available on Veda: it reads the memory of other processes",
   "_tkinter": "tkinter is not available on Veda: it has no Tk",
   "idlelib": "IDLE is not available on Veda: it needs tkinter, and Veda has no Tk",

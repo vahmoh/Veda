@@ -46,7 +46,7 @@
  	*)
  		# for now, limit cross builds to known configurations
  		MACHDEP="unknown"
-@@ -4221,6 +4228,33 @@
+@@ -4221,6 +4228,31 @@
  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: \"$MACHDEP\"" >&5
  printf "%s\n" "\"$MACHDEP\"" >&6; }
  
@@ -57,7 +57,6 @@
 +      alarm getitimer setitimer clock_settime \
 +      link linkat symlink symlinkat mkfifo mkfifoat mknod mknodat \
 +      openpty posix_openpt grantpt unlockpt ptsname ptsname_r \
-+      sem_open shm_open shm_unlink \
 +      chroot mremap sendfile splice copy_file_range process_vm_readv \
 +      sched_rr_get_interval if_nameindex; do
 +    as_func_var=`printf "%s\n" "ac_cv_func_$name" | sed "$as_sed_sh"`
@@ -72,7 +71,6 @@
 +    eval "$as_lib_var=no"
 +
 +  done
-+  ac_cv_search_shm_open=no
 +
 +fi
 +
@@ -80,7 +78,7 @@
  
  if test -z "$host_prefix"; then
    case $ac_sys_system in #(
-@@ -4679,6 +4713,9 @@
+@@ -4679,6 +4711,9 @@
  	*-*-vxworks*)
  		_host_ident=$host_cpu
  		;;
@@ -90,7 +88,7 @@
  	*-*-emscripten)
  		_host_ident=$(emcc -dumpversion | cut -f1 -d-)-$host_cpu
  		;;
-@@ -9938,6 +9975,13 @@
+@@ -9938,6 +9973,13 @@
      fi
  fi
  
@@ -104,7 +102,7 @@
  case $enable_wasm_dynamic_linking in #(
    yes) :
      ac_cv_func_dlopen=yes ;; #(
-@@ -32371,6 +32415,7 @@
+@@ -32371,6 +32413,7 @@
    iOS) _PYTHREAD_NAME_MAXLEN=63;;
    FreeBSD*) _PYTHREAD_NAME_MAXLEN=19;; # gh-131268
    OpenBSD*) _PYTHREAD_NAME_MAXLEN=23;; # gh-131268
@@ -112,7 +110,7 @@
    *) _PYTHREAD_NAME_MAXLEN=;;
  esac
  if test -n "$_PYTHREAD_NAME_MAXLEN"; then
-@@ -32426,6 +32471,32 @@
+@@ -32426,6 +32469,31 @@
  
      py_cv_module__scproxy=n/a
   ;; #(
@@ -126,7 +124,6 @@
 +    py_cv_module__curses_panel=n/a
 +    py_cv_module__dbm=n/a
 +    py_cv_module__gdbm=n/a
-+    py_cv_module__posixshmem=n/a
 +    py_cv_module__remote_debugging=n/a
 +    py_cv_module__scproxy=n/a
 +    py_cv_module__testimportmultiple=n/a
@@ -145,7 +142,7 @@
    QNX*) :
  
  
-@@ -32515,7 +32586,13 @@
+@@ -32515,7 +32583,13 @@
    wasm32|wasm64) :
      MODULE_BUILDTYPE=static ;; #(
    *) :
@@ -172,7 +169,7 @@
  	*)
  		# for now, limit cross builds to known configurations
  		MACHDEP="unknown"
-@@ -401,6 +404,44 @@
+@@ -401,6 +404,41 @@
  fi
  AC_MSG_RESULT(["$MACHDEP"])
  
@@ -181,11 +178,10 @@
 +dnl step, from its file (posix_spawn): there is no fork() to copy a process
 +dnl with, nor exec() to replace a program (_posixsubprocess spawns instead),
 +dnl and no dynamic loading. Its signals are synchronous: no interval timers
-+dnl or alarms. Its files have no links, hard or symbolic, and there are no
-+dnl named pipes or device files to make. It has no pseudo-terminals, named
-+dnl semaphores (sem_open; the _multiprocessing module, which needs
-+dnl sem_unlink, has none then) or POSIX shared memory (/dev/shm), and a few
-+dnl system calls fail with ENOSYS (setting a clock, chroot, resizing a
++dnl or alarms. Its files have no links, hard or symbolic (but for the names of
++dnl shared memory objects, in /dev/shm, which sem_open links), and there are
++dnl no named pipes or device files to make. It has no pseudo-terminals, and a
++dnl few system calls fail with ENOSYS (setting a clock, chroot, resizing a
 +dnl mapping, copying in the kernel, reading another process's memory). Its
 +dnl network interfaces are not listed as Linux's are (if_nameindex() asks a
 +dnl netlink socket). The empty libdl.a, librt.a and libutil.a that musl
@@ -195,7 +191,6 @@
 +      alarm getitimer setitimer clock_settime \
 +      link linkat symlink symlinkat mkfifo mkfifoat mknod mknodat \
 +      openpty posix_openpt grantpt unlockpt ptsname ptsname_r \
-+      sem_open shm_open shm_unlink \
 +      chroot mremap sendfile splice copy_file_range process_vm_readv \
 +      sched_rr_get_interval if_nameindex; do
 +    AS_VAR_PUSHDEF([func_var], [ac_cv_func_$name])
@@ -208,7 +203,6 @@
 +    AS_VAR_SET([lib_var], [no])
 +    AS_VAR_POPDEF([lib_var])
 +  done
-+  ac_cv_search_shm_open=no
 +])
 +dnl Veda links every program with its C library, musl, whose release the
 +dnl build names: platform.libc_ver() gives it.
@@ -217,7 +211,7 @@
  dnl For cross compilation, we distinguish between "prefix" (where we install the
  dnl files) and "host_prefix" (where we expect to find the files at runtime)
  
-@@ -827,6 +868,9 @@
+@@ -827,6 +865,9 @@
  	*-*-vxworks*)
  		_host_ident=$host_cpu
  		;;
@@ -227,7 +221,7 @@
  	*-*-emscripten)
  		_host_ident=$(emcc -dumpversion | cut -f1 -d-)-$host_cpu
  		;;
-@@ -2527,6 +2571,15 @@
+@@ -2527,6 +2568,15 @@
      fi
  fi
  
@@ -243,7 +237,7 @@
  AS_CASE([$enable_wasm_dynamic_linking],
    [yes], [ac_cv_func_dlopen=yes],
    [no], [ac_cv_func_dlopen=no],
-@@ -8086,6 +8139,7 @@
+@@ -8086,6 +8136,7 @@
    iOS) _PYTHREAD_NAME_MAXLEN=63;;
    FreeBSD*) _PYTHREAD_NAME_MAXLEN=19;; # gh-131268
    OpenBSD*) _PYTHREAD_NAME_MAXLEN=23;; # gh-131268
@@ -251,15 +245,15 @@
    *) _PYTHREAD_NAME_MAXLEN=;;
  esac
  if test -n "$_PYTHREAD_NAME_MAXLEN"; then
-@@ -8131,6 +8185,34 @@
+@@ -8131,6 +8182,33 @@
      )
    ],
    [CYGWIN*], [PY_STDLIB_MOD_SET_NA([_scproxy])],
 +  [Veda], [
 +    dnl The Terminal edits lines itself and does not address the cursor
-+    dnl (readline, curses); there are no Tk, dbm or uuid libraries, no POSIX
-+    dnl shared memory, no reading of another process's memory, and no syslog
-+    dnl (programs log through their standard error). Modules that must be
++    dnl (readline, curses); there are no Tk, dbm or uuid libraries, no reading
++    dnl of another process's memory, and no syslog (programs log through
++    dnl their standard error). Modules that must be
 +    dnl shared libraries cannot be: there is no dlopen(). ctypes needs one too.
 +    PY_STDLIB_MOD_SET_NA(
 +      [_ctypes],
@@ -268,7 +262,6 @@
 +      [_curses_panel],
 +      [_dbm],
 +      [_gdbm],
-+      [_posixshmem],
 +      [_remote_debugging],
 +      [_scproxy],
 +      [_testimportmultiple],
@@ -286,7 +279,7 @@
    [QNX*], [PY_STDLIB_MOD_SET_NA([_scproxy])],
    [FreeBSD*], [PY_STDLIB_MOD_SET_NA([_scproxy])],
    [Emscripten], [
-@@ -8207,9 +8289,13 @@
+@@ -8207,9 +8285,13 @@
  dnl AC_MSG_NOTICE([m4_set_list([_PY_STDLIB_MOD_SET_NA])])
  
  dnl Default value for Modules/Setup.stdlib build type
@@ -370,31 +363,19 @@
              # gh-155717: forkserver requires to write temporary files.
              #
              # Imported here rather than at the top level as util is costly
---- a/Lib/multiprocessing/resource_tracker.py
-+++ b/Lib/multiprocessing/resource_tracker.py
-@@ -44,7 +44,6 @@
+--- a/Lib/multiprocessing/heap.py
++++ b/Lib/multiprocessing/heap.py
+@@ -69,7 +69,9 @@
+         A shared memory area backed by a temporary file (POSIX).
+         """
  
- if os.name == 'posix':
-     import _multiprocessing
--    import _posixshmem
- 
-     # Use sem_unlink() to clean up named semaphores.
-     #
-@@ -53,7 +52,13 @@
-     # ever opened, so no cleanup would be necessary.
-     if hasattr(_multiprocessing, 'sem_unlink'):
-         _CLEANUP_FUNCS['semaphore'] = _multiprocessing.sem_unlink
--    _CLEANUP_FUNCS['shared_memory'] = _posixshmem.shm_unlink
-+    # Without POSIX shared memory (as on Veda), none is ever made.
-+    try:
-+        import _posixshmem
-+    except ImportError:
-+        pass
-+    else:
-+        _CLEANUP_FUNCS['shared_memory'] = _posixshmem.shm_unlink
- 
- 
- class ReentrantCallError(RuntimeError):
+-        if sys.platform == 'linux':
++        # Veda's /dev/shm holds memory, as Linux's does: the one place
++        # whose files map shared and writable there.
++        if sys.platform in ('linux', 'veda'):
+             _dir_candidates = ['/dev/shm']
+         else:
+             _dir_candidates = []
 --- a/Lib/os.py
 +++ b/Lib/os.py
 @@ -666,6 +666,15 @@
@@ -949,6 +930,18 @@
      def test_hardlink(self):
          # 'a = 0' code produces the same bytecode for the 3 optimization
          # levels. All three .pyc files must have the same inode (hardlinks).
+--- a/Lib/test/test_concurrent_futures/util.py
++++ b/Lib/test/test_concurrent_futures/util.py
+@@ -105,6 +105,9 @@
+             self.skipTest("require unix system")
+         if support.check_sanitizer(thread=True):
+             self.skipTest("TSAN doesn't support threads after fork")
++        # Without fork() (as on Veda), processes are spawned.
++        if "fork" not in multiprocessing.get_all_start_methods():
++            self.skipTest("fork start method is not available")
+         return super().get_context()
+ 
+     def create_event(self):
 --- a/Lib/test/test_dbm_sqlite3.py
 +++ b/Lib/test/test_dbm_sqlite3.py
 @@ -98,6 +98,7 @@
@@ -1135,26 +1128,6 @@
              support.requires(
                  'largefile',
                  'test requires %s bytes and a long time to run' % self.LARGE)
---- a/Lib/test/test_logging.py
-+++ b/Lib/test/test_logging.py
-@@ -4177,6 +4177,8 @@
-     @support.requires_subprocess()
-     def test_multiprocessing_queues(self):
-         # See gh-119819
-+        # multiprocessing's queues need its semaphores (Veda has none).
-+        support.skip_if_broken_multiprocessing_synchronize()
- 
-         cd = copy.deepcopy(self.config_queue_handler)
-         from multiprocessing import Queue as MQ, Manager as MM
-@@ -4236,6 +4238,8 @@
-         # See gh-111615
-         import_helper.import_module('_multiprocessing')  # see gh-113692
-         mp = import_helper.import_module('multiprocessing')
-+        # Its queues need its semaphores (Veda has none).
-+        support.skip_if_broken_multiprocessing_synchronize()
- 
-         config = {
-             'version': 1,
 --- a/Lib/test/test_mailbox.py
 +++ b/Lib/test/test_mailbox.py
 @@ -515,6 +515,7 @@
@@ -1367,6 +1340,112 @@
      def test_flush_parameters(self):
          with open(TESTFN, 'wb+') as f:
              f.write(b'x' * PAGESIZE * 3)
+--- a/Lib/test/_test_multiprocessing.py
++++ b/Lib/test/_test_multiprocessing.py
+@@ -646,6 +646,7 @@
+ 
+     @warnings_helper.ignore_fork_in_thread_deprecation_warnings()
+     @unittest.skipIf(os.name == 'nt', "POSIX only")
++    @support.requires_signals_from_other_processes()
+     def test_interrupt(self):
+         exitcode = self._kill_process(multiprocessing.Process.interrupt)
+         self.assertEqual(exitcode, 1)
+@@ -2068,6 +2069,7 @@
+             os.kill(pid, signal.SIGINT)
+ 
+     @warnings_helper.ignore_fork_in_thread_deprecation_warnings()
++    @support.requires_signals_from_other_processes()
+     def test_wait_result(self):
+         if isinstance(self, ProcessesMixin) and sys.platform != 'win32':
+             pid = os.getpid()
+@@ -4724,6 +4726,7 @@
+ 
+     @warnings_helper.ignore_fork_in_thread_deprecation_warnings()
+     @unittest.skipIf(os.name != "posix", "not feasible in non-posix platforms")
++    @support.requires_signals_from_other_processes()
+     def test_shared_memory_SharedMemoryServer_ignores_sigint(self):
+         # bpo-36368: protect SharedMemoryManager server process from
+         # KeyboardInterrupt signals.
+@@ -5326,6 +5329,7 @@
+ 
+     @warnings_helper.ignore_fork_in_thread_deprecation_warnings()
+     @unittest.skipUnless(hasattr(signal, 'SIGUSR1'), 'requires SIGUSR1')
++    @support.requires_signals_from_other_processes()
+     def test_poll_eintr(self):
+         got_signal = [False]
+         def record(*args):
+@@ -5959,6 +5963,7 @@
+ 
+     @warnings_helper.ignore_fork_in_thread_deprecation_warnings()
+     @unittest.skipUnless(hasattr(signal, 'SIGUSR1'), 'requires SIGUSR1')
++    @support.requires_signals_from_other_processes()
+     def test_ignore(self):
+         conn, child_conn = multiprocessing.Pipe()
+         try:
+@@ -5993,6 +5998,7 @@
+ 
+     @warnings_helper.ignore_fork_in_thread_deprecation_warnings()
+     @unittest.skipUnless(hasattr(signal, 'SIGUSR1'), 'requires SIGUSR1')
++    @support.requires_signals_from_other_processes()
+     def test_ignore_listener(self):
+         conn, child_conn = multiprocessing.Pipe()
+         try:
+@@ -6113,6 +6119,9 @@
+             # Whether these work or not, they remain available on macOS.
+             self.assertIn('fork', methods)
+             self.assertIn('forkserver', methods)
++        elif not hasattr(os, 'fork'):
++            # Without fork() (as on Veda), processes are spawned alone.
++            self.assertEqual(methods, ['spawn'])
+         else:
+             # POSIX
+             self.assertIn('fork', methods)
+@@ -6142,6 +6151,7 @@
+     @warnings_helper.ignore_fork_in_thread_deprecation_warnings()
+     @unittest.skipIf(sys.platform == "win32",
+                      "Only Spawn on windows so no risk of mixing")
++    @support.requires_fork()
+     @only_run_in_spawn_testsuite("avoids redundant testing.")
+     def test_mixed_startmethod(self):
+         # Fork-based locks cannot be used with spawned process
+@@ -6193,6 +6203,7 @@
+ 
+     @unittest.skipIf(os.name == "nt", "requires POSIX")
+     @support.requires_non_root_user
++    @os_helper.skip_unless_working_chmod
+     @support.subTests("mode", [
+         os.R_OK,  # read-only directory
+         os.R_OK | os.X_OK, # read-only directory
+@@ -6228,6 +6239,7 @@
+ 
+     @unittest.skipIf(os.name == "nt", "requires POSIX")
+     @support.requires_non_root_user
++    @os_helper.skip_unless_working_chmod
+     def test_default_start_method_without_usable_tempdir(self):
+         # Neither importing multiprocessing nor determining the default
+         # start method may fail when tempfile finds no usable temporary
+@@ -6396,10 +6408,12 @@
+             else:
+                 self.assertEqual(len(all_warn), 0)
+ 
++    @support.requires_signals_from_other_processes()
+     def test_resource_tracker_sigint(self):
+         # Catchable signal (ignored by semaphore tracker)
+         self.check_resource_tracker_death(signal.SIGINT, False)
+ 
++    @support.requires_signals_from_other_processes()
+     def test_resource_tracker_sigterm(self):
+         # Catchable signal (ignored by semaphore tracker)
+         self.check_resource_tracker_death(signal.SIGTERM, False)
+@@ -7382,6 +7396,8 @@
+         self.assertEqual(rc, 0)
+         self.assertFalse(err, msg=err.decode('utf-8'))
+ 
++    @unittest.skipIf(support.is_veda, "Veda gives a program it starts descriptors "
++                     "numbered below 256 alone: those of 200 processes' pipes are past them")
+     def test_large_pool(self):
+         #
+         # gh-89240: Check that large pools are always okay
 --- a/Lib/test/test_os/test_os.py
 +++ b/Lib/test/test_os/test_os.py
 @@ -2146,6 +2146,7 @@

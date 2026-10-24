@@ -15,6 +15,7 @@
 //! * [`view`]: what a confined connection reaches (`vfs::confine`).
 //! * [`loans`]: places to read that a connection lends a confined one
 //!   (`vfs::lend`, `vfs::borrow`), and takes back (`vfs::take_back`).
+//! * [`shm`]: `/dev/shm`, the shared memory objects, named and sized.
 
 #![no_std]
 
@@ -24,6 +25,7 @@ extern crate std;
 
 pub mod access;
 pub mod loans;
+pub mod shm;
 pub mod snapshot;
 pub mod tree;
 pub mod view;

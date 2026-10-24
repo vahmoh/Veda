@@ -820,7 +820,7 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 41] = [
+    let tests: [Test; 43] = [
         ("starved threads run", test_starved_threads_run),
         ("ipc primitives", test_ipc_primitives),
         ("short sleeps", test_short_sleeps),
@@ -842,11 +842,13 @@ fn main() -> i32 {
         ("unmapped memory on every processor", posix::test_unmapped_on_every_processor),
         ("clocks read in programs", posix::test_clocks),
         ("thread exit futex", posix::test_exit_futex),
+        ("futexes in shared memory", posix::test_shared_futex),
         ("threads and locks", test_threads_and_locks),
         ("vfs system image", test_vfs_system_image),
         ("vfs read/write", test_vfs_read_write),
         ("vfs space", test_vfs_space),
         ("vfs open files", posix::test_vfs_open_files),
+        ("vfs shared memory", posix::test_vfs_shared_memory),
         ("programs run from the system image", posix::test_shared_program_pages),
         ("c programs", posix::test_c_programs),
         ("rust programs", posix::test_rust_programs),

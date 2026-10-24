@@ -289,9 +289,16 @@ pub mod nr {
     pub const PROCESS_SET_MEMORY_CLASS: usize = 79;
 
     // --- futexes ------------------------------------------------------
-    /// `futex_wait(addr, expected, deadline)`.
+    /// `futex_wait(addr, expected, deadline)`: waits on the futex of the
+    /// 32-bit word at `addr` while the word holds `expected` (`ShouldWait`
+    /// at once if it does not), until a `futex_wake` or the deadline. A
+    /// futex is the word in the memory that holds it: a word of a VMO is
+    /// one futex in every mapping of the VMO, in every process that maps
+    /// it (what process-shared locks and semaphores wait on); one of
+    /// private memory (`vm_allocate`) is the process's.
     pub const FUTEX_WAIT: usize = 75;
-    /// `futex_wake(addr, count) -> woken`.
+    /// `futex_wake(addr, count) -> woken`: wakes up to `count` threads
+    /// waiting on the futex of the word at `addr`.
     pub const FUTEX_WAKE: usize = 76;
 
     // --- hardware access (requires resources) -------------------------

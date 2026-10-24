@@ -50,8 +50,9 @@ pub unsafe fn dispatch(n: usize, a: [usize; 6]) -> Option<SysResult> {
             nr::MKDIR => fs::mkdirat(at::FDCWD, a[0]),
             nr::RMDIR => fs::unlinkat(at::FDCWD, a[0], at::REMOVEDIR),
             nr::UNLINK => fs::unlinkat(at::FDCWD, a[0], 0),
-            // Veda has neither hard nor symbolic links.
-            nr::LINK | nr::SYMLINK | nr::MKNOD => Err(EPERM),
+            nr::LINK => fs::linkat(at::FDCWD, a[0], at::FDCWD, a[1], 0),
+            // Veda has no symbolic links, nor device nodes to make.
+            nr::SYMLINK | nr::MKNOD => Err(EPERM),
             nr::READLINK => fs::readlinkat(at::FDCWD, a[0]),
             nr::CHMOD => fs::chmodat(at::FDCWD, a[0]),
             nr::CHOWN | nr::LCHOWN => fs::chownat(at::FDCWD, a[0], a[1] as u32, a[2] as u32),

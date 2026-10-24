@@ -3,9 +3,17 @@
 
 //! Futexes: the kernel half of user-space mutexes and condition variables.
 //!
-//! A futex is identified by (process, virtual address). `wait` blocks only if
-//! the 32-bit word at the address still holds the expected value, which
-//! closes the race between user space checking a lock word and sleeping.
+//! A futex is the word in the memory that holds it: a word of a VMO is
+//! identified by (VMO, offset), so that every mapping of the VMO, in every
+//! process, reaches the same futex (the locks and semaphores C programs keep
+//! in memory they share wait and wake across them); a word of private memory
+//! (`vm_allocate`), which no other mapping reaches, by (process, address).
+//! Processes and VMOs take their ids from one counter, so the two kinds of
+//! keys never meet.
+//!
+//! `wait` blocks only if the 32-bit word at the address still holds the
+//! expected value, which closes the race between user space checking a lock
+//! word and sleeping.
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::sync::Arc;
@@ -16,7 +24,8 @@ use super::SpinLock;
 use crate::memory::user;
 use crate::scheduler::{self, Thread, WakeReason};
 
-/// Waiters per futex, keyed by (address space, user address).
+/// Waiters per futex, keyed by (VMO, offset), or (process, user address) in
+/// private memory, by kernel object ids.
 type WaitQueues = BTreeMap<(u64, u64), VecDeque<Arc<Thread>>>;
 
 static QUEUES: SpinLock<WaitQueues> = SpinLock::new(BTreeMap::new());
@@ -27,7 +36,7 @@ fn key(addr: u64) -> Result<(u64, u64), Error> {
     }
     let cur = scheduler::current();
     let p = cur.process.as_ref().ok_or(Error::BadState)?;
-    Ok((p.koid, addr))
+    Ok(p.aspace().and_then(|a| a.shared_location(addr)).unwrap_or((p.koid, addr)))
 }
 
 pub fn wait(addr: u64, expected: u32, deadline: Option<u64>) -> Result<(), Error> {

@@ -176,9 +176,9 @@ Rust programs share the limits of C programs
   abstract names (`SocketAddr::from_abstract_name`) are not in the
   standard library for Veda, which sees a socket bound to one as unnamed
   (the C library has them, for `libc`'s calls).
-- **No links, permissions or file locks**: `fs::hard_link` and `symlink`
-  fail, permissions are not kept, and `File::lock` and the like fail with
-  `Unsupported`.
+- **No links, permissions or file locks**: `fs::hard_link` (but between
+  `/dev/shm`'s shared memory objects) and `symlink` fail, permissions are
+  not kept, and `File::lock` and the like fail with `Unsupported`.
 - **Thread names** are the standard library's alone: panics and
   `thread::current` show them, the system does not.
 

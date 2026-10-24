@@ -12,7 +12,9 @@
 //!
 //! The terminal (`/dev/tty`) and a program's own descriptors (`/dev/stdin`,
 //! `/dev/fd/N`) differ from process to process; the POSIX layer provides
-//! them.
+//! them. `/dev/shm`, which [`Dev::list`]'s caller lists with the devices,
+//! is a file system of its own: the shared memory objects
+//! (`vfs_core::shm`).
 
 use alloc::vec::Vec;
 
@@ -25,6 +27,9 @@ pub enum Dev {
     Full,
     Random,
 }
+
+/// The directory of the shared memory objects, in `/dev`.
+pub const SHM: &str = "shm";
 
 /// Every device with its name.
 const ALL: [(&str, Dev); 5] =
@@ -50,7 +55,8 @@ impl Dev {
 
     pub fn stat(dev: Option<Dev>) -> Stat {
         Stat {
-            size: if dev.is_none() { ALL.len() as u64 } else { 0 },
+            // Its devices, and the shared memory objects' directory.
+            size: if dev.is_none() { ALL.len() as u64 + 1 } else { 0 },
             is_dir: dev.is_none(),
             read_only: false,
             modified: 0,

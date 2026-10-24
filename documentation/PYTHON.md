@@ -46,7 +46,6 @@ A module that cannot be had says why, in the traceback of its import:
 | `ctypes` | It needs dynamic loading (`dlopen`), which Veda has not yet |
 | `curses`, `readline` | The Terminal edits each line itself, and cannot move the cursor yet |
 | `dbm.gnu`, `dbm.ndbm` | `dbm.sqlite3` and `dbm.dumb` are there |
-| `multiprocessing.shared_memory` | There is no POSIX shared memory |
 | `pty` | There are no pseudo-terminals |
 | `syslog` | What a program writes to its standard error goes to the system log |
 | `tkinter`, `turtledemo`, IDLE (`idlelib`) | There is no Tk |
@@ -125,7 +124,7 @@ what the image has: no C API and no library to build extensions with.
 | Python's | On Veda |
 |----------|---------|
 | `subprocess`, `os.posix_spawn`, `os.spawn*` | `posix_spawn`, which starts the program in one step, with the descriptors, working directory and environment asked for (`pass_fds`, `close_fds`, `cwd`, `env`); a program that cannot be started fails in the parent (`OSError`), as a forked child's failure is reported there. Veda's processes have no groups or sessions: `start_new_session` and `process_group` change nothing |
-| `multiprocessing` | Processes spawned (`spawn`, the one start method), which pipes connect |
+| `multiprocessing`, `concurrent.futures` | Processes spawned (`spawn`, the one start method), which pipes connect; the locks, semaphores, events, conditions and queues between them are the C library's named semaphores (`sem_open`, in `/dev/shm`), as are pools' (`multiprocessing.Pool`, `ProcessPoolExecutor`); `multiprocessing.shared_memory` and the heap of `multiprocessing`'s shared objects are `/dev/shm`'s shared memory objects |
 | `threading` | The C library's threads, named as Linux names them (15 characters) |
 | `os.nice`, `os.setpriority` | The process's nice value, which its threads run at and the programs it starts inherit (below 0 for services alone) |
 | `socket`, `ssl`, `asyncio`, `selectors` | The network service's sockets, over IPv4 and IPv6 (a server on every address has an IPv4 socket and an IPv6-only one on one port), Unix domain sockets (with Linux's abstract names), `epoll` |
@@ -140,16 +139,19 @@ Python shares the limits of C programs ([C on Veda](C.md#limits)). In
 Python's terms:
 
 - **No extension modules but those built in.** Veda links its programs
-  statically and has no `dlopen`: `ctypes` is not there, and a package's
-  C extension cannot be loaded (`ImportError`).
+  statically and has no `dlopen`: `ctypes` is not there (nor then are
+  `multiprocessing`'s shared values and arrays: `Value`, `Array`,
+  `sharedctypes`), and a package's C extension cannot be loaded
+  (`ImportError`).
 - **No `fork` or `exec`.** `os.fork`, `os.exec*` and `os.forkpty` are not
   there; `subprocess` refuses a `preexec_fn` (`OSError`, `EOPNOTSUPP`), as
-  no code of the parent's runs in the child. `multiprocessing` spawns, and
-  has no locks, queues or pools between processes, which stand on named
-  semaphores (`sem_open`), which Veda has not (`ImportError`), nor then
-  has `concurrent.futures` a `ProcessPoolExecutor` (`NotImplementedError`);
-  its pipes and connections work, as do the executors of threads and of
-  interpreters.
+  no code of the parent's runs in the child. `multiprocessing` spawns,
+  and so does `concurrent.futures`' `ProcessPoolExecutor`: what a child
+  needs goes to it pickled, as on macOS and Windows, and its pipes go at
+  the numbers they have in the parent, which a program is given below 256
+  alone (C's limit): with some hundred processes at once (a `Pool(200)`),
+  the next one's are past it, and it cannot be started (`OSError`,
+  `EMFILE`).
 - **No shell.** `/system/bin/sh` is not there yet: `shell=True`,
   `os.system` and `os.popen` fail (`FileNotFoundError` for `/bin/sh`).
   The Terminal's commands are its own.
@@ -173,7 +175,8 @@ Python's terms:
 - **Files map as copies.** `mmap` maps a file to read (`ACCESS_READ`) or
   as a private copy (`ACCESS_COPY`); a mapping that writes the file
   (`ACCESS_WRITE`, and `ACCESS_DEFAULT`, which is that) fails (`ENODEV`).
-  Memory files (`os.memfd_create`) are shared memory.
+  Memory files (`os.memfd_create`) and the files of `/dev/shm`
+  (`multiprocessing.shared_memory`'s) are shared memory.
 - **The network** has no out-of-band data (`MSG_OOB`, which
   `ftplib.FTP.abort` sends), no ancillary data on Internet sockets
   (`IPV6_RECVHOPLIMIT` and the like) and no list of interfaces
@@ -199,8 +202,8 @@ and `build.sh` builds it. The patch:
   `x86_64-veda`, whose modules are built in, whose C library's release
   `platform.libc_ver()` gives, and which has none of the functions musl
   has but Veda does not carry out, so that Python leaves out what would
-  fail (`fork`, `exec*`, `dlopen`, links, alarms, pseudo-terminals, named
-  semaphores, `if_nameindex`...). The modules that cannot be built are
+  fail (`fork`, `exec*`, `dlopen`, links, alarms, pseudo-terminals,
+  `if_nameindex`...). The modules that cannot be built are
   named, with the reasons their imports give (`MISSING_MODULES` in
   `build.sh`).
 - **Starts programs with `posix_spawn`** (`Modules/_posixsubprocess.c`):
@@ -214,7 +217,9 @@ and `build.sh` builds it. The patch:
   (`Modules/socketmodule.c`), thread names of 15 characters, the basic
   interactive interpreter in Veda's Terminal (`Lib/_pyrepl/main.py`),
   virtual environments as copies (`Lib/venv`), the asyncio shell without
-  the tools that read other processes (`Lib/asyncio/__main__.py`).
+  the tools that read other processes (`Lib/asyncio/__main__.py`), the
+  heap of `multiprocessing`'s shared objects in `/dev/shm`, as on Linux
+  (`Lib/multiprocessing/heap.py`).
 - **Has CPython's tests skip what Veda lacks** (`Lib/test`), by what they
   need where it can be told: a shell (`support.requires_shell`), a
   `preexec_fn` (`support.requires_preexec_fn`), signals from other
@@ -228,7 +233,9 @@ and `build.sh` builds it. The patch:
 
 - **`verification/python/stdlib.py`** checks the standard library inside
   Veda: the interpreter's paths and modules, its bytecode, files,
-  threads, processes (`subprocess`, `os.spawn*`, `multiprocessing`),
+  threads, processes (`subprocess`, `os.spawn*`, `multiprocessing`: its
+  locks, events and queues, `Pool`, and `concurrent.futures`'
+  `ProcessPoolExecutor`), shared memory (`multiprocessing.shared_memory`),
   signals, time, sockets (TCP and UDP over IPv4 and IPv6, Unix domain,
   ports shared by an IPv4 and an IPv6-only socket), asyncio, TLS, hashes,
   compression, SQLite, data formats, memory, and virtual environments
@@ -243,15 +250,15 @@ and `build.sh` builds it. The patch:
   `--python-tests`: `python3 -m test -j4` in the Terminal, or from the
   kernel's command line, as a script does
   (`boot-cmdline "run=python3:/system/tests/python/regrtest.py,-j4"`, then
-  `wait-serial "Tests result:"`), in some four minutes on four processors.
-  They all pass: of their 560 test files, 431 run, 120 skip whole (they
-  test other systems, Windows' above all, or modules Veda has not: Tk,
-  curses, `ctypes`...) and 9 need resources a run is not given by default
-  (`-u`: the Internet, a lot of time or disk). Of the 47,842 tests in
-  the files that run, 3,761 skip, each saying what it needs: another
-  system, or what Veda has not. With every resource but the Internet and
-  what Veda has not (`-uall` less `network`, `urlfetch`, `largefile`,
-  `extralargefile`, `gui`, `audio`, `tzdata` and `curses`, each taken
-  away as `-u-network` takes the first), 432 files run and pass, in some
-  six minutes; `test_socketserver`, which asks for the network but stays
-  on the machine, passes with `-unetwork`.
+  `wait-serial "Tests result:"`), in some six minutes on four processors.
+  They all pass: of their 560 test files, 440 run, 111 skip whole (they
+  test other systems, Windows' above all, or what Veda has not: `fork`,
+  Tk, curses, `ctypes`...) and 9 need resources a run is not given by
+  default (`-u`: the Internet, a lot of time or disk). Of the 48,331
+  tests in the files that run, 3,791 skip, each saying what it needs:
+  another system, or what Veda has not. With every resource but the
+  Internet and what Veda has not (`-uall` less `network`, `urlfetch`,
+  `largefile`, `extralargefile`, `gui`, `audio`, `tzdata` and `curses`,
+  each taken away as `-u-network` takes the first), 441 files run and
+  pass, in some nine minutes; `test_socketserver`, which asks for the
+  network but stays on the machine, passes with `-unetwork`.

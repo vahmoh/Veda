@@ -7,12 +7,12 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use ipc::Bytes;
-use proto::fs::{MAX_IO, Stat, file, open_flags, seek};
+use proto::fs::{FsError, MAX_IO, Stat, file, open_flags, seek};
 use rt::object::{Channel, Vmo};
 use rt::sync::Mutex;
 
 use crate::error;
-use crate::linux::errno::{EINVAL, EIO};
+use crate::linux::errno::{EINVAL, EIO, ENOMEM};
 use crate::linux::{self, dt};
 use crate::path;
 use crate::vfs;
@@ -60,6 +60,21 @@ impl VfsFile {
     /// be, shared with everyone who maps them.
     pub fn pages(&self, offset: u64, len: usize) -> Option<Vmo> {
         self.client.lock().pages(offset, len as u64).ok()?.ok()
+    }
+
+    /// The memory of a shared memory object (`/dev/shm`), made to hold
+    /// `len` bytes, to map as it is (`file::memory`), with the access the
+    /// file was opened with; `None` for another file, whose bytes are the
+    /// file system's own.
+    pub fn memory(&self, len: u64) -> Result<Option<Vmo>, isize> {
+        match self.client.lock().memory(len) {
+            Ok(Ok(vmo)) => Ok(Some(vmo)),
+            Ok(Err(FsError::Invalid)) => Ok(None),
+            // The memory could not grow: as for any mapping.
+            Ok(Err(FsError::NoSpace)) => Err(ENOMEM),
+            Ok(Err(e)) => Err(error::fs(e)),
+            Err(_) => Err(EIO),
+        }
     }
 
     /// Reads at `offset` until `buf` is full or the file ends, leaving the

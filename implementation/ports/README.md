@@ -350,8 +350,8 @@ What the patch changes:
   `configure`, generated from it by Autoconf 2.72; `config.sub`,
   `Misc/platform_triplet.c`): `x86_64-veda`, its modules built into the
   interpreter, without the functions musl has that Veda does not carry
-  out (`fork`, `exec*`, `dlopen`, links, alarms, pseudo-terminals, named
-  semaphores, `if_nameindex`); programs started with `posix_spawn`
+  out (`fork`, `exec*`, `dlopen`, links, alarms, pseudo-terminals,
+  `if_nameindex`); programs started with `posix_spawn`
   (`Modules/_posixsubprocess.c`, `Lib/os.py`'s `spawn*`, `multiprocessing`
   spawning alone); the interpreter's own path from the loader
   (`Modules/getpath.c`), UTF-8 as the locale's encoding
@@ -359,7 +359,8 @@ What the patch changes:
   (`Modules/socketmodule.c`), the thread names' limit, the basic
   interactive interpreter in Veda's Terminal (`Lib/_pyrepl/main.py`),
   virtual environments as copies (`Lib/venv`), the asyncio shell without
-  the tools that read other processes' memory; and CPython's tests,
+  the tools that read other processes' memory, `multiprocessing`'s heap
+  in `/dev/shm` (`Lib/multiprocessing/heap.py`); and CPython's tests,
   which skip what Veda has not by what they need
   ([Python on Veda](../../documentation/PYTHON.md#the-port)).
   `config.site` answers configure's run-time checks.

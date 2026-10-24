@@ -257,8 +257,9 @@ unsafe fn generic(n: usize, a: [usize; 6]) -> SysResult {
             nr::RENAMEAT2 => fs::renameat(fd0, a[1], a[2] as i32, a[3], a[4] as u32),
             nr::MKDIRAT => fs::mkdirat(fd0, a[1]),
             nr::UNLINKAT => fs::unlinkat(fd0, a[1], a[2] as u32),
-            // Veda has neither hard nor symbolic links.
-            nr::LINKAT | nr::SYMLINKAT | nr::MKNODAT => Err(EPERM),
+            nr::LINKAT => fs::linkat(fd0, a[1], a[2] as i32, a[3], a[4] as u32),
+            // Veda has no symbolic links, nor device nodes to make.
+            nr::SYMLINKAT | nr::MKNODAT => Err(EPERM),
             nr::READLINKAT => fs::readlinkat(fd0, a[1]),
             // fchmodat2's flags (AT_SYMLINK_NOFOLLOW) change nothing: there
             // are no links, and no modes.

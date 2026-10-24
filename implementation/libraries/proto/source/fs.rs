@@ -12,6 +12,7 @@
 //! | `/home/user` | the user's documents, pictures and music |
 //! | `/tmp` | scratch space |
 //! | `/dev` | devices: `null`, `zero`, `full`, `random`, `urandom` |
+//! | `/dev/shm` | shared memory objects (POSIX's `shm_open`, `sem_open`) |
 //!
 //! A directory is listed a page at a time ([`vfs::Client::read_dir_page`]),
 //! as a listing can be larger than a message carries;
@@ -26,6 +27,14 @@
 //! it, the datagrams sent to it. Programs connect and send by address
 //! ([`SocketAddress`]); the bytes of a connection then go between them,
 //! over the ends the connection carries, without the VFS.
+//!
+//! **Shared memory objects.** `/dev/shm` holds memory with names, which
+//! programs open as files: what a file connection to one reads and writes
+//! is the memory itself, which [`file::Client::memory`] hands out to map,
+//! so that every process that maps it shares it (as POSIX programs share
+//! memory with `shm_open`, and their semaphores with `sem_open`). Its
+//! objects alone are there, each with any number of names
+//! ([`vfs::Client::link`]); none is kept on the home disk.
 //!
 //! **Confined connections.** A connection can give up, for good, all of the
 //! file system but a few places ([`vfs::Client::confine`]): a program that
@@ -129,6 +138,8 @@ pub mod device {
     pub const SYSTEM: u64 = 2;
     /// `/dev`, the devices.
     pub const DEV: u64 = 3;
+    /// `/dev/shm`, the shared memory objects.
+    pub const SHM: u64 = 4;
 }
 
 message! {
@@ -434,12 +445,14 @@ protocol! {
         /// reaches only what is at or below its places (at most
         /// [`MAX_PLACES`]), each to read or to change too, the innermost
         /// place that holds a path saying which (`/dev` to read and
-        /// `/dev/null` to change); and the directories on the way to them,
-        /// which it can look at and list, but which show it only what leads
-        /// on to a place. Nothing else is there for it (`NotFound`), what
-        /// it may only read it cannot change (`Denied`), it has no
-        /// abstract socket names, which are in no place, and its `sync`
-        /// returns at once (what it changes is saved as anything is). As
+        /// `/dev/null` to change; `/dev/shm`'s shared memory objects, by
+        /// places at or inside it alone); and the directories on the way
+        /// to them, which it can look at and list, but which show it only
+        /// what leads on to a place. Nothing else is there for it
+        /// (`NotFound`), what it may only read it cannot change
+        /// (`Denied`), it has no abstract socket names, which are in no
+        /// place, and its `sync` returns at once (what it changes is saved
+        /// as anything is). As
         /// OpenBSD's `unveil` does, a program gives up the rest before it
         /// handles what it cannot trust (the browser's page processes).
         /// Confining it again narrows the view: one that would reach what
@@ -486,6 +499,13 @@ protocol! {
         /// browser takes back the folder it lent its network process once
         /// no page it has open needs it.
         27 => fn take_back(loan: Bytes) -> Result<(), FsError>;
+        /// Gives the shared memory object at `from` the name `to` as well,
+        /// both in `/dev/shm` (as `link` does on Linux): `Exists` if `to`
+        /// is taken. Nothing else has links (`Invalid`). A program
+        /// publishes an object so that no other sees it before it is ready,
+        /// as the C library's `sem_open` does with a semaphore: made under
+        /// a name of its own, then linked to the one it is opened by.
+        29 => fn link(from: String, to: String) -> Result<(), FsError>;
     }
 }
 
@@ -561,6 +581,13 @@ protocol! {
         /// a file whose bytes are the file system's own, which a mapping
         /// copies, and for a range past its last page.
         12 => fn pages(offset: u64, len: u64) -> Result<Vmo, FsError>;
+        /// The memory of a shared memory object (`/dev/shm`), to map as it
+        /// is, shared with every process that maps it: a handle that can
+        /// write it if the file was opened to write, its memory made to
+        /// hold at least `len` bytes (past the object's size, which stays,
+        /// memory that reads as zeros). `Invalid` for other files, whose
+        /// bytes are the file system's own.
+        15 => fn memory(len: u64) -> Result<Vmo, FsError>;
     }
 }
 

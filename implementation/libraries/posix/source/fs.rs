@@ -283,6 +283,34 @@ pub unsafe fn renameat(olddir: i32, old: usize, newdir: i32, new: usize, flags: 
     Ok(0)
 }
 
+/// Whether `path` (absolute, normalised) is in `/dev/shm`, the shared
+/// memory objects' directory.
+fn in_shm(path: &str) -> bool {
+    path.strip_prefix("/dev/shm/").is_some_and(|name| !name.is_empty())
+}
+
+/// `linkat(olddir, old, newdir, new, flags)`: another name for a shared
+/// memory object, in `/dev/shm` too, as the C library's `sem_open` gives a
+/// semaphore its name once it is ready. Nothing else on Veda has links
+/// (`EPERM`, as for a file system without them).
+pub unsafe fn linkat(olddir: i32, old: usize, newdir: i32, new: usize, flags: u32) -> SysResult {
+    // There are no symbolic links to follow.
+    if flags & !(at::SYMLINK_FOLLOW | at::EMPTY_PATH) != 0 {
+        return Err(EINVAL);
+    }
+    // SAFETY: the program passed strings.
+    let (from, to) =
+        unsafe { (vfs::resolve_at(olddir, user::cstr(old)?)?, vfs::resolve_at(newdir, user::cstr(new)?)?) };
+    match (in_shm(&from.path), in_shm(&to.path)) {
+        (true, true) => {
+            error::ipc(vfs::with(|c| c.link(from.path.clone(), to.path.clone()))?)?;
+            Ok(0)
+        }
+        (true, false) | (false, true) => Err(EXDEV),
+        (false, false) => Err(EPERM),
+    }
+}
+
 pub unsafe fn getcwd(buf: usize, size: usize) -> SysResult {
     let cwd = vfs::cwd();
     if size <= cwd.len() {
@@ -434,6 +462,7 @@ fn device_root(device: u64) -> &'static str {
     match device {
         device::SYSTEM => "/system",
         device::DEV => "/dev",
+        device::SHM => "/dev/shm",
         _ => "/",
     }
 }
@@ -512,5 +541,14 @@ mod tests {
         assert_eq!(vfs_flags(o::RDONLY | o::APPEND), open_flags::READ | open_flags::APPEND);
         // EXCL without CREAT means nothing.
         assert_eq!(vfs_flags(o::RDONLY | o::EXCL), open_flags::READ);
+    }
+
+    #[test]
+    fn links_are_between_shared_memory_objects() {
+        // The objects of /dev/shm, as sem_open names them, and nothing else.
+        assert!(in_shm("/dev/shm/sem.lock") && in_shm("/dev/shm/tmp-1234"));
+        for path in ["/dev/shm", "/dev/shm/", "/dev/shmem/x", "/dev/null", "/tmp/dev/shm/x", "/"] {
+            assert!(!in_shm(path), "{path}");
+        }
     }
 }

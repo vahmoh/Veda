@@ -6,7 +6,9 @@
 //! Namespace:
 //! * `/system` — the read-only system image (the initrd),
 //! * `/dev` — the devices (`null`, `zero`, `full`, `random`, `urandom`;
-//!   see [`dev`]), and
+//!   see [`dev`]),
+//! * `/dev/shm` — the shared memory objects (`vfs_core::shm`, [`shm`]),
+//!   and
 //! * everything else — a writable in-memory file system holding the user's
 //!   home directory and `/tmp`.
 //!
@@ -27,6 +29,13 @@
 //! readable and writable through what has it open, and goes away with the
 //! last of them; one moved while open is wherever it is now (a file moved
 //! into `/home` counts against the home disk from then on).
+//!
+//! **Shared memory objects.** A file of `/dev/shm` is memory of its own (a
+//! VMO), which its file connections read and write, and hand out to map
+//! (`file::memory`): every process that maps it shares it, as POSIX
+//! programs share memory with `shm_open` and semaphores with `sem_open`.
+//! An object may have several names (`vfs::link`), and lives while it has
+//! one or is open; it is never kept on the home disk.
 //!
 //! **Unix domain sockets.** A POSIX program's socket bound to a path is a
 //! node of the writable file system, which `stat` shows and `remove` takes
@@ -80,6 +89,7 @@ extern crate alloc;
 
 mod dev;
 mod persist;
+mod shm;
 mod sockets;
 
 use alloc::collections::{BTreeMap, BTreeSet};
@@ -103,6 +113,7 @@ use persist::Store;
 use sockets::Sockets;
 use vfs_core::access::{self, Connections, PRIVATE};
 use vfs_core::loans::{Loans, TakenBack};
+use vfs_core::shm::Shm;
 use vfs_core::snapshot::{self, Samples};
 use vfs_core::tree::{self, Data, Kind, Node, NodeId, Tree};
 use vfs_core::view::{Reach, View};
@@ -143,6 +154,8 @@ enum Mount {
     System,
     Ram,
     Dev,
+    /// `/dev/shm`, the shared memory objects.
+    Shm,
 }
 
 /// A descriptor of the `vfs::open` kind.
@@ -157,6 +170,8 @@ struct OpenFile {
 enum Target {
     Node(Mount, NodeId),
     Dev(Dev),
+    /// A shared memory object.
+    Memory(vfs_core::shm::Id),
 }
 
 /// An open file description (behind every connection of the `file` kind
@@ -221,6 +236,8 @@ struct Fs {
     connections: Connections,
     /// The Unix domain sockets bound to paths.
     sockets: Sockets,
+    /// `/dev/shm`'s shared memory objects.
+    shm: Shm<shm::Memory>,
     /// The loans made (`vfs::lend`): those not taken yet, and those whose
     /// place is in a view, which their lenders may take back.
     loans: Loans,
@@ -240,9 +257,10 @@ impl Fs {
     /// The tree of the path of `comps` (from the root), and the components
     /// inside it.
     fn route_comps<'p>(comps: &[&'p str]) -> (Mount, Vec<&'p str>) {
-        match comps.first() {
-            Some(&SYSTEM) => (Mount::System, comps[1..].to_vec()),
-            Some(&DEV) => (Mount::Dev, comps[1..].to_vec()),
+        match comps {
+            [SYSTEM, ..] => (Mount::System, comps[1..].to_vec()),
+            [DEV, dev::SHM, ..] => (Mount::Shm, comps[2..].to_vec()),
+            [DEV, ..] => (Mount::Dev, comps[1..].to_vec()),
             _ => (Mount::Ram, comps.to_vec()),
         }
     }
@@ -251,17 +269,19 @@ impl Fs {
     fn exists(&self, path: &str) -> bool {
         match self.route(path) {
             Ok((Mount::Dev, comps)) => Dev::find(&comps).is_ok(),
+            Ok((Mount::Shm, comps)) => self.shm.find(&comps).is_ok(),
             Ok((m, comps)) => self.tree(m).is_ok_and(|t| t.lookup(&comps).is_ok()),
             Err(_) => false,
         }
     }
 
-    /// The tree of a mount (`/dev` has none: nothing there can change).
+    /// The tree of a mount (`/dev` has none: nothing there can change; nor
+    /// has `/dev/shm`, whose objects are [`Fs::shm`]'s).
     fn tree(&self, m: Mount) -> Result<&Tree, FsError> {
         match m {
             Mount::System => Ok(&self.system),
             Mount::Ram => Ok(&self.ram),
-            Mount::Dev => Err(FsError::ReadOnly),
+            Mount::Dev | Mount::Shm => Err(FsError::ReadOnly),
         }
     }
 
@@ -269,8 +289,41 @@ impl Fs {
         match m {
             Mount::System => Ok(&mut self.system),
             Mount::Ram => Ok(&mut self.ram),
-            Mount::Dev => Err(FsError::ReadOnly),
+            Mount::Dev | Mount::Shm => Err(FsError::ReadOnly),
         }
+    }
+
+    /// The entries of `/dev`: its devices, and the shared memory objects'
+    /// directory, in the order of their names.
+    fn dev_entries(&self) -> Vec<DirEntry> {
+        let st = self.shm.stat(None).unwrap_or_default();
+        let shm = DirEntry {
+            name: dev::SHM.into(),
+            is_dir: true,
+            size: st.size,
+            modified: st.modified,
+            inode: st.inode,
+            executable: false,
+            socket: false,
+        };
+        tree::merge(Dev::list().into_iter(), core::iter::once(shm)).collect()
+    }
+
+    /// Copies `len` bytes of shared memory object `id` into a VMO of their
+    /// own.
+    fn copy_of_memory(&self, id: vfs_core::shm::Id, len: u64) -> Result<Vmo, FsError> {
+        self.memory_for(len as usize)?;
+        let vmo = Vmo::create((len as usize).max(1)).map_err(|_| FsError::NoSpace)?;
+        let mut at = 0;
+        while at < len {
+            let chunk = self.shm.read(id, at, MAX_IO as usize)?;
+            if chunk.is_empty() {
+                break;
+            }
+            vmo.write(at as usize, &chunk).map_err(|_| FsError::NoSpace)?;
+            at += chunk.len() as u64;
+        }
+        Ok(vmo)
     }
 
     /// Something opened `node`.
@@ -653,7 +706,13 @@ impl Session<'_> {
     fn entries(&self, m: Mount, comps: &[&str]) -> Result<Vec<DirEntry>, FsError> {
         if m == Mount::Dev {
             return match Dev::find(comps)? {
-                None => Ok(Dev::list()),
+                None => Ok(self.fs.dev_entries()),
+                Some(_) => Err(FsError::NotDir),
+            };
+        }
+        if m == Mount::Shm {
+            return match self.fs.shm.find(comps)? {
+                None => Ok(self.fs.shm.entries_after("").collect()),
                 Some(_) => Err(FsError::NotDir),
             };
         }
@@ -696,7 +755,7 @@ impl Session<'_> {
     /// An entry for a file system listed in the root.
     fn mount_entry(&self, name: &str) -> DirEntry {
         let size = match name {
-            DEV => Dev::list().len() as u64,
+            DEV => Dev::stat(None).size,
             _ => self.fs.system.stat(tree::ROOT).map_or(0, |s| s.size),
         };
         DirEntry {
@@ -716,6 +775,9 @@ impl Session<'_> {
         let (m2, c2) = self.resolve(to, Reach::Write)?;
         if m1 != m2 {
             return Err(FsError::Invalid);
+        }
+        if m1 == Mount::Shm {
+            return self.fs.shm.rename(&c1, &c2, replace);
         }
         if m1 == Mount::Ram && (access::fixed(&c1) || (replace && access::fixed(&c2))) {
             return Err(FsError::Denied);
@@ -776,7 +838,9 @@ impl Session<'_> {
 impl vfs::Server for Session<'_> {
     fn open(&mut self, path: String, flags: u32) -> Result<u32, FsError> {
         let (m, comps) = self.resolve(&path, Self::need_to_open(flags))?;
-        if m == Mount::Dev {
+        // Devices and shared memory objects open as files of their own
+        // (`open_file`).
+        if m == Mount::Dev || m == Mount::Shm {
             return Err(FsError::Invalid);
         }
         if self.fds.len() >= MAX_FDS {
@@ -814,6 +878,8 @@ impl vfs::Server for Session<'_> {
         let (m, comps) = self.resolve(&path, Reach::Through)?;
         let mut st = if m == Mount::Dev {
             Dev::stat(Dev::find(&comps)?)
+        } else if m == Mount::Shm {
+            self.fs.shm.stat(self.fs.shm.find(&comps)?)?
         } else {
             let t = self.fs.tree(m)?;
             let mut st = t.stat(t.lookup(&comps)?)?;
@@ -845,7 +911,12 @@ impl vfs::Server for Session<'_> {
         let shown = |e: &DirEntry| on_the_way.is_none_or(|v| v.shows(&full, &e.name));
         let mut page = if m == Mount::Dev {
             match Dev::find(&comps)? {
-                None => tree::page(Dev::list().into_iter().filter(|e| *e.name > *after && shown(e)), max),
+                None => tree::page(self.fs.dev_entries().into_iter().filter(|e| *e.name > *after && shown(e)), max),
+                Some(_) => return Err(FsError::NotDir),
+            }
+        } else if m == Mount::Shm {
+            match self.fs.shm.find(&comps)? {
+                None => tree::page(self.fs.shm.entries_after(&after).filter(shown), max),
                 Some(_) => return Err(FsError::NotDir),
             }
         } else {
@@ -889,6 +960,10 @@ impl vfs::Server for Session<'_> {
             // Its devices and itself exist; nothing can be added.
             return Err(if Dev::find(&comps).is_ok() { FsError::Exists } else { FsError::ReadOnly });
         }
+        if m == Mount::Shm {
+            // It holds shared memory objects alone.
+            return Err(if self.fs.shm.find(&comps).is_ok() { FsError::Exists } else { FsError::ReadOnly });
+        }
         self.fs.create_node(m, &comps, Kind::dir())?;
         Ok(())
     }
@@ -897,6 +972,9 @@ impl vfs::Server for Session<'_> {
         let (m, comps) = self.resolve(&path, Reach::Write)?;
         if m == Mount::Ram && access::fixed(&comps) {
             return Err(FsError::Denied);
+        }
+        if m == Mount::Shm {
+            return self.fs.shm.unlink(&comps);
         }
         // The record it takes from /home's snapshot.
         let record = match in_home(m, &comps) {
@@ -923,6 +1001,12 @@ impl vfs::Server for Session<'_> {
 
     fn read_file(&mut self, path: String) -> Result<(Vmo, u64), FsError> {
         let (m, comps) = self.resolve(&path, Reach::Read)?;
+        if m == Mount::Shm {
+            // A copy, as of the other files of the file system's own.
+            let id = self.fs.shm.find(&comps)?.ok_or(FsError::IsDir)?;
+            let size = self.fs.shm.size(id)?;
+            return Ok((self.fs.copy_of_memory(id, size)?, size));
+        }
         let t = self.fs.tree(m).map_err(|_| FsError::Invalid)?;
         let d = match t.node(t.lookup(&comps)?).map(|n| &n.kind) {
             Some(Kind::File(d)) => d,
@@ -947,6 +1031,20 @@ impl vfs::Server for Session<'_> {
         let (m, comps) = self.resolve(&path, Reach::Write)?;
         if len > 1 << 30 {
             return Err(FsError::NoSpace);
+        }
+        if m == Mount::Shm {
+            self.fs.memory_for(len as usize)?;
+            let flags = open_flags::WRITE | open_flags::CREATE | open_flags::TRUNCATE;
+            let id = self.fs.shm.open(&comps, flags, shm::Memory::new)?;
+            let mut chunk = alloc::vec![0; (len as usize).min(MAX_IO as usize)];
+            let mut at = 0;
+            while at < len {
+                let n = (len - at).min(chunk.len() as u64) as usize;
+                data.read(at as usize, &mut chunk[..n]).map_err(|_| FsError::Invalid)?;
+                self.fs.shm.write(id, at, false, &chunk[..n])?;
+                at += n as u64;
+            }
+            return Ok(());
         }
         let t = self.fs.tree(m)?;
         if t.read_only {
@@ -1022,6 +1120,14 @@ impl vfs::Server for Session<'_> {
         if m == Mount::Dev {
             return Ok(Space { total: 0, used: 0, persistent: false });
         }
+        if m == Mount::Shm {
+            // Memory, as much as the free memory allows, but for what is
+            // left to the rest of the system.
+            self.fs.shm.find(&comps)?;
+            let bytes = self.fs.shm.bytes();
+            let free = rt::object::system_info().map(|i| i.free_memory).unwrap_or(0);
+            return Ok(Space { total: bytes + free.saturating_sub(MEMORY_RESERVE), used: bytes, persistent: false });
+        }
         let t = self.fs.tree(m)?;
         t.lookup(&comps)?;
         Ok(match (m, &self.fs.store) {
@@ -1046,19 +1152,26 @@ impl vfs::Server for Session<'_> {
         let owner = self.who.koid;
         self.fs.connections.admit(owner)?;
         let opened = (|| {
-            let (target, stat) = if m == Mount::Dev {
-                match Dev::find(&comps)? {
+            let (target, stat) = match m {
+                Mount::Dev => match Dev::find(&comps)? {
                     Some(d) => (Target::Dev(d), Dev::stat(Some(d))),
                     None => return Err(FsError::IsDir),
+                },
+                Mount::Shm => {
+                    let id = self.fs.shm.open(&comps, flags, shm::Memory::new)?;
+                    (Target::Memory(id), self.fs.shm.stat(Some(id))?)
                 }
-            } else {
-                let node = self.fs.open_node(m, &comps, flags)?;
-                (Target::Node(m, node), self.fs.tree(m)?.stat(node)?)
+                _ => {
+                    let node = self.fs.open_node(m, &comps, flags)?;
+                    (Target::Node(m, node), self.fs.tree(m)?.stat(node)?)
+                }
             };
             let desc = Rc::new(RefCell::new(Description { target, flags, offset: 0, owner, may_touch }));
             let channel = self.connect_file(desc)?;
-            if let Target::Node(m, node) = target {
-                self.fs.hold(m, node);
+            match target {
+                Target::Node(m, node) => self.fs.hold(m, node),
+                Target::Memory(id) => self.fs.shm.hold(id),
+                Target::Dev(_) => {}
             }
             Ok((channel, stat))
         })();
@@ -1074,6 +1187,10 @@ impl vfs::Server for Session<'_> {
 
     fn set_modified(&mut self, path: String, modified: u64) -> Result<(), FsError> {
         let (m, comps) = self.resolve(&path, Reach::Write)?;
+        if m == Mount::Shm {
+            let id = self.fs.shm.find(&comps)?.ok_or(FsError::ReadOnly)?;
+            return self.fs.shm.set_modified(id, modified);
+        }
         let tree = self.fs.tree_mut(m)?;
         if tree.read_only {
             return Err(FsError::ReadOnly);
@@ -1091,7 +1208,8 @@ impl vfs::Server for Session<'_> {
     fn copy_file(&mut self, from: String, to: String) -> Result<(), FsError> {
         let (m1, c1) = self.resolve(&from, Reach::Read)?;
         let (m2, c2) = self.resolve(&to, Reach::Write)?;
-        if m1 == Mount::Dev {
+        // A shared memory object's bytes are no file's to share.
+        if m1 == Mount::Dev || m1 == Mount::Shm || m2 == Mount::Shm {
             return Err(FsError::Invalid);
         }
         let t = self.fs.tree(m1)?;
@@ -1153,6 +1271,7 @@ impl vfs::Server for Session<'_> {
         let (m, inside) = self.resolve(&path, Reach::Read)?;
         match m {
             Mount::Dev => drop(Dev::find(&inside)?),
+            Mount::Shm => drop(self.fs.shm.find(&inside)?),
             _ => drop(self.fs.tree(m)?.lookup(&inside)?),
         }
         let mut secret = [0u8; LOAN_SIZE];
@@ -1203,6 +1322,16 @@ impl vfs::Server for Session<'_> {
         Ok(())
     }
 
+    fn link(&mut self, from: String, to: String) -> Result<(), FsError> {
+        let (m1, c1) = self.resolve(&from, Reach::Write)?;
+        let (m2, c2) = self.resolve(&to, Reach::Write)?;
+        // Shared memory objects alone have links.
+        if m1 != Mount::Shm || m2 != Mount::Shm {
+            return Err(FsError::Invalid);
+        }
+        self.fs.shm.link(&c1, &c2)
+    }
+
     fn bind_socket(
         &mut self,
         at: SocketAddress,
@@ -1228,6 +1357,7 @@ impl vfs::Server for Session<'_> {
             // `/system` and `/dev` take nothing new.
             let exists = match m {
                 Mount::Dev => Dev::find(&comps).is_ok(),
+                Mount::Shm => self.fs.shm.find(&comps).is_ok(),
                 _ => self.fs.tree(m)?.lookup(&comps).is_ok(),
             };
             return Err(if exists { FsError::Exists } else { FsError::ReadOnly });
@@ -1287,6 +1417,9 @@ impl Session<'_> {
         if m == Mount::Dev {
             return Dev::find(&comps).and(Err(FsError::Refused));
         }
+        if m == Mount::Shm {
+            return self.fs.shm.find(&comps).and(Err(FsError::Refused));
+        }
         let t = self.fs.tree(m)?;
         match t.node(t.lookup(&comps)?).map(|n| &n.kind) {
             Some(Kind::Socket(id)) => Ok(*id),
@@ -1318,6 +1451,7 @@ impl FileSession<'_> {
         match target {
             Target::Node(m, node) => self.fs.read_node(m, node, offset, len),
             Target::Dev(d) => d.read(len.min(MAX_IO) as usize),
+            Target::Memory(id) => self.fs.shm.read(id, offset, len.min(MAX_IO) as usize),
         }
     }
 
@@ -1330,7 +1464,19 @@ impl FileSession<'_> {
         match target {
             Target::Node(m, node) => self.fs.write_node(m, node, offset, append, data),
             Target::Dev(dev) => dev.write(data.len()).map(|_| offset),
+            Target::Memory(id) => {
+                let size = self.fs.shm.size(id)?;
+                let end = if append { size } else { offset }.saturating_add(data.len() as u64);
+                self.fs.memory_for(end.saturating_sub(size) as usize)?;
+                self.fs.shm.write(id, offset, append, data)
+            }
         }
+    }
+
+    /// Whether the offset moves as the file is read and written: not for a
+    /// device.
+    fn has_offset(&self) -> bool {
+        !matches!(self.desc.borrow().target, Target::Dev(_))
     }
 }
 
@@ -1355,8 +1501,7 @@ impl file::Server for FileSession<'_> {
     fn read(&mut self, len: u32) -> Result<Bytes, FsError> {
         let offset = self.desc.borrow().offset;
         let data = self.read_at_offset(offset, len)?;
-        let target = self.desc.borrow().target;
-        if let Target::Node(..) = target {
+        if self.has_offset() {
             self.desc.borrow_mut().offset = offset + data.len() as u64;
         }
         Ok(Bytes(data))
@@ -1365,8 +1510,7 @@ impl file::Server for FileSession<'_> {
     fn write(&mut self, data: Bytes) -> Result<u32, FsError> {
         let offset = self.desc.borrow().offset;
         let at = self.write_at_offset(offset, &data.0)?;
-        let target = self.desc.borrow().target;
-        if let Target::Node(..) = target {
+        if self.has_offset() {
             self.desc.borrow_mut().offset = at + data.0.len() as u64;
         }
         Ok(data.0.len() as u32)
@@ -1383,11 +1527,15 @@ impl file::Server for FileSession<'_> {
 
     fn seek(&mut self, offset: i64, whence: u32) -> Result<u64, FsError> {
         let target = self.desc.borrow().target;
-        let Target::Node(m, node) = target else { return Ok(0) };
+        let size = match target {
+            Target::Node(m, node) => self.fs.tree(m)?.stat(node)?.size,
+            Target::Memory(id) => self.fs.shm.size(id)?,
+            Target::Dev(_) => return Ok(0),
+        };
         let base = match whence {
             seek::SET => 0,
             seek::CURRENT => self.desc.borrow().offset,
-            seek::END => self.fs.tree(m)?.stat(node)?.size,
+            seek::END => size,
             _ => return Err(FsError::Invalid),
         };
         let new = base.checked_add_signed(offset).ok_or(FsError::Invalid)?;
@@ -1402,6 +1550,7 @@ impl file::Server for FileSession<'_> {
         match self.desc.borrow().target {
             Target::Node(m, node) => self.fs.tree(m)?.stat(node),
             Target::Dev(d) => Ok(Dev::stat(Some(d))),
+            Target::Memory(id) => self.fs.shm.stat(Some(id)),
         }
     }
 
@@ -1411,7 +1560,19 @@ impl file::Server for FileSession<'_> {
         match target {
             Target::Node(m, node) => self.fs.truncate_node(m, node, len),
             Target::Dev(_) => Ok(()),
+            Target::Memory(id) => {
+                let size = self.fs.shm.size(id)?;
+                self.fs.memory_for(len.saturating_sub(size) as usize)?;
+                self.fs.shm.truncate(id, len)
+            }
         }
+    }
+
+    fn memory(&mut self, len: u64) -> Result<Vmo, FsError> {
+        self.readable()?;
+        let Target::Memory(id) = self.desc.borrow().target else { return Err(FsError::Invalid) };
+        let writable = self.desc.borrow().flags & open_flags::WRITE != 0;
+        self.fs.shm.memory(id, len)?.handle(writable)
     }
 
     fn duplicate(&mut self) -> Result<Channel, FsError> {
@@ -1444,7 +1605,11 @@ impl file::Server for FileSession<'_> {
     }
 
     fn set_modified(&mut self, modified: u64) -> Result<(), FsError> {
-        let Target::Node(m, node) = self.desc.borrow().target else { return Ok(()) };
+        let target = self.desc.borrow().target;
+        if let Target::Memory(id) = target {
+            return self.fs.shm.set_modified(id, modified);
+        }
+        let Target::Node(m, node) = target else { return Ok(()) };
         if !self.desc.borrow().may_touch {
             return Err(FsError::Denied);
         }
@@ -1515,6 +1680,7 @@ fn build(archive: &initrd::Archive<'static>, image: SystemImage, live: bool) -> 
         orphans: BTreeSet::new(),
         connections: Connections::new(),
         sockets: Sockets::new(),
+        shm: Shm::new(rt::time::unix_time_ns),
         loans: Loans::new(),
         home_len: Cell::new(None),
     }
@@ -1543,7 +1709,7 @@ fn main() -> i32 {
         println!("cannot register the vfs service");
         return 1;
     };
-    println!("serving /system ({} files), /dev and /home", archive.len());
+    println!("serving /system ({} files), /dev, /dev/shm and /home", archive.len());
 
     struct Client {
         channel: Channel,
@@ -1613,10 +1779,12 @@ fn main() -> i32 {
                     let desc = conn.desc.borrow();
                     fs.connections.release(desc.owner);
                     // The last connection closes the open file.
-                    if Rc::strong_count(&conn.desc) == 1
-                        && let Target::Node(m, node) = desc.target
-                    {
-                        fs.release(m, node);
+                    if Rc::strong_count(&conn.desc) == 1 {
+                        match desc.target {
+                            Target::Node(m, node) => fs.release(m, node),
+                            Target::Memory(id) => fs.shm.release(id),
+                            Target::Dev(_) => {}
+                        }
                     }
                 }
             } else {

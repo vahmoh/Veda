@@ -3,7 +3,10 @@
 
 //! Memory: `mmap` and friends.
 //!
-//! Memory files (`memfd_create`) map as [`crate::memfd`] says.
+//! Memory files (`memfd_create`) map as [`crate::memfd`] says, and so do
+//! shared memory objects (`/dev/shm`, files of the VFS's whose bytes are
+//! memory): a shared mapping of one is its memory itself, which the VFS
+//! hands out (`file::memory`), shared with every process that maps it.
 //!
 //! Private anonymous memory is the kernel's private memory (`vm_allocate`):
 //! its pages are freed as soon as they are unmapped, parts of mappings
@@ -63,6 +66,8 @@ pub unsafe fn mmap(addr: usize, len: usize, prot: u32, flags: u32, fd: i32, offs
     if fixed && !addr.is_multiple_of(PAGE) {
         return Err(EINVAL);
     }
+    // The memory of a shared memory object that a shared mapping maps.
+    let mut memory = None;
     let desc = if flags & MAP_ANONYMOUS != 0 {
         None
     } else {
@@ -73,9 +78,18 @@ pub unsafe fn mmap(addr: usize, len: usize, prot: u32, flags: u32, fd: i32, offs
         if !matches!(desc.object, Object::File(_) | Object::Memfd(_)) {
             return Err(ENODEV);
         }
-        // Changes are never written back: a shared mapping of a file can
-        // only be read. (A memory file's is its memory.)
-        if matches!(desc.object, Object::File(_)) && kind != MAP_PRIVATE && prot & PROT_WRITE != 0 {
+        if let Object::File(f) = &desc.object
+            && kind != MAP_PRIVATE
+        {
+            let end = (offset as u64).checked_add(len as u64).ok_or(ENOMEM)?;
+            memory = f.memory(end)?;
+            if memory.is_some() && prot & PROT_WRITE != 0 && !desc.writable() {
+                return Err(EACCES);
+            }
+        }
+        // Other files' changes are never written back: a shared mapping of
+        // one can only be read. (A memory file's is its memory.)
+        if matches!(desc.object, Object::File(_)) && memory.is_none() && kind != MAP_PRIVATE && prot & PROT_WRITE != 0 {
             return Err(ENODEV);
         }
         Some(desc)
@@ -96,6 +110,9 @@ pub unsafe fn mmap(addr: usize, len: usize, prot: u32, flags: u32, fd: i32, offs
         place |= map_flags::FIXED;
     }
     let hint = addr & !(PAGE - 1);
+    if let Some(vmo) = memory {
+        return vm::map(None, &vmo, offset as usize, len, hint, map_prot(prot) | place).map_err(map_error);
+    }
     if let Some(d) = desc.as_deref()
         && let Object::Memfd(m) = &d.object
     {

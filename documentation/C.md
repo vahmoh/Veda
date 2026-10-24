@@ -99,8 +99,10 @@ which calls into it.
 | `timerfd` | On the monotonic, real-time and boot clocks, one-shot or periodic, absolute or relative (`TFD_TIMER_ABSTIME`): a count of expirations to read, and an event that `poll` and `epoll` wait on, which a thread of the layer signals as timers expire |
 | `mmap`, `mprotect`, `munmap`, `madvise` | Private anonymous memory is the kernel's, its pages freed once unmapped (in part too) or dropped with `MADV_DONTNEED`; files are mapped as copies, read-only if shared, but a mapping of a file of `/system` that does not write it is the system image's own pages, shared with every process that maps them and never writable; any part of a mapping can be protected or unmapped |
 | Memory files (`memfd_create`) | A VMO: shared mappings are the memory itself, in every process the descriptor goes to (over Unix domain sockets, or to the programs a program starts); `ftruncate` and writes grow it; seals that fix its size (`F_SEAL_SHRINK`, `F_SEAL_GROW`, `F_SEAL_SEAL`, and `F_SEAL_EXEC` with `MFD_NOEXEC_SEAL`); `/dev/fd/N` opened read-only gives a descriptor whose handle cannot write the memory, nor can any process it goes to |
+| Shared memory (`shm_open`, `shm_unlink`) | An object of the VFS's `/dev/shm`: memory with a name, which every process opens by it (or is given its descriptor). A shared mapping is the memory itself, writable if the descriptor is; reads and writes are the memory too, and `ftruncate` and writes size it, to the byte. It lasts while it has a name or something has it open, its memory while a mapping does; it is never kept on the home disk |
+| Semaphores (`sem_init`, `sem_open`) | The C library's, on futexes: one for the program's threads, or one that processes share in memory they map (`sem_init` with `pshared`, in a memory file or a shared memory object), whose futex, the word in that memory, is theirs wherever it is mapped (as for the process-shared locks, conditions and barriers of `PTHREAD_PROCESS_SHARED`). A named one (`sem_open`, `sem_unlink`) is in a shared memory object of its own, which the C library makes, then links to its name, ready |
 | `fsync`, `fdatasync`, `sync`, `syncfs`, `O_SYNC`, `RWF_SYNC` | The VFS saves changes to the home disk at once, not a few seconds after the last one |
-| Threads, futexes, clocks | The kernel's. Thread ids are the process's own, the main thread's its process id; `pthread_join` waits on the thread's exit futex; a detached thread frees its own stack; `pthread_getattr_np` knows the main thread's stack from the startup message; a thread's CPU time is its own (`CLOCK_THREAD_CPUTIME_ID`, `pthread_getcpuclockid`) and, as the process's, counts up to the moment it is read (the turn a thread is running on a processor too), and a thread names itself (`prctl`, `pthread_setname_np`), which the layer keeps |
+| Threads, futexes, clocks | The kernel's: a futex is the word in its memory, one for every process that maps the memory. Thread ids are the process's own, the main thread's its process id; `pthread_join` waits on the thread's exit futex; a detached thread frees its own stack; `pthread_getattr_np` knows the main thread's stack from the startup message; a thread's CPU time is its own (`CLOCK_THREAD_CPUTIME_ID`, `pthread_getcpuclockid`) and, as the process's, counts up to the moment it is read (the turn a thread is running on a processor too), and a thread names itself (`prctl`, `pthread_setname_np`), which the layer keeps |
 | Nice values, processors | One nice value for the process (POSIX's; Linux keeps one per thread), which the programs it starts inherit: its threads run at a kernel priority of it, 0 the normal one, 19 `LOW` and -20 `HIGH`, strictly above one another (the kernel gives a thread that waited long a turn). Below 0 only as far as the process may run above normal (`EACCES` for applications). Threads run on every processor, which `sched_getaffinity` names; an affinity that leaves some out cannot be set (`EOPNOTSUPP`) |
 | `dladdr`, `dl_iterate_phdr` | The program alone, statically linked: its segments, and its path as the loader gives it (`AT_EXECFN`); `dladdr` names no symbol |
 | Local time | Without `TZ`, the system's offset from UTC (the `tz=` boot option, or the firmware's), as a POSIX `TZ` string (`<+0530>-5:30`): `localtime`, `mktime` and `tzname` follow it; `TZ` overrides it with a POSIX string (there is no tz database yet) |
@@ -162,12 +164,12 @@ program the Terminal runs.
 |------|---------|
 | `fork`, `exec` | None (`ENOSYS`). Processes start with `posix_spawn`, which most build tools and browsers already use, or `vfork` and `exec`, which port to it directly |
 | `/bin/sh` | None yet (the Terminal's shell is part of the Terminal): `system` and `popen` fail with `ENOENT` |
-| Links | No hard or symbolic links: `link` and `symlink` fail with `EPERM`, and `readlink` finds none (`EINVAL`) |
+| Links | No symbolic links, and no hard links but between the shared memory objects of `/dev/shm`, as `sem_open` makes them: elsewhere `link` fails with `EPERM` (`EXDEV` from `/dev/shm` to elsewhere), as `symlink` does, and `readlink` finds none (`EINVAL`) |
 | Permissions | No owners or permission bits: a program file (ELF or `#!`) is executable, nothing else is; `chmod` changes nothing, and `chown` to another user or group is refused (`EPERM`, as for Linux's unprivileged users). Programs run as user 1000 |
 | File locks | None between processes, until the VFS arbitrates them: `F_SETLK`, `F_SETLKW` and `flock` fail with `ENOLCK` (unlocking succeeds), so software relying on them needs porting: SQLite, in the web engine (each of whose databases is one process's) and in Python, uses its `unix-none` VFS, which locks nothing: a database is one connection's to write at a time |
 | Shared libraries | Static linking only, no `dlopen` |
 | Timers | No `alarm` or interval timers: `setitimer` and `timer_create` fail with `ENOSYS`; `timerfd` is there |
-| Shared file mappings | Read-only, as changes would never reach the file: `PROT_WRITE` fails with `ENODEV`, and `mprotect` cannot add it (`EACCES`) |
+| Shared file mappings | Read-only, as changes would never reach the file: `PROT_WRITE` fails with `ENODEV`, and `mprotect` cannot add it (`EACCES`). Memory files and shared memory objects are memory: their shared mappings are it |
 | Network sockets | TCP and UDP only. No raw or ICMP sockets (`EPROTONOSUPPORT`; `ping` is the network service's), multicast (`ENOPROTOOPT`), out-of-band data (`MSG_OOB`: `EOPNOTSUPP` to send, `EINVAL` to receive), ancillary data such as `IP_PKTINFO` (`sendmsg` with control messages: `EOPNOTSUPP`) or list of the interfaces (`getifaddrs` fails: there is no netlink) |
 | `/etc/resolv.conf` | None: the C library asks the network service, and programs that read it themselves find no DNS servers |
 | C++ | No compiler for it in the image; the cross toolchain compiles C++, with libstdc++ and libatomic |
@@ -179,6 +181,7 @@ program the Terminal runs.
 | Descriptors a started program inherits | 62 kernel objects (files, pipes, the terminal) at most, none numbered 256 or more (`EMFILE`): open what children need not have with `O_CLOEXEC` |
 | Files open at once | Some 250 per program, its quarter of what the VFS holds open (`EMFILE`); descriptors of other kinds, 1024 in all |
 | A file | 2 GiB (`ENOSPC` past it, as on a full disk), kept in memory whole: a file seeked past its end takes the space it skips |
+| Shared memory objects | 8192, and as many names, at once; each 2 GiB at most (`ENOSPC`) |
 | The main thread's stack | 8 MiB, or more if the executable asks (`-Wl,-z,stack-size=N`), up to 512 MiB; guard pages below |
 | Pipes and the terminal | 256 KiB each way; writes of up to 4096 bytes are never split |
 | A Unix domain datagram | 56 KiB (`EMSGSIZE`) |
@@ -312,8 +315,10 @@ licences ([Licensing](LICENSING.md)), whose texts the image carries in
 
 - **`verification/c/posix.c`** checks the C library and the POSIX layer:
   startup, standard I/O, memory, the system image's files mapped in place,
-  the C library's databases, memory files, suspending threads, files (their
-  owner too), pipes, threads, clocks (threads' CPU time too) and the time
+  the C library's databases, memory files, shared memory and semaphores
+  between processes (named, and in memory they share, with a lock there),
+  suspending threads, files (their owner too), pipes, threads, clocks
+  (threads' CPU time too) and the time
   zone, signals, `posix_spawn`, the network (binding TCP ports, ports
   shared by IPv4 and IPv6-only sockets, and the host's servers through
   QEMU), nice values and processors, `timerfd`, `epoll`, `eventfd`, Unix
@@ -324,7 +329,8 @@ licences ([Licensing](LICENSING.md)), whose texts the image carries in
 - **`systest`** runs them inside Veda with `verification/c/hello.c`, each
   linked at a fixed address and position-independent, and tests the
   kernel's sockets, memory protection, private memory, exit futexes and
-  the VFS's open files.
+  futexes in shared memory, and the VFS's open files and shared memory
+  objects.
 - **`verification/ui/c-programs.vts`** runs programs in the Terminal
   (exit statuses, an interactive program, Ctrl+C and Ctrl+D, pipes and
   files), and **`c-compile.vts`** compiles one with GCC inside Veda.

@@ -31,6 +31,7 @@ pub mod errno {
     pub const EFBIG: isize = linux_raw_sys::errno::EFBIG as isize;
     pub const EBUSY: isize = linux_raw_sys::errno::EBUSY as isize;
     pub const EEXIST: isize = linux_raw_sys::errno::EEXIST as isize;
+    pub const EXDEV: isize = linux_raw_sys::errno::EXDEV as isize;
     pub const ENODEV: isize = linux_raw_sys::errno::ENODEV as isize;
     pub const ENOTDIR: isize = linux_raw_sys::errno::ENOTDIR as isize;
     pub const EISDIR: isize = linux_raw_sys::errno::EISDIR as isize;
@@ -114,6 +115,7 @@ pub mod at {
     /// `dirfd` meaning the working directory.
     pub const FDCWD: i32 = linux_raw_sys::general::AT_FDCWD;
     pub const SYMLINK_NOFOLLOW: u32 = linux_raw_sys::general::AT_SYMLINK_NOFOLLOW;
+    pub const SYMLINK_FOLLOW: u32 = linux_raw_sys::general::AT_SYMLINK_FOLLOW;
     pub const REMOVEDIR: u32 = linux_raw_sys::general::AT_REMOVEDIR;
     pub const EMPTY_PATH: u32 = linux_raw_sys::general::AT_EMPTY_PATH;
     pub const NO_AUTOMOUNT: u32 = linux_raw_sys::general::AT_NO_AUTOMOUNT;

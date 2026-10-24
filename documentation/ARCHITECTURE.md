@@ -217,7 +217,10 @@ logs (see [the driver VM](DRIVERVM.md)).
   and other background work), a thread that has waited a second for a
   processor runs a time slice at `NORMAL`: otherwise, while ordinary
   threads keep every processor busy, it would never run again, nor would
-  a thread waiting for a lock it holds. A thread can name an *exit
+  a thread waiting for a lock it holds. A futex is the word in the memory
+  that holds it: a VMO's, wherever the VMO is mapped, so that C programs'
+  process-shared semaphores and locks wait on it together, or private
+  memory's, the process's. A thread can name an *exit
   futex*, which the kernel clears and wakes once the thread has left its
   stack, so that thread libraries can join it. A thread
   handle with `MANAGE` can stop the thread (`thread_suspend`, which
@@ -345,7 +348,11 @@ every other device to Linux in [the driver VM](DRIVERVM.md).
   a later one uses.
 - **The VFS** (`vfs`) serves `/system` read-only from the initrd, keeps
   `/home` and `/tmp` in memory, and has `null`, `zero`, `full`, `random`
-  and `urandom` in `/dev`. A file of `/system` is given out as the image's
+  and `urandom` in `/dev`, and in `/dev/shm` shared memory objects:
+  memory with names (a VMO each), which its files read and write and hand
+  out to map (`file::memory`), shared by every process that maps one, and
+  which alone have links (`vfs::link`), as `sem_open` gives a semaphore
+  its name. A file of `/system` is given out as the image's
   own pages (`file::pages`, a slice of the initrd's VMO), which programs
   run from and map read-only, shared and never copied. A file kept in
   memory takes its size and an eighth more at most: one that outgrows its

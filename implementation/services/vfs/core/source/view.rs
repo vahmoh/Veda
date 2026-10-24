@@ -16,6 +16,12 @@
 //!
 //! Paths are their components, as `tree::components` makes them: absolute
 //! and without `.` or `..`, so that no path names a place it is not in.
+//!
+//! `/dev/shm`, where programs keep the memory they share
+//! ([`crate::shm`]), is reached by places at or inside it alone: one that
+//! holds it (`/dev`, as a program is given the devices to read, or `/`)
+//! reaches the rest, so that no confined program reaches the memory of
+//! others by being given what holds it.
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -179,8 +185,19 @@ impl View {
     }
 }
 
+/// The components of `/dev/shm`, which only places at or inside it reach.
+const SHM: [&str; 2] = ["dev", "shm"];
+
+/// Whether `comps` is `/dev/shm` or inside it.
+fn in_shm<S: AsRef<str>>(comps: &[S]) -> bool {
+    comps.len() >= SHM.len() && comps.iter().zip(SHM).all(|(c, s)| c.as_ref() == s)
+}
+
 /// How `places` reach the path of `comps`.
 fn reach<'a>(places: impl Iterator<Item = &'a Place> + Clone, comps: &[&str]) -> Reach {
+    // Inside `/dev/shm`, the places there alone count.
+    let shm = in_shm(comps);
+    let places = places.filter(move |p| !shm || in_shm(&p.comps));
     // The innermost place that holds it says how.
     let holder = places.clone().filter(|p| p.holds(comps)).max_by_key(|p| p.comps.len());
     match holder {
@@ -220,6 +237,27 @@ mod tests {
     /// What a page's process reaches (the browser's web processes).
     fn page() -> View {
         view(&["/system", "/tmp/fontconfig", "/dev", "+/dev/null"])
+    }
+
+    #[test]
+    fn shared_memory_is_reached_by_its_own_places() {
+        // The devices to read, or everything, do not reach the memory of
+        // others.
+        let v = page();
+        assert_eq!(reach(&v, "/dev/shm"), Reach::None);
+        assert_eq!(reach(&v, "/dev/shm/psm_1234"), Reach::None);
+        assert!(!v.shows(&["dev"], "shm") && v.shows(&["dev"], "zero"));
+        assert_eq!(reach(&view(&["+/"]), "/dev/shm/psm_1234"), Reach::None);
+        assert_eq!(reach(&view(&["+/"]), "/dev/null"), Reach::Write);
+        // A place inside it does.
+        let v = view(&["/dev", "+/dev/shm/mine"]);
+        assert_eq!(reach(&v, "/dev/shm/mine"), Reach::Write);
+        assert_eq!(reach(&v, "/dev/shm"), Reach::Through);
+        assert_eq!(reach(&v, "/dev/shm/other"), Reach::None);
+        assert_eq!(reach(&v, "/dev/zero"), Reach::Read);
+        assert_eq!(reach(&view(&["/dev/shm"]), "/dev/shm/other"), Reach::Read);
+        // `/dev/shmem` is no part of it.
+        assert_eq!(reach(&page(), "/dev/shmem"), Reach::Read);
     }
 
     #[test]

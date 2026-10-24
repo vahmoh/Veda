@@ -26,6 +26,7 @@
 #include <pthread.h>
 #include <pwd.h>
 #include <sched.h>
+#include <semaphore.h>
 #include <setjmp.h>
 #include <signal.h>
 #include <spawn.h>
@@ -2222,6 +2223,11 @@ static int sandboxed(void)
 	      "it opened ./outside");
 	errno = 0;
 	CHECK("sandbox: nor can it be made", mkdir("/tmp/escape", 0755) != 0 && errno == ENOENT, "made /tmp/escape");
+	/* Being given the devices to read reaches no other program's shared
+	   memory. */
+	errno = 0;
+	CHECK("sandbox: nor others' shared memory", access("/dev/shm", F_OK) != 0 && errno == ENOENT,
+	      "/dev/shm is there");
 	CHECK("sandbox: the root lists the way to its places", listing("/", text, sizeof text) == 3 &&
 	      !strcmp(text, "dev system tmp"), "it lists '%s'", text);
 	listing(dir, text, sizeof text);
@@ -2516,6 +2522,205 @@ static void check_taking_back(void)
 	      "it did not exit well");
 }
 
+/* POSIX shared memory (shm_open): objects of /dev/shm, named for every
+   process. A mapping of one is its memory, which a child that opens it by
+   its name shares; opened to read, it maps to read alone; a name is given
+   once, and an object whose name is gone stays for those that have it. */
+static void check_shared_memory(void)
+{
+	const size_t page = VEDA_PAGE_SIZE, len = 3 * VEDA_PAGE_SIZE;
+	const char *name = "/veda-posix-check";
+	shm_unlink(name);
+	int fd = shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0600);
+	CHECK("shm_open", fd >= 0, "%s", strerror(errno));
+	if (fd < 0)
+		return;
+	struct stat st;
+	CHECK("a shared memory object takes a size",
+	      ftruncate(fd, len + 100) == 0 && fstat(fd, &st) == 0 && st.st_size == (off_t)(len + 100) &&
+		      S_ISREG(st.st_mode),
+	      "size %lld", (long long)st.st_size);
+	char *m = mmap(0, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	CHECK("a shared memory object maps to write", m != MAP_FAILED, "mmap: %s", strerror(errno));
+	if (m == MAP_FAILED) {
+		close(fd);
+		shm_unlink(name);
+		return;
+	}
+	strcpy(m + page, "from the parent");
+	int again = shm_open(name, O_RDWR, 0);
+	char *n = again >= 0 ? mmap(0, len, PROT_READ, MAP_SHARED, again, 0) : MAP_FAILED;
+	CHECK("opened by its name again, it is the same memory", n != MAP_FAILED && !strcmp(n + page, "from the parent"),
+	      "%s", strerror(errno));
+	if (n != MAP_FAILED)
+		munmap(n, len);
+	if (again >= 0)
+		close(again);
+	errno = 0;
+	CHECK("a shared memory object's name is given once",
+	      shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0600) == -1 && errno == EEXIST, "%s", strerror(errno));
+	int ro = shm_open(name, O_RDONLY, 0);
+	errno = 0;
+	void *w = ro >= 0 ? mmap(0, page, PROT_READ | PROT_WRITE, MAP_SHARED, ro, 0) : MAP_FAILED;
+	CHECK("opened to read, it does not map to write", ro >= 0 && w == MAP_FAILED && errno == EACCES, "%s",
+	      strerror(errno));
+	if (ro >= 0)
+		close(ro);
+	/* A child opens it by its name, finds what this process wrote and
+	   writes its answer. */
+	char out[256];
+	int status = 0;
+	int r = spawn_child_with("shm", name, out, sizeof out, &status);
+	CHECK("a child shares it by its name",
+	      r == 0 && WIFEXITED(status) && WEXITSTATUS(status) == 0 && !strcmp(m + 2 * page, "from the child"),
+	      "status %#x: '%s'", status, out);
+	/* And one given its descriptor maps it as well. */
+	CHECK("a child shares it by its descriptor", exited_well(spawn_with(fd, "shm-fd")) && !strcmp(m, "by descriptor"),
+	      "child failed");
+	struct stat d;
+	CHECK("/dev/shm holds it",
+	      stat("/dev/shm", &d) == 0 && S_ISDIR(d.st_mode) && stat("/dev/shm/veda-posix-check", &st) == 0 &&
+		      st.st_size == (off_t)(len + 100),
+	      "%s", strerror(errno));
+	CHECK("shm_unlink", shm_unlink(name) == 0, "%s", strerror(errno));
+	errno = 0;
+	CHECK("a shared memory object's name goes",
+	      shm_open(name, O_RDWR, 0) == -1 && errno == ENOENT && shm_unlink(name) == -1 && errno == ENOENT, "%s",
+	      strerror(errno));
+	strcpy(m, "still there");
+	CHECK("its memory stays for those that have it",
+	      pread(fd, out, 11, 0) == 11 && !memcmp(out, "still there", 11), "read '%.11s'", out);
+	errno = 0;
+	CHECK("shared memory objects are named in one directory",
+	      shm_open("/veda/check", O_RDWR | O_CREAT, 0600) == -1 && errno == EINVAL, "%s", strerror(errno));
+	munmap(m, len);
+	close(fd);
+}
+
+/* What a parent and its child keep in a memory file they share: a
+   semaphore each way, and a lock. */
+struct shared_sync {
+	sem_t to_parent, to_child;
+	pthread_mutex_t lock;
+	int held;
+};
+
+/* The realtime clock's time `ms` milliseconds from now, for timed waits. */
+static struct timespec in_ms(long ms)
+{
+	struct timespec t;
+	clock_gettime(CLOCK_REALTIME, &t);
+	t.tv_sec += ms / 1000;
+	t.tv_nsec += ms % 1000 * 1000000;
+	if (t.tv_nsec >= 1000000000) {
+		t.tv_sec++;
+		t.tv_nsec -= 1000000000;
+	}
+	return t;
+}
+
+static void *post_later(void *arg)
+{
+	usleep(50000);
+	sem_post(arg);
+	return 0;
+}
+
+/* Semaphores: one of this process's threads (sem_init), and those of
+   processes, by name (sem_open) and in the memory they share
+   (sem_init with pshared), with a lock there too
+   (PTHREAD_PROCESS_SHARED): the waits of each end in the other. */
+static void check_semaphores(void)
+{
+	sem_t s;
+	int v = -1;
+	CHECK("sem_init", sem_init(&s, 0, 1) == 0, "%s", strerror(errno));
+	errno = 0;
+	CHECK("sem_wait and sem_trywait", sem_wait(&s) == 0 && sem_trywait(&s) == -1 && errno == EAGAIN, "%s",
+	      strerror(errno));
+	struct timespec t = in_ms(50);
+	errno = 0;
+	CHECK("sem_timedwait times out", sem_timedwait(&s, &t) == -1 && errno == ETIMEDOUT, "%s", strerror(errno));
+	pthread_t th;
+	if (pthread_create(&th, 0, post_later, &s) == 0) {
+		t = in_ms(10000);
+		CHECK("a thread's sem_post ends a wait", sem_timedwait(&s, &t) == 0, "%s", strerror(errno));
+		pthread_join(th, 0);
+	}
+	CHECK("sem_post and sem_getvalue", sem_post(&s) == 0 && sem_post(&s) == 0 && sem_getvalue(&s, &v) == 0 && v == 2,
+	      "value %d", v);
+	sem_destroy(&s);
+
+	/* Named: two a child opens too. It posts the one, and waits on the
+	   other, which this process posts once it waits. */
+	const char *ping = "/veda-check-ping", *pong = "/veda-check-pong";
+	sem_unlink(ping);
+	sem_unlink(pong);
+	sem_t *a = sem_open(ping, O_CREAT | O_EXCL, 0600, 0), *b = sem_open(pong, O_CREAT | O_EXCL, 0600, 0);
+	CHECK("sem_open", a != SEM_FAILED && b != SEM_FAILED, "%s", strerror(errno));
+	if (a == SEM_FAILED || b == SEM_FAILED)
+		return;
+	errno = 0;
+	CHECK("a semaphore's name is given once", sem_open(ping, O_CREAT | O_EXCL, 0600, 0) == SEM_FAILED && errno == EEXIST,
+	      "%s", strerror(errno));
+	sem_t *again = sem_open(ping, 0);
+	CHECK("opened again, a semaphore is where it was", again == a, "%p, not %p", (void *)again, (void *)a);
+	if (again != SEM_FAILED)
+		sem_close(again);
+	CHECK("a semaphore's name is in /dev/shm", access("/dev/shm/veda-check-ping", F_OK) == 0, "%s", strerror(errno));
+	char *argv[] = { "posix", "child", "sem", 0 };
+	pid_t pid = 0;
+	int r = posix_spawn(&pid, program, 0, 0, argv, environ);
+	CHECK("a child for semaphores", r == 0, "posix_spawn returned %d", r);
+	if (!r) {
+		t = in_ms(20000);
+		CHECK("another process's sem_post ends a wait", sem_timedwait(b, &t) == 0, "%s", strerror(errno));
+		/* The child waits by now. */
+		usleep(100000);
+		CHECK("sem_post ends another process's wait", sem_post(a) == 0 && exited_well(pid), "the child failed");
+	}
+	CHECK("sem_close and sem_unlink", sem_close(a) == 0 && sem_close(b) == 0 && sem_unlink(ping) == 0 &&
+	      sem_unlink(pong) == 0, "%s", strerror(errno));
+	errno = 0;
+	CHECK("a semaphore's name goes", sem_open(ping, 0) == SEM_FAILED && errno == ENOENT, "%s", strerror(errno));
+
+	/* In shared memory: a memory file, which a child maps as its
+	   descriptor 3. */
+	int fd = memfd_create("semaphores", MFD_CLOEXEC);
+	struct shared_sync *sh = MAP_FAILED;
+	if (fd >= 0 && ftruncate(fd, sizeof *sh) == 0)
+		sh = mmap(0, sizeof *sh, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	pthread_mutexattr_t ma;
+	pthread_mutexattr_init(&ma);
+	pthread_mutexattr_setpshared(&ma, PTHREAD_PROCESS_SHARED);
+	CHECK("process-shared semaphores and locks",
+	      sh != MAP_FAILED && sem_init(&sh->to_parent, 1, 0) == 0 && sem_init(&sh->to_child, 1, 0) == 0 &&
+		      pthread_mutex_init(&sh->lock, &ma) == 0,
+	      "%s", strerror(errno));
+	pthread_mutexattr_destroy(&ma);
+	if (sh == MAP_FAILED) {
+		close(fd);
+		return;
+	}
+	pthread_mutex_lock(&sh->lock);
+	pid = spawn_with(fd, "sem-shared");
+	t = in_ms(20000);
+	CHECK("a semaphore in shared memory, posted by another process", pid > 0 && sem_timedwait(&sh->to_parent, &t) == 0,
+	      "%s", strerror(errno));
+	/* It waits on the other semaphore, then on the lock. */
+	usleep(100000);
+	sem_post(&sh->to_child);
+	usleep(100000);
+	sh->held = 1;
+	pthread_mutex_unlock(&sh->lock);
+	CHECK("a process-shared lock and semaphore, waited for by another process", exited_well(pid), "the child failed");
+	sem_destroy(&sh->to_parent);
+	sem_destroy(&sh->to_child);
+	pthread_mutex_destroy(&sh->lock);
+	munmap(sh, sizeof *sh);
+	close(fd);
+}
+
 static int child(const char *mode, const char *arg)
 {
 	if (!strcmp(mode, "sandbox"))
@@ -2642,6 +2847,57 @@ static int child(const char *mode, const char *arg)
 		close(fd);
 		return write(3, "!", 1) == 1 ? 0 : 3;
 	}
+	if (!strcmp(mode, "shm") && arg) {
+		/* The parent's shared memory object `arg`: what the parent wrote,
+		   and the answer. */
+		const size_t page = VEDA_PAGE_SIZE;
+		int fd = shm_open(arg, O_RDWR, 0);
+		struct stat st;
+		if (fd < 0 || fstat(fd, &st) != 0 || st.st_size != (off_t)(3 * page + 100))
+			return 1;
+		char *m = mmap(0, 3 * page, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+		if (m == MAP_FAILED || strcmp(m + page, "from the parent"))
+			return 2;
+		strcpy(m + 2 * page, "from the child");
+		return 0;
+	}
+	if (!strcmp(mode, "shm-fd")) {
+		/* Descriptor 3 is the parent's shared memory object. */
+		char *m = mmap(0, VEDA_PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, 3, 0);
+		if (m == MAP_FAILED)
+			return 1;
+		strcpy(m, "by descriptor");
+		return 0;
+	}
+	if (!strcmp(mode, "sem")) {
+		/* The parent's named semaphores: it posts the one, and waits on
+		   the other. */
+		sem_t *ping = sem_open("/veda-check-ping", 0), *pong = sem_open("/veda-check-pong", 0);
+		if (ping == SEM_FAILED || pong == SEM_FAILED)
+			return 1;
+		if (sem_post(pong))
+			return 2;
+		struct timespec t = in_ms(20000);
+		return sem_timedwait(ping, &t) == 0 ? 0 : 3;
+	}
+	if (!strcmp(mode, "sem-shared")) {
+		/* Descriptor 3 is a memory file with the parent's semaphores and
+		   lock: it posts the one semaphore, waits on the other, then on
+		   the lock, which the parent holds until it says so. */
+		struct shared_sync *sh = mmap(0, sizeof *sh, PROT_READ | PROT_WRITE, MAP_SHARED, 3, 0);
+		if (sh == MAP_FAILED)
+			return 1;
+		if (sem_post(&sh->to_parent))
+			return 2;
+		struct timespec t = in_ms(20000);
+		if (sem_timedwait(&sh->to_child, &t))
+			return 3;
+		if (pthread_mutex_timedlock(&sh->lock, &t))
+			return 4;
+		int held = sh->held;
+		pthread_mutex_unlock(&sh->lock);
+		return held ? 0 : 5;
+	}
 	if (!strcmp(mode, "echo")) {
 		printf("child says hello %s\n", getenv("VEDA_TEST") ? getenv("VEDA_TEST") : "(no env)");
 		return 7;
@@ -2672,6 +2928,8 @@ int main(int argc, char **argv)
 	check_system_files();
 	check_databases();
 	check_memfd();
+	check_shared_memory();
+	check_semaphores();
 	check_files();
 	check_directories();
 	check_pipes();

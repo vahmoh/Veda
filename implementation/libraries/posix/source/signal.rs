@@ -641,9 +641,10 @@ pub fn futex_wait_ends() -> bool {
 
 /// Wakes thread `tp` from the futex wait it is in, or about to be in, while
 /// signal `s` is pending for it and not blocked. The wake reaches every
-/// thread waiting on that futex, which the others take for a spurious one;
-/// it is repeated, a moment apart, until the thread has left the wait, in
-/// case it had not reached the kernel yet.
+/// thread waiting on that futex (in other processes too, for a word of
+/// memory they share), which the others take for a spurious one; it is
+/// repeated, a moment apart, until the thread has left the wait, in case
+/// it had not reached the kernel yet.
 fn wake_from_futex(tp: usize, s: u32) {
     loop {
         let addr = {

@@ -398,6 +398,17 @@ impl AddressSpace {
         (addr < m.end()).then(|| m.vmo_offset + (addr - m.start))
     }
 
+    /// The VMO the byte at `addr` is in and its offset there, by the VMO's
+    /// kernel object id: where every mapping of the VMO, in any address
+    /// space, reaches the same byte (what a shared futex is known by).
+    /// `None` where nothing is mapped, and for private memory
+    /// ([`Mapping::private`]), which no other mapping reaches.
+    pub fn shared_location(&self, addr: u64) -> Option<(u64, u64)> {
+        let map = self.mappings.lock();
+        let (_, m) = map.range(..=addr).next_back()?;
+        (addr < m.end() && !m.private).then(|| (m.vmo.koid, m.vmo_offset + (addr - m.start)))
+    }
+
     /// Resolves a user page fault.
     pub fn handle_fault(&self, addr: u64, write: bool, exec: bool) -> Fault {
         let map = self.mappings.lock();

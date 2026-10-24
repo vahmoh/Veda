@@ -14,9 +14,9 @@ ac_cv_file__dev_ptc=no
 # says.
 ac_cv_buggy_getaddrinfo=no
 
-# Semaphores between processes (sem_open) are named in /dev/shm, which Veda
-# has not: those within a process (sem_init) work.
-ac_cv_posix_semaphores_enabled=no
+# Semaphores between processes (sem_open) are named in /dev/shm, where Veda
+# keeps its shared memory objects, and sem_getvalue() works.
+ac_cv_posix_semaphores_enabled=yes
 ac_cv_broken_sem_getvalue=no
 
 # tzset() reads POSIX time zones from TZ (there is no tz database).

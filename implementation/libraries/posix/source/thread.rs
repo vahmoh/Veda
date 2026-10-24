@@ -12,6 +12,14 @@
 //! for good (`CLONE_CHILD_CLEARTID`). A detached thread ends by freeing its
 //! own stack ([`__veda_unmapself`]).
 //!
+//! Futexes are the kernel's, each the word in the memory that holds it,
+//! whatever Linux's `FUTEX_PRIVATE_FLAG` says: the locks, conditions and
+//! semaphores C programs keep in memory they share with other processes (a
+//! memory file's, a shared memory object's) wait and wake across them, and
+//! a word of the C library's own that it waits on both ways (its thread
+//! list's lock, which a thread's exit futex wakes as it ends) is one futex,
+//! as on Linux.
+//!
 //! Each thread has an id of its own in the process (`signal`), which musl
 //! keeps as the owner of the locks it holds: the main thread's is the
 //! process id; `gettid` gives the caller's.

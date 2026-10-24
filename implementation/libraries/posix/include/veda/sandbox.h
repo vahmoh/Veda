@@ -43,7 +43,9 @@ struct veda_place {
  * it reaches what is inside them, the innermost place that holds a path
  * saying how ("/dev" to read, "/dev/null" to write too), and the
  * directories on the way to them, which it can stat and list, but which
- * list only what leads on to a place. Nothing else is there (ENOENT), what
+ * list only what leads on to a place. The shared memory objects of
+ * /dev/shm are reached by places at or inside it alone, not by one that
+ * holds it ("/dev"). Nothing else is there (ENOENT), what
  * it may only read it cannot change (EACCES), and Unix domain sockets have
  * no abstract names for it. Confining the files again narrows them: places
  * that would reach more are refused (EACCES).

@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Tests of what C programs stand on: sockets, memory protection, private
-//! memory, the thread exit futex, the VFS's open-file connections, ending a
-//! job, and the C programs themselves (`/system/tests/c`, built by the cross
+//! memory, the thread exit futex and futexes in shared memory, the VFS's open-file
+//! connections and shared memory objects, ending a job, and the C programs
+//! themselves (`/system/tests/c`, built by the cross
 //! toolchain), and the Rust programs on its standard library, which stand
 //! on the C library too (`/system/tests/rust`, built by Rust's), as Python
 //! does (`/system/tests/python`).
@@ -17,7 +18,7 @@ use abi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE};
 use abi::startup::role;
 use abi::{Error, Rights, map_flags, nr};
 use ipc::Bytes;
-use proto::fs::{FsError, file, open_flags, seek, vfs};
+use proto::fs::{FsError, device, file, open_flags, seek, vfs};
 use rt::object::{Channel, Process, Socket, Vmo};
 use rt::process::Spawn;
 use rt::sys::call;
@@ -498,9 +499,120 @@ pub fn test_exit_futex() -> TestResult {
     t.join().map_err(s)
 }
 
+/// Wakes the futex at `addr` until a waiter is woken, which may not be
+/// waiting yet: `false` if none is within five seconds.
+fn wake_one(addr: usize) -> bool {
+    let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(5));
+    while rt::time::now_ns() < deadline {
+        if call(nr::FUTEX_WAKE, [addr, 1, 0, 0, 0, 0]) == Ok(1) {
+            return true;
+        }
+        rt::time::sleep(rt::time::Duration::from_millis(1));
+    }
+    false
+}
+
+/// A futex is the word in its memory, wherever that is mapped: a wait
+/// through one mapping of a VMO is woken through another, as through
+/// another process's; and so is a wait on a thread's exit futex there (as
+/// the C library's threads end, their exit futex a word of its data, which
+/// is a VMO's).
+pub fn test_shared_futex() -> TestResult {
+    let page = abi::PAGE_SIZE;
+    let vmo = Vmo::create(page).map_err(s)?;
+    let rw = map_flags::READ | map_flags::WRITE;
+    let a = vmo.map(0, page, rw).map_err(s)?;
+    let b = vmo.map(0, page, rw).map_err(s)?;
+    let (wa, wb) = (a + 64, b + 64);
+    // SAFETY: both mappings are this test's, and the word is aligned.
+    let word = unsafe { &*(wa as *const AtomicU32) };
+    word.store(1, Ordering::SeqCst);
+    let waiter = rt::thread::spawn(move || {
+        let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(10));
+        call(nr::FUTEX_WAIT, [wa, 1, deadline as usize, 0, 0, 0])
+    });
+    check(wake_one(wb), "a wait through one mapping is woken through another")?;
+    check(waiter.join().map_err(s)? == Ok(0), "the wait ends woken")?;
+
+    // A thread's exit futex: cleared as it ends, and its waiter woken,
+    // through the other mapping.
+    word.store(1, Ordering::SeqCst);
+    let t = rt::thread::spawn(move || {
+        let _ = call(nr::THREAD_SET_EXIT_FUTEX, [wa, 0, 0, 0, 0, 0]);
+    });
+    let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(5));
+    while word.load(Ordering::Acquire) != 0 {
+        match call(nr::FUTEX_WAIT, [wb, 1, deadline as usize, 0, 0, 0]) {
+            Ok(_) | Err(Error::ShouldWait) => {}
+            Err(e) => return Err(format!("waiting for a thread to end: {e}")),
+        }
+    }
+    t.join().map_err(s)?;
+    vm::unmap(None, a, page).map_err(s)?;
+    vm::unmap(None, b, page).map_err(s)
+}
+
 fn open_file(fs: &vfs::Client, path: &str, flags: u32) -> Result<file::Client, String> {
     let (ch, _) = fs.open_file(path.into(), flags).map_err(s)?.map_err(|e| format!("open {path}: {e}"))?;
     Ok(file::Client::new(ch))
+}
+
+/// `/dev/shm`'s shared memory objects: files whose bytes are memory, which
+/// their connections hand out to map, shared with what else maps it; their
+/// names, links among them, and their lives.
+pub fn test_vfs_shared_memory() -> TestResult {
+    let fs = vfs_client()?;
+    let (path, other) = ("/dev/shm/systest", "/dev/shm/systest-link");
+    let rw = open_flags::READ | open_flags::WRITE;
+    let f = open_file(&fs, path, rw | open_flags::CREATE | open_flags::EXCLUSIVE)?;
+    let st = f.stat().map_err(s)?.map_err(s)?;
+    check(st.device == device::SHM && st.size == 0 && !st.is_dir, "a new object, empty")?;
+    f.truncate(5000).map_err(s)?.map_err(s)?;
+    check(f.stat().map_err(s)?.map_err(s)?.size == 5000, "it has the size it was given")?;
+    // Its memory, mapped past its size, is what its files read.
+    let page = abi::PAGE_SIZE;
+    let vmo = f.memory(2 * page as u64).map_err(s)?.map_err(s)?;
+    let at = vmo.map(0, 2 * page, map_flags::READ | map_flags::WRITE).map_err(s)?;
+    // SAFETY: the mapping was just made, two pages, writable.
+    unsafe { core::ptr::copy_nonoverlapping(b"shared".as_ptr(), (at + 100) as *mut u8, 6) };
+    let g = open_file(&fs, path, open_flags::READ)?;
+    check(g.read_at(100, 6).map_err(s)?.map_err(s)?.0 == b"shared", "files read what its mappings write")?;
+    check(g.stat().map_err(s)?.map_err(s)?.size == 5000, "a mapping leaves the size alone")?;
+    f.write_at(200, Bytes(b"written".to_vec())).map_err(s)?.map_err(s)?;
+    // SAFETY: within the mapping.
+    let seen = unsafe { core::slice::from_raw_parts((at + 200) as *const u8, 7) };
+    check(seen == b"written", "mappings see what its files write")?;
+    vm::unmap(None, at, 2 * page).map_err(s)?;
+    // Opened to read, its memory cannot be written.
+    let ro = g.memory(page as u64).map_err(s)?.map_err(s)?;
+    check(ro.map(0, page, map_flags::READ | map_flags::WRITE) == Err(Error::AccessDenied), "read-only memory")?;
+    let r = ro.map(0, page, map_flags::READ).map_err(s)?;
+    vm::unmap(None, r, page).map_err(s)?;
+    let plain = open_file(&fs, "/tmp/systest-plain", rw | open_flags::CREATE)?;
+    check(matches!(plain.memory(page as u64).map_err(s)?, Err(FsError::Invalid)), "only objects have memory")?;
+    drop(plain);
+    fs.remove("/tmp/systest-plain".into()).map_err(s)?.map_err(s)?;
+
+    // Names: links, which are the object's own, and its directory's.
+    fs.link(path.into(), other.into()).map_err(s)?.map_err(s)?;
+    let (a, b) = (fs.stat(path.into()).map_err(s)?.map_err(s)?, fs.stat(other.into()).map_err(s)?.map_err(s)?);
+    check(a.inode == b.inode && b.size == 5000, "a link names the same object")?;
+    check(fs.link(path.into(), other.into()).map_err(s)? == Err(FsError::Exists), "a name taken is not given")?;
+    check(fs.link("/tmp/x".into(), other.into()).map_err(s)? == Err(FsError::Invalid), "nothing else has links")?;
+    let names: Vec<String> =
+        fs.read_dir("/dev/shm".into()).map_err(s)?.map_err(s)?.into_iter().map(|e| e.name).collect();
+    check(names.iter().any(|n| n == "systest") && names.iter().any(|n| n == "systest-link"), "listed")?;
+    let dev = fs.read_dir("/dev".into()).map_err(s)?.map_err(s)?;
+    check(dev.iter().any(|e| e.name == "shm" && e.is_dir), "/dev lists it")?;
+    check(fs.mkdir("/dev/shm/dir".into()).map_err(s)? == Err(FsError::ReadOnly), "objects alone are there")?;
+
+    // Removed, it stays for what has it open, and goes with the last.
+    fs.remove(path.into()).map_err(s)?.map_err(s)?;
+    check(fs.stat(other.into()).map_err(s)?.is_ok(), "its other name keeps it")?;
+    fs.remove(other.into()).map_err(s)?.map_err(s)?;
+    check(fs.stat(path.into()).map_err(s)? == Err(FsError::NotFound), "names gone")?;
+    check(f.read_at(100, 6).map_err(s)?.map_err(s)?.0 == b"shared", "still there while open")?;
+    Ok(())
 }
 
 /// The VFS's open files: a shared offset across duplicated connections,
