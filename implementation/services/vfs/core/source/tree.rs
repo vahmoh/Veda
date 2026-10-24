@@ -86,27 +86,64 @@ impl Data {
         }
     }
 
-    /// The memory a change takes before it changes anything: a copy of
-    /// [shared](Self::is_shared) contents.
-    pub fn copy_cost(&self) -> usize {
-        if self.is_shared() { self.bytes().len() } else { 0 }
+    /// The most memory a [`resize`](Self::resize) to `len` bytes takes
+    /// besides what the contents have now: a copy of
+    /// [shared](Self::is_shared) contents, or the new room of contents that
+    /// outgrow theirs, which holds them before the old room is let go.
+    pub fn resize_cost(&self, len: usize) -> usize {
+        match self {
+            _ if self.is_shared() => len,
+            Data::Owned(v) if len > v.capacity() => room(v.capacity(), len),
+            _ => 0,
+        }
     }
 
-    /// The contents to change, made the file's own first (a copy of shared
-    /// contents), or `NoSpace` if there is no memory for the copy.
-    pub fn make_mut(&mut self) -> Result<&mut Vec<u8>, FsError> {
+    /// Makes the contents `len` bytes long (cut short, or filled out with
+    /// zeros) and the file's own (a copy of shared contents), to change
+    /// them; `NoSpace` if there is no memory for that.
+    ///
+    /// Contents that outgrow their room get an eighth more than they had:
+    /// a file written a piece at a time then moves to bigger room now and
+    /// then, about eight times its size in all, rather than whole at every
+    /// piece, and keeps at most an eighth more memory than its size. Cut
+    /// well short of their room, contents give the rest back.
+    pub fn resize(&mut self, len: usize) -> Result<&mut [u8], FsError> {
         if self.is_shared() {
             let bytes = self.bytes();
             let mut own = Vec::new();
-            own.try_reserve_exact(bytes.len()).map_err(|_| FsError::NoSpace)?;
-            own.extend_from_slice(bytes);
+            own.try_reserve_exact(len).map_err(|_| FsError::NoSpace)?;
+            own.extend_from_slice(&bytes[..len.min(bytes.len())]);
             *self = Data::owned(own);
         }
-        match self {
-            // Not shared now: the only reference.
-            Data::Owned(v) => Rc::get_mut(v).ok_or(FsError::Io),
-            Data::Static(_) => Err(FsError::Io),
+        // Not shared now: the only reference.
+        let Data::Owned(v) = self else { return Err(FsError::Io) };
+        let v = Rc::get_mut(v).ok_or(FsError::Io)?;
+        let was = v.len();
+        if len > v.capacity() {
+            v.try_reserve_exact(room(v.capacity(), len) - was).map_err(|_| FsError::NoSpace)?;
         }
+        v.resize(len, 0);
+        if len < was && v.capacity() - len > len / 8 {
+            give_back(v);
+        }
+        Ok(v)
+    }
+}
+
+/// The room contents that outgrow `room` bytes get to hold `len`: what
+/// they need, and an eighth more than they had at least.
+fn room(room: usize, len: usize) -> usize {
+    len.max(room.saturating_add(room / 8))
+}
+
+/// Moves contents to room of just their size, giving the rest back, if
+/// there is memory for the move (`shrink_to_fit` would end the service if
+/// there were not).
+fn give_back(v: &mut Vec<u8>) {
+    let mut fit = Vec::new();
+    if fit.try_reserve_exact(v.len()).is_ok() {
+        fit.extend_from_slice(v);
+        *v = fit;
     }
 }
 
@@ -708,11 +745,11 @@ mod tests {
         let a = t.add_file(&["a"], Data::owned(b"abc".to_vec())).unwrap();
         let Some(Node { kind: Kind::File(d), .. }) = t.node(a) else { unreachable!() };
         let copy = d.share();
-        assert!(d.is_shared() && copy.is_shared() && d.copy_cost() == 3);
+        assert!(d.is_shared() && copy.is_shared() && d.resize_cost(4) == 4);
         let b = t.create(&["b"], Kind::File(copy)).unwrap();
         let Some(Node { kind: Kind::File(d), .. }) = t.node_mut(b) else { unreachable!() };
-        d.make_mut().unwrap().push(b'd');
-        assert!(!d.is_shared() && d.copy_cost() == 0);
+        d.resize(4).unwrap()[3] = b'd';
+        assert!(!d.is_shared() && d.resize_cost(4) == 0);
         let read = |t: &Tree, id| match &t.node(id).unwrap().kind {
             Kind::File(d) => d.bytes().to_vec(),
             Kind::Dir(_) | Kind::Socket(_) => unreachable!(),
@@ -723,10 +760,66 @@ mod tests {
         assert!(!d.is_shared());
         // The system image's contents are copied on the first change.
         let mut s = Data::Static(b"image");
-        assert_eq!(s.copy_cost(), 5);
-        s.make_mut().unwrap().push(b'!');
+        assert_eq!(s.resize_cost(6), 6);
+        s.resize(6).unwrap()[5] = b'!';
         assert_eq!(s.bytes(), b"image!");
-        assert_eq!(s.copy_cost(), 0);
+        assert_eq!(s.resize_cost(6), 0);
+        // A copy cut short copies what is kept alone.
+        let whole = Data::owned(b"abcdef".to_vec());
+        let mut cut = whole.share();
+        assert_eq!(cut.resize_cost(3), 3);
+        cut.resize(3).unwrap();
+        assert_eq!((whole.bytes(), cut.bytes()), (&b"abcdef"[..], &b"abc"[..]));
+    }
+
+    /// The memory contents have room for.
+    fn room_of(d: &Data) -> usize {
+        match d {
+            Data::Owned(v) => v.capacity(),
+            Data::Static(_) => 0,
+        }
+    }
+
+    #[test]
+    fn contents_that_outgrow_their_room_get_an_eighth_more() {
+        // Written whole, contents take just their size.
+        let mut d = Data::empty();
+        d.resize(800).unwrap();
+        assert_eq!((room_of(&d), d.resize_cost(800)), (800, 0));
+        // Outgrowing it, an eighth more than they had, or what they need.
+        assert_eq!((d.resize_cost(801), d.resize_cost(2000)), (900, 2000));
+        d.resize(801).unwrap();
+        assert_eq!((room_of(&d), d.resize_cost(900)), (900, 0));
+        // Written a piece at a time, a file is moved about eight times its
+        // size in all, and keeps an eighth more memory at most.
+        let mut d = Data::empty();
+        let (piece, size) = (32, 1 << 20);
+        let mut moved = 0;
+        for len in (piece..=size).step_by(piece) {
+            if len > room_of(&d) {
+                moved += len - piece;
+            }
+            d.resize(len).unwrap()[len - piece..].fill(1);
+        }
+        assert!(moved < 9 * size && room_of(&d) <= size + size / 8, "{moved} {}", room_of(&d));
+        assert!(d.bytes().len() == size && d.bytes().iter().all(|&b| b == 1));
+    }
+
+    #[test]
+    fn contents_cut_well_short_give_memory_back() {
+        let bytes: Vec<u8> = (0..=255).cycle().take(1000).collect();
+        let mut d = Data::owned(bytes.clone());
+        // Cut a little, they keep their room.
+        d.resize(900).unwrap();
+        assert_eq!((room_of(&d), d.bytes()), (1000, &bytes[..900]));
+        // Cut by more than an eighth of what is left, they give it back.
+        d.resize(800).unwrap();
+        assert_eq!((room_of(&d), d.bytes()), (800, &bytes[..800]));
+        // Grown again, the new bytes are zeros.
+        d.resize(810).unwrap();
+        assert!(d.bytes()[..800] == bytes[..800] && d.bytes()[800..] == [0; 10]);
+        d.resize(0).unwrap();
+        assert_eq!((room_of(&d), d.bytes()), (0, &[][..]));
     }
 
     #[test]

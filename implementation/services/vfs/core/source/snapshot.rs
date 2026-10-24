@@ -423,7 +423,8 @@ mod tests {
         // A changed sample is kept whole.
         let photo = t.lookup(&["home", "user", "Pictures", "photo.png"]).unwrap();
         if let Some(Node { kind: Kind::File(d), .. }) = t.node_mut(photo) {
-            d.make_mut().unwrap().extend_from_slice(b", edited");
+            let len = d.bytes().len();
+            d.resize(len + 8).unwrap()[len..].copy_from_slice(b", edited");
         }
         t
     }

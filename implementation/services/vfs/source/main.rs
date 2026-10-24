@@ -442,15 +442,15 @@ impl Fs {
     }
 
     /// Checks that an open file `node` may become `new_len` bytes long
-    /// (`d` is it now): in memory, where its contents become its own first,
-    /// and on the home disk if it is in `/home`. Returns what its record
-    /// stores now if it is.
+    /// (`d` is it now): in memory, for what resizing its contents takes
+    /// ([`Data::resize_cost`]), and on the home disk if it is in `/home`.
+    /// Returns what its record stores now if it is.
     fn room_for(&self, m: Mount, node: NodeId, d: &Data, new_len: usize) -> Result<Option<usize>, FsError> {
         let stored = self.node_in_home(m, node).then(|| self.stored(d));
         if let Some(stored) = stored {
             self.reserve(new_len.saturating_sub(stored))?;
         }
-        self.memory_for(d.copy_cost() + new_len.saturating_sub(d.bytes().len()))?;
+        self.memory_for(d.resize_cost(new_len))?;
         Ok(stored)
     }
 
@@ -479,19 +479,13 @@ impl Fs {
         let stored = self.room_for(m, node, d, new_len)?;
         let tree = self.tree_mut(m)?;
         let Some(Node { kind: Kind::File(d), .. }) = tree.node_mut(node) else { return Err(FsError::BadFd) };
-        let v = d.make_mut()?;
-        let (at, end) = (at as usize, end as usize);
-        if v.len() < end {
-            v.try_reserve_exact(end - v.len()).map_err(|_| FsError::NoSpace)?;
-            v.resize(end, 0);
-        }
-        v[at..end].copy_from_slice(data);
+        d.resize(new_len)?[at as usize..end as usize].copy_from_slice(data);
         tree.touch(node);
         if let Some(stored) = stored {
             self.home_changed(new_len, stored);
         }
         self.changed();
-        Ok(at as u64)
+        Ok(at)
     }
 
     /// Sets the length of an open file.
@@ -515,11 +509,7 @@ impl Fs {
         let stored = self.room_for(m, node, d, len)?;
         let tree = self.tree_mut(m)?;
         let Some(Node { kind: Kind::File(d), .. }) = tree.node_mut(node) else { return Err(FsError::BadFd) };
-        let v = d.make_mut()?;
-        if v.len() < len {
-            v.try_reserve_exact(len - v.len()).map_err(|_| FsError::NoSpace)?;
-        }
-        v.resize(len, 0);
+        d.resize(len)?;
         tree.touch(node);
         if let Some(stored) = stored {
             self.home_changed(len, stored);

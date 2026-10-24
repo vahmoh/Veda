@@ -346,8 +346,13 @@ every other device to Linux in [the driver VM](DRIVERVM.md).
   `/home` and `/tmp` in memory, and has `null`, `zero`, `full`, `random`
   and `urandom` in `/dev`. A file of `/system` is given out as the image's
   own pages (`file::pages`, a slice of the initrd's VMO), which programs
-  run from and map read-only, shared and never copied. With a disk whose serial is `veda-home`, `/home`
-  is restored at boot and saved half a second after changes stop, into
+  run from and map read-only, shared and never copied. A file kept in
+  memory takes its size and an eighth more at most: one that outgrows its
+  room gets an eighth more than it had, so that a file written a piece at
+  a time is copied about eight times its size in all rather than whole at
+  every piece, and one cut well short gives memory back. With a disk whose
+  serial is `veda-home`, `/home` is restored at boot and saved half a
+  second after changes stop, into
   whichever of two checksummed slots does not hold the newest snapshot,
   header last, so an interrupted save never damages the previous one; boot
   restores the newest snapshot that reads back whole. Unchanged sample
