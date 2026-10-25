@@ -1,0 +1,160 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Builds Veda and runs its tests on GitHub's runners, for every push and
+# every pull request from a fork (one from a branch of this repository is
+# tested by its push). The runners have KVM but cannot run the driver VM,
+# which needs VT-x nested in KVM: Veda boots without it (`drivervm=off`),
+# so systest leaves out its checks of the network (`--net none`), and the
+# GUI and agent scripts are left to `cargo automation test --ui`
+# (documentation/DEVELOPING.md, "Scripts and tests").
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # The README's packages but QEMU's, which the tests add without its window
+  # and 3D GPU: the runners have no display or GPU.
+  PACKAGES: >-
+    build-essential bc curl rsync m4 flex bison meson ninja-build cmake nasm libgmp-dev libmpfr-dev
+    libmpc-dev python3 python3-mako python3-packaging python3-yaml
+  # What the heavy builds make, which the cache keeps.
+  HEAVY_BUILDS: |
+    target/toolchain
+    target/linux
+
+jobs:
+  # The heavy builds, from implementation/ports/: the toolchain (GCC, musl,
+  # the media libraries and Rust) and the driver VM's Linux and Mesa. They
+  # take hours on a runner: built once for their ports and the runner's
+  # system, and kept in the cache.
+  heavy:
+    name: Heavy builds
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-26.04
+    outputs:
+      key: ${{ steps.key.outputs.key }}
+    steps:
+      - uses: actions/checkout@v7
+      # The runner's system counts: the cross compilers are linked with its
+      # GMP, MPFR and MPC.
+      - name: Name them
+        id: key
+        env:
+          PORTS: >-
+            ${{ hashFiles('implementation/ports/build.sh', 'implementation/ports/common.sh',
+            'implementation/ports/architectures/**', 'implementation/ports/binutils/**',
+            'implementation/ports/gcc/**', 'implementation/ports/gmp/**', 'implementation/ports/mpfr/**',
+            'implementation/ports/mpc/**', 'implementation/ports/musl/**', 'implementation/ports/dav1d/**',
+            'implementation/ports/ffmpeg/**', 'implementation/ports/rust/**', 'implementation/ports/iana-etc/**',
+            'implementation/ports/zlib/**', 'implementation/ports/elfutils/**', 'implementation/ports/linux/**',
+            'implementation/ports/mesa/**') }}
+        run: |
+          echo "prefix=heavy-builds-$ImageOS-" >> "$GITHUB_OUTPUT"
+          echo "key=heavy-builds-$ImageOS-$PORTS" >> "$GITHUB_OUTPUT"
+      - name: Look for them
+        id: cached
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.HEAVY_BUILDS }}
+          key: ${{ steps.key.outputs.key }}
+          lookup-only: true
+      # A runner has some 25 GB free, which the builds outgrow (24 GB kept,
+      # and Rust's build while it runs): what the runner has for other
+      # languages goes.
+      - name: Make room
+        if: steps.cached.outputs.cache-hit != 'true'
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+      # Else the last ones built, of whose stages only those whose ports
+      # have changed are built again.
+      - name: Restore the last ones
+        if: steps.cached.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.HEAVY_BUILDS }}
+          key: ${{ steps.key.outputs.key }}
+          restore-keys: ${{ steps.key.outputs.prefix }}
+      - name: Install the build tools
+        if: steps.cached.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends $PACKAGES
+          rustup toolchain install
+      # A job has six hours: builds stopped after five are kept unfinished
+      # (below), for the next run to go on with.
+      - name: Build the toolchain and the driver VM's Linux
+        id: build
+        if: steps.cached.outputs.cache-hit != 'true'
+        run: |
+          timeout 300m sh -c 'cargo automation toolchain && cargo automation linux' || {
+            status=$?
+            if [ "$status" = 124 ]; then echo "unfinished=true" >> "$GITHUB_OUTPUT"; fi
+            exit "$status"
+          }
+      - name: Keep them
+        if: steps.cached.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.HEAVY_BUILDS }}
+          key: ${{ steps.key.outputs.key }}
+      - name: Keep them unfinished
+        if: failure() && steps.build.outputs.unfinished == 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.HEAVY_BUILDS }}
+          key: ${{ steps.key.outputs.key }}-unfinished-${{ github.run_id }}
+
+  test:
+    name: Build and test
+    needs: heavy
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      # The heavy builds and Cargo's beside them outgrow the runner's free
+      # space, as above.
+      - name: Make room
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+      - name: Install QEMU and the build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends $PACKAGES qemu-system-x86 ovmf
+          rustup toolchain install
+      # Without it QEMU emulates the processor, too slowly for systest.
+      - name: Give the runner KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          if [ ! -w /dev/kvm ]; then echo "::error::This runner has no KVM."; exit 1; fi
+      - name: Restore the heavy builds
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.HEAVY_BUILDS }}
+          key: ${{ needs.heavy.outputs.key }}
+          fail-on-cache-miss: true
+      # On Intel's processors KVM may let Veda's hypervisor try the driver VM,
+      # three machines deep: it is off on every runner alike.
+      - name: Build Veda and run the tests
+        run: cargo automation test --net none --cmdline drivervm=off
+      # The serial console (the kernel's log and every program's output) and
+      # the screen, as an issue's report has them.
+      - name: Keep the logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: logs
+          path: |
+            target/veda/serial.log
+            target/veda/*.png
+          if-no-files-found: ignore

@@ -162,10 +162,19 @@ pub fn test(o: &Options) -> Result {
     system::save(o, &system, &system::system_dir())?;
     drop(system);
     util::status("Testing", "integration tests inside Veda");
-    // The servers of this computer's that the network checks reach.
-    let host = HostWeb::start()?;
+    // The servers of this computer's that the network checks reach; none
+    // for a machine without a network (`--net none`), where systest leaves
+    // those checks out. Continuous integration tests so, where the driver
+    // VM, which drives the network card, cannot run.
+    let host = if o.vm.net == qemu::NetMode::None {
+        util::status("Note", "systest's checks of the network do not run: the machine has no network (--net none)");
+        None
+    } else {
+        Some(HostWeb::start()?)
+    };
+    let run = host.as_ref().map_or_else(|| "run=systest".to_string(), HostWeb::systest_arg);
     let mut systest = o.clone();
-    systest.cmdline = format!("{} {}", o.cmdline, host.systest_arg()).trim().to_string();
+    systest.cmdline = format!("{} {run}", o.cmdline).trim().to_string();
     // The last test restarts the window system; give the desktop a moment
     // to come back before the screenshot.
     let checks = Script::parse(

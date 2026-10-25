@@ -210,6 +210,11 @@ Before asking for a review:
 - [ ] New files start with their licence header
 - [ ] Commits follow the format, on an up-to-date `main`
 
+GitHub's runners also build each pull request and run its tests, all but
+the GUI and agent scripts and `systest`'s checks of the network
+([Continuous integration](documentation/DEVELOPING.md#scripts-and-tests)):
+`cargo automation test --ui` is still yours to run.
+
 Reviews look at correctness and security first, then tests, clarity and
 fit. Answer a question in the code when the next reader would ask it too
 (a comment, a better name), and fold changes into the commits they belong

@@ -162,6 +162,15 @@ the run, with its number.
   `automation/source/hostweb.rs`)
   at `{web}`, which the command line, typed text and the agent's calls
   name.
+* **Continuous integration.** GitHub's runners build Veda and run
+  `cargo automation test --net none --cmdline drivervm=off` for every
+  push and every pull request from a fork (`.github/workflows/ci.yml`).
+  They have KVM but cannot run the driver VM, which needs VT-x nested in
+  KVM: Veda boots without it and without a network, so `systest` leaves
+  out its checks of the network, as on any machine without one, and the
+  GUI and agent scripts are left to `test --ui`. The heavy builds (the
+  toolchain, the driver VM's Linux and Mesa) are made there once for
+  their ports, which takes hours, and kept in the workflow's cache.
 
 ```bash
 cargo automation script documentation/screenshots.vts                         # the README's screenshots

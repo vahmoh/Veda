@@ -31,7 +31,8 @@ COMMANDS:
                 each one's log goes to target/veda/test-logs
     test        Run host unit tests, then the in-system integration tests
                 (--ui also runs the GUI automation scripts in verification/ui
-                and the agent's in verification/agent, several at once: --jobs N)
+                and the agent's in verification/agent, several at once: --jobs N;
+                with --net none, systest leaves its checks of the network out)
     clippy      Check every crate with Clippy, warnings as errors, each for what it
                 is built for: the crates with host tests (their tests too), the
                 loader, the kernel and the POSIX layer, the programs on rt for the
