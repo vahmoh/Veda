@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# `drivervm=off` keeps the driver VM off where the machine could run it:
+# the device manager says so, and the desktop comes up without Linux.
+boot-cmdline "drivervm=off"
+fail-on "PANIC"
+wait-serial "devmgr: no driver VM (drivervm=off)" 60
+wait-serial "shell: desktop ready" 60
+reject-serial "drivervm: linux:"
