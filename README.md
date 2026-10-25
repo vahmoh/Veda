@@ -81,7 +81,7 @@ Veda builds on an x86-64 Linux machine with KVM. Install
 ```bash
 sudo apt install qemu-system-x86 qemu-system-gui qemu-system-modules-opengl ovmf \
   build-essential bc curl rsync m4 flex bison meson ninja-build cmake nasm \
-  libgmp-dev libmpfr-dev libmpc-dev python3 python3-mako python3-packaging
+  libgmp-dev libmpfr-dev libmpc-dev python3 python3-mako python3-packaging python3-yaml
 ```
 
 The driver VM also needs KVM's nested virtualization (`kvm_intel nested=1`).
