@@ -4,7 +4,7 @@
 //! Virtual memory objects (VMOs): the unit of memory that can be mapped into
 //! address spaces and shared between processes through handles.
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, LinkedList};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -178,11 +178,12 @@ impl Vmo {
         let first = offset / PAGE_SIZE;
         let end = offset.saturating_add(len).div_ceil(PAGE_SIZE);
         let mut pages = self.pages.lock();
-        let keys: Vec<u64> = pages.range(first..end).map(|(&page, _)| page).collect();
-        for page in keys {
-            frames.0.extend(pages.remove(&page));
+        let mut detached = 0;
+        for (_, f) in pages.extract_if(first..end, |_, _| true) {
+            frames.push(f);
+            detached += 1;
         }
-        self.committed.fetch_sub(frames.0.len() as u64 * PAGE_SIZE, Ordering::Relaxed);
+        self.committed.fetch_sub(detached * PAGE_SIZE, Ordering::Relaxed);
         frames
     }
 
@@ -252,11 +253,29 @@ impl Vmo {
     }
 }
 
-/// Frames detached from a VMO ([`Vmo::decommit`]), freed on drop.
+/// Frames detached from a VMO ([`Vmo::decommit`]), freed on drop. They are
+/// kept a page of them at a time ([`CHUNK`]): in one array they would need
+/// an allocation growing with what was detached (2 MiB for 1 GiB of
+/// memory), which the kernel's heap takes as physically contiguous memory,
+/// and memory fragmented by use may have no such run free.
 #[derive(Default)]
-pub struct Frames(Vec<u64>);
+pub struct Frames(LinkedList<Vec<u64>>);
+
+/// How many frames a chunk of [`Frames`] holds: a page of them.
+const CHUNK: usize = PAGE_SIZE as usize / size_of::<u64>();
 
 impl Frames {
+    fn push(&mut self, frame: u64) {
+        match self.0.back_mut() {
+            Some(chunk) if chunk.len() < chunk.capacity() => chunk.push(frame),
+            _ => {
+                let mut chunk = Vec::with_capacity(CHUNK);
+                chunk.push(frame);
+                self.0.push_back(chunk);
+            }
+        }
+    }
+
     /// Takes over `other`'s frames.
     pub fn append(&mut self, mut other: Frames) {
         self.0.append(&mut other.0);
@@ -265,7 +284,7 @@ impl Frames {
 
 impl Drop for Frames {
     fn drop(&mut self) {
-        for &f in &self.0 {
+        for &f in self.0.iter().flatten() {
             phys::free(f);
         }
     }

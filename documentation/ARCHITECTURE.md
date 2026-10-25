@@ -141,7 +141,11 @@ logs (see [the driver VM](DRIVERVM.md)).
   permissions within the rights of the handle it was mapped with. *Private
   memory* (`vm_allocate`) is a VMO no handle reaches, for one mapping, whose
   pages are freed when unmapped or decommitted (`vm_decommit`). Frames are
-  freed only after the TLB shootdown that makes them unreachable. The
+  freed only after the TLB shootdown that makes them unreachable, waiting
+  for it in chunks of a page: the kernel's heap takes an allocation over
+  2 KiB as physically contiguous memory, which memory fragmented by use
+  may not have, so no allocation of the kernel's grows with what is
+  unmapped. The
   kernel keeps a reserve of memory (1/64 of it, 8 to 64 MiB) for itself;
   `system_info` counts as free only what programs may still take.
 - **When memory runs out.** Memory is committed as it is touched, so it

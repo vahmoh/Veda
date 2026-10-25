@@ -261,9 +261,8 @@ and `build.sh` builds it. The patch:
   default (`-u`: the Internet, a lot of time or disk). Of the 48,331
   tests in the files that run, 3,680 skip, each saying what it needs:
   another system, or what Veda has not. With every resource but the
-  Internet, what Veda has not and `cpu` (`-uall` less `network`,
-  `urlfetch`, `largefile`, `extralargefile`, `gui`, `audio`, `tzdata`,
-  `curses` and `cpu`, each taken away as `-u-network` takes the first),
-  440 files run and pass, in some five minutes; `test_socketserver`,
-  which asks for the network but stays on the machine, passes with
-  `-unetwork`.
+  Internet and what Veda has not (`-uall` less `network`, `urlfetch`,
+  `largefile`, `extralargefile`, `gui`, `audio`, `tzdata` and `curses`,
+  each taken away as `-u-network` takes the first), 441 files run and
+  pass, in some six minutes; `test_socketserver`, which asks for the
+  network but stays on the machine, passes with `-unetwork`.

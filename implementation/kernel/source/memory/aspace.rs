@@ -4,9 +4,8 @@
 //! User address spaces: a page-table hierarchy plus the list of VMO mappings
 //! that it is lazily populated from on page faults.
 
-use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::collections::{BTreeMap, BTreeSet, LinkedList};
 use alloc::sync::Arc;
-use alloc::vec::Vec;
 
 use abi::Error;
 
@@ -262,13 +261,13 @@ impl AddressSpace {
         }
         let end = range_end(addr, len)?;
         let mut map = self.mappings.lock();
-        let affected: Vec<u64> = map.range(..end).filter(|(_, m)| m.end() > addr).map(|(&s, _)| s).collect();
-        if affected.is_empty() {
-            return Err(Error::NotFound);
-        }
-        let mut removed = Vec::with_capacity(affected.len());
+        // What goes waits for the shootdown: the mappings in a list, the
+        // pages in `Frames`, neither in an allocation that grows with it.
+        let mut removed = LinkedList::new();
         let mut freed = Frames::default();
-        for s in affected {
+        // The last mapping the range reaches, until none does: what is put
+        // back of one is outside the range.
+        while let Some(s) = map.range(..end).next_back().filter(|(_, m)| m.end() > addr).map(|(&s, _)| s) {
             let m = map.remove(&s).unwrap();
             let cut_start = m.start.max(addr);
             let cut_end = m.end().min(end);
@@ -288,7 +287,10 @@ impl AddressSpace {
                 right.len = m.end() - cut_end;
                 map.insert(right.start, right);
             }
-            removed.push(m);
+            removed.push_back(m);
+        }
+        if removed.is_empty() {
+            return Err(Error::NotFound);
         }
         drop(map);
         crate::architecture::tlb::shootdown_space(self.root, addr, end - addr);
