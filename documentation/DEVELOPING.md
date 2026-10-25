@@ -30,7 +30,7 @@ Each is `cargo automation COMMAND`, run in the repository;
 | `script FILE` | Boots headless and runs a [script](#scripts-and-tests) |
 | `scripts FILE...` | Builds once, then runs the scripts side by side (logs in `target/veda/test-logs`) |
 | `test` | Runs the [tests](#scripts-and-tests); `--ui` adds the scripts |
-| `clippy` | Clippy over every crate as it is built, warnings as errors |
+| `clippy` | Clippy over every crate as it is built, warnings as errors (the browser once the web engine is built) |
 | `acpi DIR` | What devmgr makes of a PC's ACPI tables (see [Reading the logs](#reading-the-logs)) |
 | `clean` | Removes build outputs |
 

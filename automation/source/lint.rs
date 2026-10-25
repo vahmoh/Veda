@@ -11,6 +11,10 @@
 //! * the programs on the standard library, for Veda's own target, with the
 //!   toolchain's Clippy, which knows it (the build machine's does not).
 //!
+//! The programs linked with the web engine (the browser) are left out
+//! until it is built (`cargo automation web`), as the image leaves them
+//! out: their build scripts, which Clippy runs too, need it.
+//!
 //! Clippy checks the workspace's crates a program builds with as well, as
 //! they build for it: a library used both by programs on `rt` and by
 //! programs on the standard library is checked as each has it.
@@ -42,7 +46,12 @@ pub fn command(args: &[String]) -> Result {
             util::cargo().args(["clippy", "--quiet", "--package", package, "--target", target]).args(DENY_WARNINGS),
         )?;
     }
-    let (on_std, native): (Vec<&Program>, Vec<&Program>) = PROGRAMS.iter().partition(|p| p.std);
+    let web = crate::web::built();
+    if !web && PROGRAMS.iter().any(|p| p.web) {
+        util::status("Note", "the browser is not checked: its web engine is not built (`cargo automation web`)");
+    }
+    let (on_std, native): (Vec<&Program>, Vec<&Program>) =
+        PROGRAMS.iter().filter(|p| web || !p.web).partition(|p| p.std);
     util::status("Checking", format!("{} programs on rt ({USER_TARGET})", native.len()));
     let mut cmd = util::cargo();
     cmd.args(["clippy", "--quiet", "--target", USER_TARGET]);
@@ -53,6 +62,8 @@ pub fn command(args: &[String]) -> Result {
     if !on_std.is_empty() {
         util::status("Checking", format!("{} programs on the standard library ({STD_TARGET})", on_std.len()));
         let mut cmd = toolchain::std_rust_tools()?.cargo_clippy()?;
+        // Where the web engine is, for the programs linked with it.
+        cmd.env("VEDA_WEB", crate::web::root());
         cmd.args(["--quiet", "--target", STD_TARGET]);
         for p in &on_std {
             cmd.args(["--package", p.package]);

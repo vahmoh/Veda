@@ -107,8 +107,9 @@ of memory, most of it WebKit's C++, and longer on a smaller one: WebKit's
 compiler jobs take some 2.5 GB of memory each, so `build.sh` runs no more
 of them than the memory holds. It needs about 8 GB of disk. Later runs
 rebuild what changed. Until the engine is built, `cargo automation
-build` leaves the browser out of the image and says so, and `cargo
-automation doctor` says whether it is built.
+build` leaves the browser out of the image, and `cargo automation
+clippy` out of its checks, each saying so; `cargo automation doctor`
+says whether it is built.
 
 ## How it fits together
 

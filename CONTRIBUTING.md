@@ -203,7 +203,8 @@ Open a pull request against `main` from a branch of your fork, and say:
 
 Before asking for a review:
 
-- [ ] `cargo fmt --all --check` and `cargo automation clippy` pass
+- [ ] `cargo fmt --all --check` and `cargo automation clippy` pass (with
+      the web engine built, for a change to the browser)
 - [ ] `cargo automation test --ui` passes
 - [ ] New behaviour has tests, and a fix the test that catches it
 - [ ] The documents that describe the change are up to date
