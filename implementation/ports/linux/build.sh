@@ -69,26 +69,28 @@ stage_zlib() {
 }
 stage zlib src_zlib @DEPS
 
-# A pkg-config that knows only libelf, as built here: elfutils' configure
-# insists on finding one, and the kernel asks it for libelf's flags.
-pkgconfig() {
+# libelf, and a pkg-config that knows only libelf, as built here: elfutils'
+# configure insists on finding one, and the kernel asks it for libelf's
+# flags. Of other packages it knows nothing, so that the kernel's build
+# takes the machine's own: objtool links libxxhash where the machine has
+# its headers (for its live patches). The stage writes it, so that the
+# stage's fingerprint covers it.
+stage_libelf() {
+	local b=$BUILD/elfutils
 	mkdir -p "$DEPS/bin"
 	cat > "$DEPS/bin/pkg-config" <<-END
 	#!/bin/sh
+	pkg=
+	for a; do case "\$a" in -*) ;; *) pkg=\${pkg:-\$a};; esac; done
 	for a; do case "\$a" in
 	--version) echo 0.29.2; exit 0;;
 	--atleast-pkgconfig-version) exit 0;;
-	--cflags) echo "-I$DEPS/include"; exit 0;;
-	--libs) echo "-L$DEPS/lib -lelf -lz"; exit 0;;
+	--cflags) [ "\$pkg" = libelf ] || exit 1; echo "-I$DEPS/include"; exit 0;;
+	--libs) [ "\$pkg" = libelf ] || exit 1; echo "-L$DEPS/lib -lelf -lz"; exit 0;;
 	esac; done
 	exit 1
 	END
 	chmod +x "$DEPS/bin/pkg-config"
-}
-
-stage_libelf() {
-	local b=$BUILD/elfutils
-	pkgconfig
 	rm -rf "$b" && mkdir -p "$b" && cd "$b"
 	quiet configure.log env PATH="$DEPS/bin:$PATH" "$SRC/elfutils/configure" --prefix="$DEPS" \
 		--disable-debuginfod --disable-libdebuginfod --disable-nls --disable-demangler \
