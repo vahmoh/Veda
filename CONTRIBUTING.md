@@ -228,7 +228,7 @@ code: be specific, and be kind.
 > Never report a vulnerability in a public issue.
 
 Report it privately through GitHub's
-[private vulnerability reporting](https://github.com/vahmoh25/Veda/security/advisories/new)
+[private vulnerability reporting](https://github.com/vahmoh/Veda/security/advisories/new)
 (the **Security** tab, **Report a vulnerability**): what you found, how to
 reproduce it, and what it exposes. Where that button is missing, open an
 issue that asks for a private contact, without details.
