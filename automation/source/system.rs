@@ -134,6 +134,10 @@ pub fn build(o: &Options) -> Result<System> {
     // the C toolchain itself (gcc, as, ld, the C library and its headers, as
     // /system has them), the media decoder and its libraries' tests.
     let toolchain = toolchain::image_files(!o.skip.iter().any(|s| s == "mediadec"))?;
+    // The system's repository, its configuration, and the tests'
+    // repositories, whose packages' program is the C test program `hello`.
+    let hello = toolchain.iter().find(|(path, _)| path == "tests/c/hello").map(|(_, data)| data.as_slice());
+    let packages = crate::packages::image_files(hello)?;
     // Every C program and every program on the standard library has the C
     // library's POSIX layer; the media decoder, a Rust half.
     let mut bare = Vec::new();
@@ -145,6 +149,7 @@ pub fn build(o: &Options) -> Result<System> {
     }
     groups.push(notices::Group::new(architecture::BARE_TARGET, &bare));
     add_all(&mut initrd, &mut licensed, toolchain);
+    add_all(&mut initrd, &mut licensed, packages);
     // What the web engine needs of the system (its fonts' configuration,
     // the certificate authorities, its licences), once it is built.
     add_all(&mut initrd, &mut licensed, crate::web::image_files()?);

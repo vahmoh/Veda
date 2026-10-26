@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Packages on the live system (`cargo automation iso`), started from a USB
+# stick with the home directory in memory: the system image's repository
+# is found at start, without a network or a home disk, its index checked
+# against the key the image names; pkg lists it, updates it and finds
+# nothing offered from it yet. A repository is added, and a package
+# installs from it with what it depends on, into the home directory in
+# memory, and runs.
+live
+requires c-toolchain
+boot-cmdline "run=terminal"
+fail-on "PANIC"
+fail-on "packages: the change was not made"
+wait-serial "desktop ready" 120
+expect-serial "home directory in memory (live system)"
+wait-serial "packages: system: 0 packages (serial 1)" 60
+wait-serial "packages: ready (0 installed; repositories: system)" 60
+wait-serial "started terminal" 60
+wait 3
+key meta_l-up
+wait 2
+type "pkg repo list | grep 'system (system)' | grep ok && logger live-repository-ok"
+key ret
+wait-serial "terminal: live-repository-ok" 60
+type "pkg update && pkg search | grep 'No package is offered' && logger live-update-ok"
+key ret
+wait-serial "terminal: live-update-ok" 60
+type "pkg repo add test file:///system/tests/packages/one /system/tests/packages/test.pub && pkg update && pkg install -y hello && logger live-installed-ok"
+key ret
+wait-serial "packages: installed hello 1.0 (from test)" 180
+wait-serial "terminal: live-installed-ok" 60
+type "hello; logger live-hello-$?"
+key ret
+wait-serial "terminal: live-hello-42" 60
+shot target/veda/packages-live.png
+reject-serial "packages: cannot"

@@ -25,6 +25,7 @@ pub mod lock;
 pub mod media;
 pub mod net;
 pub mod netring;
+pub mod packages;
 pub mod pci;
 pub mod shell;
 pub mod startup;

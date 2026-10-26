@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "packages"
+description = "Veda's packages: versions and dependencies, the package and repository index formats, their signatures, the resolver, and the transactions that install and remove packages and recover when one is cut short"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "source/lib.rs"
+
+[features]
+# The file system of the standard library behind transactions (`stdfs`):
+# the packages service's, and the build machine's tools'.
+std = []
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+# Signing keys are wiped from memory when dropped.
+ed25519-dalek = { workspace = true, features = ["zeroize"] }
+zeroize = { workspace = true, features = ["alloc"] }
+miniz_oxide = { workspace = true }
+base64ct = { workspace = true }
+base16ct = { workspace = true }
+
+[lints]
+workspace = true

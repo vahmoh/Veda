@@ -27,6 +27,7 @@ mod linux;
 mod mic;
 mod notices;
 mod ovmfvars;
+mod packages;
 mod ports;
 mod python;
 mod qemu;
@@ -154,6 +155,10 @@ fn doctor() -> Result {
     match python::status() {
         Ok(v) => println!("  [ok]   python: {v}"),
         Err(e) => println!("  [--]   python: {e}"),
+    }
+    match packages::key_status() {
+        Ok(v) => println!("  [ok]   repository key: {v}"),
+        Err(e) => println!("  [--]   repository key: {e}"),
     }
     if ok { Ok(()) } else { Err("some checks failed".into()) }
 }

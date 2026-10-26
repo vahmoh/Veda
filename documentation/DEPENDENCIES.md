@@ -43,11 +43,11 @@ In Veda's terms:
 |------|--------|-----|
 | Networking | `smoltcp` (a port), `httparse`, `percent-encoding`, `base64ct` | TCP/IP; HTTP/1.x heads and chunk sizes; URL components; WebSocket keys |
 | TLS | `rustls`, `rustls-webpki`, `webpki-roots` | HTTPS and secure WebSockets, with `tls`'s `CryptoProvider` on RustCrypto |
-| Cryptography | RustCrypto: `sha1`, `sha2`, `hmac`, `pbkdf2`, `hkdf`, `aes`, `aes-gcm`, `ccm`, `cmac`, `aes-kw`, `chacha20`, `chacha20poly1305`, `blake2`, `p256`, `p384`, `crypto-bigint`, `base16ct`, `argon2` (with `password-hash`, `phc`); `x25519-dalek`, `ed25519-dalek`; `subtle`, `zeroize` | Wi-Fi security, TLS, the kernel's random numbers, Wi-Fi keys typed as hex; the lock screen's password (Argon2id in the PHC string format) |
-| Data | `serde`, `serde_json`, `crc32fast` | The agent's protocols, applications' agent actions, saved settings; checksums of home snapshots, GPT headers and PNG chunks |
+| Cryptography | RustCrypto: `sha1`, `sha2`, `hmac`, `pbkdf2`, `hkdf`, `aes`, `aes-gcm`, `ccm`, `cmac`, `aes-kw`, `chacha20`, `chacha20poly1305`, `blake2`, `p256`, `p384`, `crypto-bigint`, `base16ct`, `argon2` (with `password-hash`, `phc`); `x25519-dalek`, `ed25519-dalek`; `subtle`, `zeroize` | Wi-Fi security, TLS, the kernel's random numbers, Wi-Fi keys typed as hex; the lock screen's password (Argon2id in the PHC string format); packages' SHA-256s and repositories' signatures (Ed25519) |
+| Data | `serde`, `serde_json`, `crc32fast` | The agent's protocols, applications' agent actions, saved settings, packages' manifests and repositories' indexes; checksums of home snapshots, GPT headers and PNG chunks |
 | Text | `ttf-parser`, `unicode-segmentation`, `unicode-width`, `vte` | Font files; grapheme boundaries and character widths; terminal escape sequences |
 | Numbers | `libm`, `num-traits`, `num-rational`, `num-integer`, `glam`, `rand`, `rand_pcg`, `rand_distr`, `fastnoise-lite` | Float functions; the Calculator's exact fractions; 3D maths; seeded random numbers, the same everywhere; noise |
-| Images | `zune-jpeg` (a port), `zune-png`, `zune-bmp`, `zune-inflate`, `qoi`, `fast_image_resize`, `bytemuck`, `jpeg-encoder`, `miniz_oxide` | Decoding and scaling pictures; encoding them (JPEG, and PNG's deflate) |
+| Images | `zune-jpeg` (a port), `zune-png`, `zune-bmp`, `zune-inflate`, `qoi`, `fast_image_resize`, `bytemuck`, `jpeg-encoder`, `miniz_oxide` | Decoding and scaling pictures; encoding them (JPEG, and PNG's deflate); packages' and indexes' deflate |
 | Linux | `linux-raw-sys`; `rustix`, `libc` | The Linux ABI the POSIX layer gives musl; the driver VM's programs' system calls |
 | Under `std` in Veda | `libc`, `getrandom`, `rustix`, `errno`, `tokio`, `mio`, `socket2` (ports that know Veda's target), `tempfile` | The C library, random bytes, system calls, temporary files and tokio (on epoll, eventfd and sockets) for crates on `std`; `verification/stdcrates` checks them |
 | Build machine only | `png`, `rav1e`, `md-5`, `tungstenite` | Test output, and a second decoder for the PNGs Veda writes; sample videos; the stand-in for Deepgram's Voice Agent API |
@@ -136,6 +136,15 @@ each a port ([Python on Veda](PYTHON.md)).
 | `gl`'s renderer, ETC2/EAC, sRGB and packed floats, virgl encoder | rayon: needs `std`; texture2ddecoder: truncates EAC to 8 bits, which OpenGL ES keeps at 11; fast-srgb8: approximate |
 | `egl`, EGL and OpenGL ES's C functions | Mesa's libEGL and libGLESv2: they drive GPUs through Linux's DRM and load drivers as shared libraries; Veda's OpenGL ES is `gl` ([above](#c-and-c-libraries)) |
 | `image`'s PNG and BMP writers | png 0.18, image: need `std`; the writers are only headers, chunks and PNG's row filters around `miniz_oxide`'s deflate |
+
+### Packages
+
+| Code | Weighed, and why not |
+|------|----------------------|
+| The package file (`packages::archive`) | tar 0.4 (Arch's, Alpine's and Debian's packages are tars): carries links, hard links, devices, owners and long-name extensions, each a way to write outside where an archive is unpacked, which Veda has none of, and needs `std`; Veda's holds files with their SHA-256s, checked whole before anything is unpacked |
+| The resolver (`packages::resolve`) | pubgrub 0.3: needs `std`, and has neither conflicts nor provisions, which packages declare, nor a bound on its work, which an index from the network must not be able to exceed; a SAT solver: large, and its failures hard to explain to people |
+| Versions' order (`packages::version`) | semver 1: upstream projects' versions are not all semantic (`9.5p1`, `2024.1`); Debian's order, which carries them all, is forty lines |
+| Indexes and their signatures (`packages::index`) | tough (TUF): needs `std`, and four roles of keys and metadata where a repository of Veda's has one publisher; the index carries TUF's protections for one role |
 
 ### Applications
 

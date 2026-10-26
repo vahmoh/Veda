@@ -39,6 +39,7 @@ members = [
     "implementation/libraries/egl",
     "implementation/libraries/hv",
     "implementation/libraries/iommu",
+    "implementation/libraries/packages",
     "implementation/services/init",
     "implementation/services/mediadec",
     "implementation/services/vfs",
@@ -50,6 +51,7 @@ members = [
     "implementation/services/wlan",
     "implementation/services/agent",
     "implementation/services/agent/core",
+    "implementation/services/packages",
     "implementation/services/drivervm",
     "implementation/services/drivervm/core",
     "implementation/applications/about",
@@ -73,6 +75,7 @@ members = [
     "implementation/applications/browser",
     "implementation/applications/browser/core",
     "implementation/applications/paint/core",
+    "implementation/applications/pkg",
     "implementation/shell/components/desktop",
     "implementation/shell/components/lock",
     "implementation/shell/components/lock/core",
@@ -158,6 +161,7 @@ gl = { path = "implementation/libraries/gl" }
 egl = { path = "implementation/libraries/egl" }
 hv = { path = "implementation/libraries/hv" }
 iommu = { path = "implementation/libraries/iommu" }
+packages = { path = "implementation/libraries/packages" }
 guest-sys = { path = "implementation/guests/linux/sys" }
 guest-netlink = { path = "implementation/guests/linux/netlink" }
 # Cryptography for Wi-Fi security (RustCrypto, all no_std, pure Rust).
@@ -201,6 +205,8 @@ md-5 = { version = "0.11.0", default-features = false }
 # AV1, but has no encoder of its own. No assembly, no threads, so it
 # encodes the same everywhere.
 rav1e = { version = "0.8.1", default-features = false }
+# Ed25519 signatures: certificates' in TLS, and repositories' indexes
+# (implementation/libraries/packages), which it signs the same every time.
 ed25519-dalek = { version = "3", default-features = false }
 p384 = { version = "0.14", default-features = false, features = ["ecdsa", "ecdh"] }
 crypto-bigint = { version = "0.7.5", default-features = false, features = ["alloc"] }
@@ -310,7 +316,9 @@ bytemuck = { version = "1.25.2", default-features = false }
 # machine. JPEG with progressive scans; PNG's zlib stream from miniz_oxide
 # (the `flate2` crate's deflate), which also makes the image tests'
 # hand-made PNGs. The `png` crate (the `image` crate's) reads the encoder's
-# PNGs back in `image`'s tests: it needs std.
+# PNGs back in `image`'s tests: it needs std. miniz_oxide also deflates
+# packages and repositories' indexes, and inflates them a piece at a time
+# (implementation/libraries/packages).
 png = "0.18.1"
 jpeg-encoder = { version = "0.7.1", default-features = false }
 miniz_oxide = { version = "0.9.1", default-features = false, features = ["with-alloc"] }

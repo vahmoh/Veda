@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "pkg"
+description = "The pkg command: installs, upgrades and removes packages through the packages service, and makes packages, keys and signed repositories"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pkg"
+path = "source/main.rs"
+test = false
+bench = false
+
+[dependencies]
+rt = { workspace = true, default-features = false }
+abi = { workspace = true }
+ipc = { workspace = true }
+proto = { workspace = true }
+packages = { workspace = true, features = ["std"] }
+# A new key's seed, from the system's random number generator.
+getrandom = { workspace = true }
+zeroize = { workspace = true, features = ["alloc"] }
+
+# In Veda, `rt`'s runtime, whose heap is the allocator of every program
+# (documentation/RUST.md); on the build machine, where `pkg` makes keys,
+# packages and repositories too, the standard library's.
+[target.'cfg(target_os = "veda")'.dependencies]
+rt = { workspace = true }
+
+[lints]
+workspace = true

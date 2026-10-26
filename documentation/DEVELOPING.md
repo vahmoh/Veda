@@ -299,6 +299,8 @@ from this machine.
 | The native C toolchain, `target/toolchain/native/system` | `/system/bin/gcc` ..., `/system/include`, `/system/lib`, `/system/libexec` |
 | Python, once built (`target/python`): the interpreter (also as `python3.15` and `python`) and its standard library; its tests in an image built with `--python-tests`; `verification/python`, for `systest` and the scripts | `/system/bin/python3`, `/system/lib/python3.15/`; `/system/lib/python3.15/test/`; `/system/tests/python/` |
 | The databases Linux keeps in `/etc`: `passwd` and `group` (the one user) and `services` (IANA's registry, from the `iana-etc` port) | `/system/etc/` |
+| The system's repository (`automation/source/packages.rs`): its index, signed and offering nothing yet; its configuration, with the public key the index is checked against; what the system provides (`veda` at its version) | `/system/packages/index.vidx`, `/system/etc/packages/repositories/system.repo`, `/system/etc/packages/provides` |
+| The tests' repositories, signed by a key whose secret is no secret, with their public key; their packages hold the C test program `hello` | `/system/tests/packages/` |
 | The certificate authorities OpenSSL trusts (Mozilla's list, from the `ca-certificates` port), once the web engine or Python is built | `/system/etc/ssl/cert.pem` |
 | `mediadec`, the video decoder (its Rust half, the C shim, FFmpeg, dav1d), and the libraries' `checkasm` programs | `/system/bin/mediadec`, `/system/tests/media/` |
 | `verification/fakedec/clips/*`, for the stand-in decoder | `/system/tests/videos/fake/` |
@@ -308,6 +310,13 @@ At boot, the image's `samples/` is copied into the home directory
 (`/system/samples/Pictures/x.png` → `/home/user/Pictures/x.png`). Images
 leave out their free space (sparse files); the boot partition holds its
 files and the 64 MiB a stick's logs may take.
+
+**The repository's key.** The system's repository is signed by a release's
+key, whose secret key file `VEDA_REPOSITORY_KEY` names when a release is
+built, or else by the build machine's own, made at its first build in
+`target/packages/repository.key` and kept there, so that its images are
+the same from one build to the next; `doctor` says which
+([Packages](PACKAGES.md#the-system-images-repository)).
 
 ## Writing an application
 

@@ -21,6 +21,10 @@
 //! IndexedDB, one takes all the memory it can, one grows WebAssembly
 //! memories, a file comes to be downloaded, and a PDF to be shown. Files
 //! are sent whole or in the byte ranges asked for, as media players ask.
+//!
+//! The packages' scripts have repositories here (`/packages/web`,
+//! `/packages/forever`: `packages::web_files`), made the first time one is
+//! asked for, with the C test program `hello` as their packages' program.
 
 use std::borrow::Cow;
 use std::io::{Read, Write};
@@ -945,13 +949,27 @@ impl Drop for HostWeb {
     }
 }
 
+/// The repositories served at `/packages/`, by path (none without the C
+/// test programs).
+fn package_files() -> &'static std::collections::BTreeMap<String, Vec<u8>> {
+    static FILES: std::sync::OnceLock<std::collections::BTreeMap<String, Vec<u8>>> = std::sync::OnceLock::new();
+    FILES.get_or_init(|| {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let hello = std::fs::read(crate::toolchain::root().join("tests").join("hello"));
+        let files = hello.map_err(|e| e.to_string()).and_then(|hello| crate::packages::web_files(&hello, now));
+        files
+            .map(|files| files.into_iter().map(|(path, data)| (format!("/{path}"), data)).collect())
+            .unwrap_or_default()
+    })
+}
+
 /// Answers one request: `GET /hello`, the browser's pages (`/page`,
 /// `/second`, `/zone`, `/cookie`, `/preferences`, `/scripts`, `/video`,
 /// `/audio`, `/mse`, `/webaudio`, `/webaudio-stream`, `/upload`,
 /// `/storage`, `/hog`, `/webgl`, `/wasm-memory`),
 /// their media (`/media/countdown.webm`, `/media/tone.wav`), a file to
-/// download (`/files/veda-download.txt`) and a PDF (`/files/veda.pdf`), or
-/// else nothing found.
+/// download (`/files/veda-download.txt`), a PDF (`/files/veda.pdf`) and the
+/// packages' repositories (`/packages/...`), or else nothing found.
 fn answer(mut stream: TcpStream) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
@@ -992,6 +1010,10 @@ fn answer(mut stream: TcpStream) {
             std::fs::read(util::generated_dir().join(COUNTDOWN)).ok().map(|video| ("video/webm", video.into()))
         }
         b"/media/tone.wav" => Some(("audio/wav", tone().into())),
+        p if p.starts_with(b"/packages/") => std::str::from_utf8(p)
+            .ok()
+            .and_then(|p| package_files().get(p))
+            .map(|data| ("application/octet-stream", Cow::Borrowed(data.as_slice()))),
         _ => None,
     };
     let Some((kind, body)) = found else {

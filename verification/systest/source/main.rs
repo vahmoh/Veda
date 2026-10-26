@@ -34,6 +34,7 @@ use rt::sync::{Condvar, Mutex};
 mod architecture;
 mod media;
 mod memory;
+mod packages;
 mod policy;
 mod ports;
 mod posix;
@@ -820,7 +821,7 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 45] = [
+    let tests: [Test; 46] = [
         ("starved threads run", test_starved_threads_run),
         ("ipc primitives", test_ipc_primitives),
         ("short sleeps", test_short_sleeps),
@@ -861,6 +862,7 @@ fn main() -> i32 {
         ("interruptions", posix::test_interruptions),
         ("giving abilities up", posix::test_process_restrict),
         ("launcher", test_launcher),
+        ("packages", packages::test_packages),
         ("what applications may do", policy::test_application_limits),
         ("the lock", policy::test_the_lock),
         ("crash report", test_crash_report),

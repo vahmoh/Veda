@@ -68,6 +68,7 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("hv", &[]),
     ("drivervm-core", &[]),
     ("iommu", &[]),
+    ("packages", &["std"]),
     ("interceptor-game", &[]),
     ("videos-core", &[]),
     ("terminal-core", &[]),
@@ -751,7 +752,7 @@ mod tests {
         assert_eq!(&args[..2], ["test", "--quiet"]);
         assert_eq!(args.iter().filter(|a| *a == "--package").count(), HOST_TESTED.len());
         let features = &args[args.iter().position(|a| a == "--features").unwrap() + 1];
-        assert_eq!(features, "initrd/std,image/encode,files/thumbnails");
+        assert_eq!(features, "initrd/std,image/encode,files/thumbnails,packages/std");
     }
 
     #[test]

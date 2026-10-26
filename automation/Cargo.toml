@@ -27,6 +27,11 @@ crc32fast = { workspace = true }
 tungstenite = { workspace = true }
 bootinfo = { workspace = true }
 libc = { workspace = true }
+# The system image's repositories: its packages, their indexes and the key
+# that signs them, made from the system's random number generator.
+packages = { workspace = true, features = ["std"] }
+getrandom = { workspace = true }
+zeroize = { workspace = true, features = ["alloc"] }
 # The generators' manifests, which the image is packed from.
 gencommon = { path = "../implementation/generation/common" }
 

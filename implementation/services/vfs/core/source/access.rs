@@ -10,12 +10,18 @@
 //! service may give that up for a connection (`vfs::renounce_private`),
 //! which is then treated as an application's.
 //!
-//! **Fixed places.** The root, `/home`, the user's home, `/tmp` and
-//! `/home/.private` stay where they are: nothing removes, moves or replaces
-//! them. Everything counts on them, and the private directories are
-//! private only where the guard looks for them, so moving `/home` would
-//! take them out from under it (and would leave the home disk nothing to
-//! keep).
+//! **Installed packages.** `/home/packages` holds the files of the packages
+//! installed: every program reads them (and runs the programs among them),
+//! and only the packages service (`packages`, a system service that has
+//! not renounced its private access) changes what is there, so that no
+//! application can change what another runs, nor what the user installed.
+//!
+//! **Fixed places.** The root, `/home`, the user's home, `/tmp`,
+//! `/home/.private` and `/home/packages` stay where they are: nothing
+//! removes, moves or replaces them. Everything counts on them, and the
+//! private directories are private only where the guard looks for them, so
+//! moving `/home` would take them out from under it (and would leave the
+//! home disk nothing to keep).
 //!
 //! **Connections.** Every connection, a client's or an open file's, is a
 //! handle in the VFS's one wait set; [`Connections`] keeps their number
@@ -30,6 +36,10 @@ use crate::{HOME, TMP, USER};
 
 /// The directory in `/home` that holds the services' private directories.
 pub const PRIVATE: &str = ".private";
+/// The directory in `/home` that holds the installed packages' files.
+pub const PACKAGES: &str = "packages";
+/// The system service that alone changes what `/home/packages` holds.
+pub const INSTALLER: &str = "packages";
 
 /// Who a client is, as far as reaching private directories goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +61,16 @@ impl Client<'_> {
         }
     }
 
+    /// Whether the client may change `comps`, a path of the writable file
+    /// system it reaches: anything but the installed packages, which only
+    /// the packages service changes.
+    pub fn may_change(&self, comps: &[&str]) -> bool {
+        match comps {
+            [HOME, PACKAGES, ..] => self.service && self.name == INSTALLER,
+            _ => true,
+        }
+    }
+
     /// Whether a listing of directory `comps` (of the writable file system)
     /// shows the client the entry `name`.
     pub fn sees(&self, comps: &[&str], name: &str) -> bool {
@@ -65,7 +85,7 @@ impl Client<'_> {
 /// Whether `comps` (a path of the writable file system) is one of the
 /// places that stay where they are.
 pub fn fixed(comps: &[&str]) -> bool {
-    matches!(comps, [] | [HOME] | [HOME, USER] | [HOME, PRIVATE] | [TMP])
+    matches!(comps, [] | [HOME] | [HOME, USER] | [HOME, PRIVATE] | [HOME, PACKAGES] | [TMP])
 }
 
 /// Connections the VFS serves at once, of all kinds. Each is a handle in its
@@ -152,11 +172,33 @@ mod tests {
     }
 
     #[test]
+    fn only_the_packages_service_changes_the_installed_packages() {
+        const PACKAGES_SERVICE: Client = Client { service: true, name: INSTALLER };
+        let program = [HOME, PACKAGES, "bin", "hello"];
+        assert!(PACKAGES_SERVICE.may_change(&program) && PACKAGES_SERVICE.may_change(&[HOME, PACKAGES]));
+        // Everyone else reads and runs them, and changes the rest.
+        let renounced = Client { service: false, ..PACKAGES_SERVICE };
+        let app = Client { service: false, name: INSTALLER };
+        for c in [AGENT, SHELL, APP, renounced, app] {
+            assert!(!c.may_change(&program) && !c.may_change(&[HOME, PACKAGES]), "{c:?}");
+            assert!(c.may_reach(&program) && c.sees(&[HOME], PACKAGES));
+            assert!(c.may_change(&[HOME, USER, PACKAGES]) && c.may_change(&[HOME, "packages-old"]));
+            assert!(c.may_change(&[TMP, PACKAGES, "x"]) && c.may_change(&[HOME]));
+        }
+    }
+
+    #[test]
     fn the_namespace_stays_put() {
-        for fixed_place in [&[][..], &[HOME], &[HOME, USER], &[HOME, PRIVATE], &[TMP]] {
+        for fixed_place in [&[][..], &[HOME], &[HOME, USER], &[HOME, PRIVATE], &[HOME, PACKAGES], &[TMP]] {
             assert!(fixed(fixed_place), "{fixed_place:?}");
         }
-        for free in [&[HOME, USER, "Documents"][..], &[HOME, PRIVATE, "agent"], &[TMP, "x"], &["elsewhere"]] {
+        for free in [
+            &[HOME, USER, "Documents"][..],
+            &[HOME, PRIVATE, "agent"],
+            &[HOME, PACKAGES, "bin"],
+            &[TMP, "x"],
+            &["elsewhere"],
+        ] {
             assert!(!fixed(free), "{free:?}");
         }
     }

@@ -105,6 +105,8 @@ pub const PROGRAMS: &[Program] = &[
     Program::std("paint"),
     Program::std("shell"),
     Program::std("lock"),
+    Program::std("packagesd").named("packages"),
+    Program::std("pkg"),
     Program::web("browser"),
 ];
 

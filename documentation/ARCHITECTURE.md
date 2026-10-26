@@ -15,7 +15,8 @@ who may call what, and links to each subsystem's own document.
 - **The core:** [Boot](#boot), [The kernel](#the-kernel),
   [User space](#user-space)
 - **Devices and data:** [Devices](#devices),
-  [Storage and files](#storage-and-files), [Networking](#networking)
+  [Storage and files](#storage-and-files), [Networking](#networking),
+  [Packages](#packages)
 - **Graphics:** [The window system](#the-window-system),
   [Displays and GPUs](#displays-and-gpus),
   [The shell](#the-shell), [The lock screen](#the-lock-screen),
@@ -58,6 +59,7 @@ who may call what, and links to each subsystem's own document.
 | `audio` | the sound mixer | yes |
 | `agent` | the voice agent | yes |
 | `shell` | the desktop shell | yes |
+| `packages` | installed software: packages and their repositories | yes: it recovers the change it was making |
 
 **The startup sequence**
 (`implementation/services/compositor/source/startup.rs`).
@@ -392,8 +394,14 @@ every other device to Linux in [the driver VM](DRIVERVM.md).
 - **Private directories.** `/home/.private/<service>` belongs to the system
   service of that name: only it sees and changes what is inside. A
   connection can give up that access for good (`renounce_private`), as the
-  agent's worker does. The root, `/home`, `/home/user`, `/tmp` and
-  `/home/.private` cannot be removed, moved or replaced.
+  agent's worker does. The root, `/home`, `/home/user`, `/tmp`,
+  `/home/.private` and `/home/packages` cannot be removed, moved or
+  replaced.
+- **Installed packages.** `/home/packages` holds the files of the packages
+  installed: every program reads them and runs the programs among them,
+  and only the packages service (`packages`, a system service that has not
+  renounced its private access) changes what is there, so that no
+  application can change what another runs ([Packages](#packages)).
 - **Confined connections.** A connection can give up, for good, all of the
   file system but a few places, each to read or to change too
   (`vfs::confine`, as OpenBSD's `unveil`): it then reaches what is inside
@@ -518,6 +526,32 @@ the detail.
 - **Failures.** Calls from a service to a driver have timeouts, and drivers
   report their state with one-way events, so a hung driver cannot block a
   service.
+
+## Packages
+
+Software beyond the system image installs as packages, from repositories
+whose keys sign their indexes ([Packages](PACKAGES.md) has it all). The
+`packages` service (`implementation/services/packages`) alone changes what
+is installed, in `/home/packages`, which the VFS lets no one else change;
+the `pkg` command (`implementation/applications/pkg`) asks it to, in the
+Terminal, whose `PATH` has `/home/packages/bin` after `/system/bin`.
+What it decides is `packages` (`implementation/libraries/packages`),
+tested on the host.
+
+- **Who may do what**, by identity: anyone lists what is installed and
+  offered; only the Terminal (and the programs it runs), Settings and the
+  programs the kernel command line asks for install, remove, update and
+  change the repositories.
+- **Repositories.** A repository's index is taken only signed by a key it
+  is trusted with, naming the repository, not expired and not older than
+  the last one taken; its packages are bound to it by their sizes and
+  SHA-256s. Every system image has a repository of its own, `system`, in
+  `/system/packages`, read from the image at every start.
+- **Changes** are planned and shown first, then made by the plan's
+  digest: staged, journalled, moved into place, and committed by putting
+  the database in place in one step. A change cut short is rolled back or
+  finished when the service starts again. No package runs anything as it
+  installs.
 
 ## The window system
 
@@ -1115,6 +1149,7 @@ Libraries are crates named after their directory
 | `implementation/libraries/tls` | the TLS client for applications: rustls and its pure-Rust cryptography provider |
 | `implementation/libraries/web` | URLs, and HTTP/1.1 and WebSocket clients over TCP or TLS |
 | `implementation/libraries/wlan` | IEEE 802.11 (frames, RSN, handshakes, SAE, station and access point) |
+| `implementation/libraries/packages` | packages: versions and dependencies, the package and index formats and their signatures, the resolver, and the transactions that install and remove packages and recover ([Packages](PACKAGES.md)) |
 | `implementation/services/`, `implementation/drivers/`, `implementation/applications/` | system services, drivers and applications (the applications with their manifests, `<name>.app`, and what they share in `common`) |
 | `implementation/shell/` | the shell ([The shell](#the-shell)): the splash's picture (`components/welcome`), the desktop shell (`components/desktop`), the lock screen (`components/lock`) and what they share (`libraries`) |
 | `implementation/guests/linux/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer, `logkeeper` (the system's log on the live system's stick), and its tests (`bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `timertest`, `kmspause`) |

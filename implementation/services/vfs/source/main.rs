@@ -123,7 +123,7 @@ use rt::println;
 use dev::Dev;
 use persist::Store;
 use sockets::Sockets;
-use vfs_core::access::{self, Connections, PRIVATE};
+use vfs_core::access::{self, Connections, PACKAGES, PRIVATE};
 use vfs_core::loans::{Loans, TakenBack};
 use vfs_core::locks::{self, FileId, Locks, Outcome, Owner, Owners};
 use vfs_core::shm::Shm;
@@ -768,6 +768,10 @@ impl Session<'_> {
         if m == Mount::Ram && !self.access().may_reach(&comps) {
             return Err(FsError::Denied);
         }
+        // The installed packages are the packages service's to change.
+        if m == Mount::Ram && need == Reach::Write && !self.access().may_change(&comps) {
+            return Err(FsError::Denied);
+        }
         Ok((m, comps))
     }
 
@@ -984,6 +988,9 @@ impl vfs::Server for Session<'_> {
             if m == Mount::Ram && st.is_dir {
                 st.size = self.entries_seen(&comps, st.size);
             }
+            // What only the packages service changes is read-only to the
+            // rest.
+            st.read_only |= m == Mount::Ram && !self.access().may_change(&comps);
             st
         };
         // A confined connection is told what it may do: change only what
@@ -1838,6 +1845,9 @@ fn build(archive: &initrd::Archive<'static>, image: SystemImage, live: bool) -> 
             let _ = ram.mkdir_all(&comps);
         }
     }
+    // Where the installed packages are, which every home has, made before
+    // anything else could make something there.
+    let _ = ram.mkdir_all(&[HOME, PACKAGES]);
     let home = match (&store, found) {
         (None, _) if live => "in memory (live system)",
         (None, _) => "in memory (no home disk)",

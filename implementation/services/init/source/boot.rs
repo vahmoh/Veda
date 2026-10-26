@@ -18,16 +18,19 @@ use crate::{Init, Origin};
 /// else loads data through them), then the network and Wi-Fi services
 /// (drivers attach to them as they start), device management and drivers,
 /// the window system and the lock screen (which unlocks it), audio, the
-/// voice agent and the desktop shell.
-const SERVICES: [&str; 9] = ["vfs", "netd", "wlan", "devmgr", "compositor", "lock", "audio", "agent", "shell"];
+/// voice agent, the desktop shell, and last the packages service, which
+/// nothing of the desktop's start waits for.
+const SERVICES: [&str; 10] =
+    ["vfs", "netd", "wlan", "devmgr", "compositor", "lock", "audio", "agent", "shell", "packages"];
 
 /// Services that are started again if they exit. They hold no state other
 /// processes cannot recover: drivers reconnect to a restarted compositor,
-/// network or Wi-Fi service, the shell rebuilds its windows, and the lock
-/// screen shows itself again on the screen the window system kept locked.
-/// (The file system and the device manager are not restarted: one holds
-/// the user's files, the other owns the running drivers.)
-pub const RESTARTABLE: [&str; 7] = ["compositor", "lock", "shell", "audio", "netd", "wlan", "agent"];
+/// network or Wi-Fi service, the shell rebuilds its windows, the lock
+/// screen shows itself again on the screen the window system kept locked,
+/// and the packages service recovers the change it was making from its
+/// journal. (The file system and the device manager are not restarted: one
+/// holds the user's files, the other owns the running drivers.)
+pub const RESTARTABLE: [&str; 8] = ["compositor", "lock", "shell", "audio", "netd", "wlan", "agent", "packages"];
 
 fn dup(h: &Option<rt::Vmo>) -> Option<Handle> {
     h.as_ref().and_then(|v| v.0.duplicate(None).ok())

@@ -349,7 +349,9 @@ impl Shell {
             ("USER".to_string(), "user".to_string()),
             ("HOSTNAME".to_string(), "veda".to_string()),
             ("SHELL".to_string(), "vsh".to_string()),
-            ("PATH".to_string(), "/system/bin".to_string()),
+            // The system's programs, then those of the packages installed,
+            // which cannot stand in for the system's.
+            ("PATH".to_string(), "/system/bin:/home/packages/bin".to_string()),
             ("PWD".to_string(), cwd.clone()),
             ("TERM".to_string(), "veda-terminal".to_string()),
         ];
@@ -512,12 +514,15 @@ impl Shell {
         self.apps.clone().unwrap_or_default()
     }
 
-    /// Names of the programs in `/system/bin`.
+    /// Names of the programs in `/system/bin`, and of those the packages
+    /// installed have in `/home/packages/bin`.
     pub fn programs(&self) -> Vec<String> {
-        self.fs
-            .read_dir("/system/bin")
-            .map(|v| v.into_iter().filter(|e| e.executable && !e.is_dir).map(|e| e.name).collect())
-            .unwrap_or_default()
+        let mut names = Vec::new();
+        for dir in ["/system/bin", "/home/packages/bin"] {
+            let found = self.fs.read_dir(dir).unwrap_or_default();
+            names.extend(found.into_iter().filter(|e| e.executable && !e.is_dir).map(|e| e.name));
+        }
+        names
     }
 
     /// Starts a program or application. `prog` is an application id, a

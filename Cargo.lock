@@ -239,13 +239,16 @@ dependencies = [
  "crc32fast",
  "elf",
  "gencommon",
+ "getrandom 0.4.3",
  "hv",
  "image",
  "initrd",
  "libc",
+ "packages",
  "serde_json",
  "sha2",
  "tungstenite",
+ "zeroize",
 ]
 
 [[package]]
@@ -810,6 +813,7 @@ dependencies = [
  "ed25519",
  "sha2",
  "subtle",
+ "zeroize",
 ]
 
 [[package]]
@@ -1823,6 +1827,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "packages"
+version = "0.1.0"
+dependencies = [
+ "base16ct",
+ "base64ct",
+ "ed25519-dalek",
+ "miniz_oxide 0.9.1",
+ "serde",
+ "serde_json",
+ "sha2",
+ "zeroize",
+]
+
+[[package]]
+name = "packagesd"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "ipc",
+ "packages",
+ "proto",
+ "rt",
+ "web",
+]
+
+[[package]]
 name = "paint"
 version = "0.1.0"
 dependencies = [
@@ -1914,6 +1944,19 @@ name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
+
+[[package]]
+name = "pkg"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "getrandom 0.4.3",
+ "ipc",
+ "packages",
+ "proto",
+ "rt",
+ "zeroize",
+]
 
 [[package]]
 name = "png"
