@@ -1848,6 +1848,9 @@ fn build(archive: &initrd::Archive<'static>, image: SystemImage, live: bool) -> 
     // Where the installed packages are, which every home has, made before
     // anything else could make something there.
     let _ = ram.mkdir_all(&[HOME, PACKAGES]);
+    // And where the services' private directories are, which they would
+    // otherwise all make at once at boot on a new home.
+    let _ = ram.mkdir_all(&[HOME, PRIVATE]);
     let home = match (&store, found) {
         (None, _) if live => "in memory (live system)",
         (None, _) => "in memory (no home disk)",

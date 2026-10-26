@@ -408,7 +408,8 @@ every other device to Linux in [the driver VM](DRIVERVM.md).
   snapshots and access rules are `vfs-core`
   (`implementation/services/vfs/core`), tested on the host.
 - **Private directories.** `/home/.private/<service>` belongs to the system
-  service of that name: only it sees and changes what is inside. A
+  service of that name: only it sees and changes what is inside. The VFS
+  makes `/home/.private` at every start, before any service. A
   connection can give up that access for good (`renounce_private`), as the
   agent's worker does. The root, `/home`, `/home/user`, `/tmp`,
   `/home/.private` and `/home/packages` cannot be removed, moved or

@@ -291,20 +291,10 @@ impl Fs {
         flat(self.c()?.mkdir(path.into()))
     }
 
-    /// Creates `path` and every missing parent.
+    /// Creates `path` and every missing parent. A folder another program
+    /// makes meanwhile is as good as one made here.
     pub fn mkdir_all(&self, path: &str) -> Result<()> {
-        let mut cur = String::new();
-        for comp in path.split('/').filter(|c| !c.is_empty()) {
-            cur.push('/');
-            cur.push_str(comp);
-            match self.stat(&cur) {
-                Ok(s) if s.is_dir => {}
-                Ok(_) => return Err(Error::Fs(FsError::NotDir)),
-                Err(Error::Fs(FsError::NotFound)) => self.mkdir(&cur)?,
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(())
+        make_tree(self, path)
     }
 
     /// Removes a file or an empty directory.
@@ -504,8 +494,8 @@ impl Fs {
     }
 }
 
-/// The calls the walks over trees make: a VFS connection's, which tests
-/// fake.
+/// The calls the walks over trees, and [`make_tree`], make: a VFS
+/// connection's, which tests fake.
 trait Calls {
     fn stat(&self, path: &str) -> Result<Stat>;
     /// The page of folder `dir`'s entries after the name `after`.
@@ -552,6 +542,26 @@ fn for_each_entry(c: &impl Calls, dir: &str, mut f: impl FnMut(DirEntry) -> Resu
             return Ok(());
         }
     }
+}
+
+/// [`Fs::mkdir_all`].
+fn make_tree(c: &impl Calls, path: &str) -> Result<()> {
+    let mut cur = String::new();
+    for comp in path.split('/').filter(|c| !c.is_empty()) {
+        cur.push('/');
+        cur.push_str(comp);
+        match c.stat(&cur) {
+            Ok(s) if s.is_dir => {}
+            Ok(_) => return Err(Error::Fs(FsError::NotDir)),
+            Err(Error::Fs(FsError::NotFound)) => match c.mkdir(&cur) {
+                // Another program made it after the look.
+                Err(Error::Fs(FsError::Exists)) if c.stat(&cur).is_ok_and(|s| s.is_dir) => {}
+                r => r?,
+            },
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
 }
 
 /// [`Fs::remove_all_with`].
@@ -662,9 +672,10 @@ mod tests {
     const PAGE: usize = 3;
 
     /// A file system in memory: (folder, name) → a file's size, or `None`
-    /// for a folder. The root is always there.
+    /// for a folder. The root is always there. The second part is what
+    /// another program is about to make (`Fake::made_meanwhile`).
     #[derive(Default)]
-    struct Fake(RefCell<BTreeMap<(String, String), Option<u64>>>);
+    struct Fake(RefCell<BTreeMap<(String, String), Option<u64>>>, RefCell<Option<(String, Option<u64>)>>);
 
     fn key(path: &str) -> (String, String) {
         (parent(path).to_string(), file_name(path).to_string())
@@ -678,6 +689,12 @@ mod tests {
         fn add(&self, path: &str, size: Option<u64>) -> Result<()> {
             self.0.borrow_mut().insert(key(path), size);
             Ok(())
+        }
+
+        /// Has another program make `path` (a folder, or a file of the
+        /// size) just before the next `mkdir` of it: after a look for it.
+        fn made_meanwhile(&self, path: &str, size: Option<u64>) {
+            *self.1.borrow_mut() = Some((path.to_string(), size));
         }
 
         /// Every path below `dir`, with what it is.
@@ -729,6 +746,10 @@ mod tests {
         }
 
         fn mkdir(&self, path: &str) -> Result<()> {
+            let rival = self.1.borrow_mut().take_if(|(made, _)| made == path);
+            if let Some((made, size)) = rival {
+                self.add(&made, size)?;
+            }
             match (self.get(path), self.get(parent(path))) {
                 (Some(_), _) => Err(Error::Fs(FsError::Exists)),
                 (None, Some(None)) => self.add(path, None),
@@ -818,6 +839,27 @@ mod tests {
         assert_eq!(copy_tree(&fs, "/src/a.txt", "/dst/x/a", &mut to_the_end), Err(Error::Fs(FsError::NotFound)));
         assert_eq!(copy_tree(&fs, "/nothing", "/x", &mut to_the_end), Err(Error::Fs(FsError::NotFound)));
         assert!(fs.below("/dst").is_empty());
+    }
+
+    #[test]
+    fn folders_made_meanwhile_will_do() {
+        let fs = Fake::default();
+        fs.add("/home", None).unwrap();
+        fs.add("/home/user", None).unwrap();
+        // Another program makes `/home/user/.config` between this one's
+        // look for it and its `mkdir`, as two saving their settings at
+        // once on a new home do.
+        fs.made_meanwhile("/home/user/.config", None);
+        assert_eq!(make_tree(&fs, "/home/user/.config/wlan"), Ok(()));
+        assert_eq!(fs.get("/home/user/.config/wlan"), Some(None));
+        // Making it again finds it all there.
+        assert_eq!(make_tree(&fs, "/home/user/.config/wlan"), Ok(()));
+        // A file is no folder, whether it was there or made meanwhile.
+        fs.add("/home/user/notes", Some(1)).unwrap();
+        assert_eq!(make_tree(&fs, "/home/user/notes/x"), Err(Error::Fs(FsError::NotDir)));
+        fs.made_meanwhile("/home/user/.config/editor", Some(1));
+        assert_eq!(make_tree(&fs, "/home/user/.config/editor/x"), Err(Error::Fs(FsError::Exists)));
+        assert_eq!(fs.get("/home/user/.config/editor/x"), None);
     }
 
     #[test]
