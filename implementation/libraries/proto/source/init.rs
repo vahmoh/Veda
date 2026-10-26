@@ -75,7 +75,8 @@ message! {
 }
 
 message! {
-    /// An installed application (from `apps/*.app` in the system image).
+    /// An installed application: the system image's (`apps/*.app`), or an
+    /// installed package's (`/home/packages/apps/*.app`).
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct AppInfo {
         pub id: String,
@@ -114,6 +115,9 @@ union! {
         /// `name` is its process name, which is the id of an installed
         /// application.
         1 => Crashed { koid: u64, name: String },
+        /// The installed applications changed (packages added or removed
+        /// some): [`launcher::Client::apps`] lists them as they are now.
+        2 => AppsChanged {},
     }
 }
 
@@ -154,11 +158,13 @@ pub mod power {
 protocol! {
     /// Starts programs and manages running ones.
     pub mod launcher = "launcher" {
-        /// Starts the executable at `path` with `args`; returns its koid.
+        /// Starts the executable at `path` in the system image with `args`;
+        /// returns its koid.
         1 => fn launch(path: String, args: Vec<String>) -> Result<u64, LaunchError>;
         /// Starts an installed application by id.
         2 => fn launch_app(id: String, args: Vec<String>) -> Result<u64, LaunchError>;
-        /// Installed applications.
+        /// Installed applications, the system image's and the installed
+        /// packages'.
         3 => fn apps() -> Vec<AppInfo>;
         /// Running processes.
         4 => fn tasks() -> Vec<TaskInfo>;
@@ -168,5 +174,10 @@ protocol! {
         6 => fn power(action: u32) -> Result<(), LaunchError>;
         /// A channel on which [`TaskEvent`]s arrive.
         7 => fn watch() -> Result<Channel, LaunchError>;
+        /// For the packages service alone, once it has changed what is
+        /// installed: the launcher reads the installed packages'
+        /// applications again, and tells the watchers if they changed
+        /// ([`TaskEvent::AppsChanged`]).
+        8 => fn refresh_apps() -> Result<(), LaunchError>;
     }
 }

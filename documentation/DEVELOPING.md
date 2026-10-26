@@ -300,7 +300,7 @@ from this machine.
 | Python, once built (`target/python`): the interpreter (also as `python3.15` and `python`) and its standard library; its tests in an image built with `--python-tests`; `verification/python`, for `systest` and the scripts | `/system/bin/python3`, `/system/lib/python3.15/`; `/system/lib/python3.15/test/`; `/system/tests/python/` |
 | The databases Linux keeps in `/etc`: `passwd` and `group` (the one user) and `services` (IANA's registry, from the `iana-etc` port) | `/system/etc/` |
 | The system's repository (`automation/source/packages.rs`): its index, signed and offering nothing yet; its configuration, with the public key the index is checked against; what the system provides (`veda` at its version) | `/system/packages/index.vidx`, `/system/etc/packages/repositories/system.repo`, `/system/etc/packages/provides` |
-| The tests' repositories, signed by a key whose secret is no secret, with their public key; their packages hold the C test program `hello` | `/system/tests/packages/` |
+| The tests' repositories, signed by a key whose secret is no secret, with their public key; their packages hold the C test program `hello`, and the Calculator's program as an application's (`apps`) | `/system/tests/packages/` |
 | The certificate authorities OpenSSL trusts (Mozilla's list, from the `ca-certificates` port), once the web engine or Python is built | `/system/etc/ssl/cert.pem` |
 | `mediadec`, the video decoder (its Rust half, the C shim, FFmpeg, dav1d), and the libraries' `checkasm` programs | `/system/bin/mediadec`, `/system/tests/media/` |
 | `verification/fakedec/clips/*`, for the stand-in decoder | `/system/tests/videos/fake/` |

@@ -1380,10 +1380,20 @@ version = "0.1.0"
 dependencies = [
  "abi",
  "build",
+ "init-core",
  "initrd",
  "ipc",
  "proto",
  "rt",
+]
+
+[[package]]
+name = "init-core"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "ipc",
+ "proto",
 ]
 
 [[package]]

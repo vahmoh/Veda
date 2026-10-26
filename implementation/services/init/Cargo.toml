@@ -20,6 +20,7 @@ abi = { workspace = true }
 initrd = { workspace = true }
 ipc = { workspace = true }
 proto = { workspace = true }
+init-core = { path = "core" }
 
 [build-dependencies]
 build = { workspace = true }

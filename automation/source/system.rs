@@ -109,11 +109,17 @@ pub fn build(o: &Options) -> Result<System> {
 
     util::status("Packing", "initrd");
     let mut initrd = initrd::builder::Builder::new();
+    // The Calculator's program, which the tests' packaged application runs.
+    let mut calculator = None;
     for (program, path) in &artifacts.programs {
         // A program on the standard library is a POSIX program, which the C
         // library starts; one on `rt` alone carries its note.
         let kind = if program.std { elf::Kind::Posix } else { elf::Kind::Veda };
-        initrd.add(&format!("bin/{}", program.binary), shipped(path, Some(kind))?);
+        let file = shipped(path, Some(kind))?;
+        if program.binary == "calculator" {
+            calculator = Some(file.clone());
+        }
+        initrd.add(&format!("bin/{}", program.binary), file);
     }
     // The parts of others' whose licence texts the image has
     // (/system/licences/<part>), and the programs it has built with which
@@ -135,9 +141,10 @@ pub fn build(o: &Options) -> Result<System> {
     // /system has them), the media decoder and its libraries' tests.
     let toolchain = toolchain::image_files(!o.skip.iter().any(|s| s == "mediadec"))?;
     // The system's repository, its configuration, and the tests'
-    // repositories, whose packages' program is the C test program `hello`.
+    // repositories, whose packages' programs are the C test program
+    // `hello` and the Calculator's.
     let hello = toolchain.iter().find(|(path, _)| path == "tests/c/hello").map(|(_, data)| data.as_slice());
-    let packages = crate::packages::image_files(hello)?;
+    let packages = crate::packages::image_files(hello, calculator.as_deref())?;
     // Every C program and every program on the standard library has the C
     // library's POSIX layer; the media decoder, a Rust half.
     let mut bare = Vec::new();

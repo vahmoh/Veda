@@ -297,7 +297,8 @@ struct Shell {
     next_ticket: u64,
     /// A restart or shutdown waiting for the applications to close.
     power: Option<power::PowerOff>,
-    /// Crash reports from the launcher (`launcher::watch`).
+    /// Crash reports from the launcher, and news that the installed
+    /// applications changed (`launcher::watch`).
     task_events: Option<Channel>,
     /// Windows minimised by "show desktop", restored by the next click.
     hidden_by_show_desktop: Vec<u32>,
@@ -1158,23 +1159,28 @@ impl Shell {
         self.post_notification(&format!("Couldn't {what}"), &format!("Because {why}."), "warning");
     }
 
-    /// Turns the launcher's crash reports into notifications.
+    /// Turns the launcher's crash reports into notifications, and takes the
+    /// installed applications anew when they changed.
     fn check_tasks(&mut self) {
         let Some(ch) = self.task_events.take() else { return };
         let mut crashed = Vec::new();
+        let mut apps_changed = false;
         let alive = loop {
             match ch.read() {
-                Ok(msg) => {
-                    if let Ok((_, TaskEvent::Crashed { name, .. })) = ipc::decode_event::<TaskEvent>(msg) {
-                        crashed.push(name);
-                    }
-                }
+                Ok(msg) => match ipc::decode_event::<TaskEvent>(msg) {
+                    Ok((_, TaskEvent::Crashed { name, .. })) => crashed.push(name),
+                    Ok((_, TaskEvent::AppsChanged {})) => apps_changed = true,
+                    Err(_) => {}
+                },
                 Err(abi::Error::ShouldWait) => break true,
                 Err(_) => break false,
             }
         };
         if alive {
             self.task_events = Some(ch);
+        }
+        if apps_changed {
+            self.refresh_apps();
         }
         for name in crashed {
             let (title, body, icon) = match self.model.app(&name) {
@@ -1187,6 +1193,19 @@ impl Shell {
             };
             println!("{} closed unexpectedly", title);
             self.post_notification(&format!("{title} closed unexpectedly"), body, &icon);
+        }
+    }
+
+    /// Takes the installed applications from the launcher again (packages
+    /// added or removed some), for the start menu and the taskbar.
+    fn refresh_apps(&mut self) {
+        let Some(Ok(mut apps)) = self.launcher.as_ref().map(|l| l.apps()) else { return };
+        apps::sort(&mut apps);
+        self.model.apps = apps;
+        println!("the applications changed ({} apps)", self.model.apps.len());
+        self.taskbar_host.invalidate();
+        if let Some(p) = &mut self.popup {
+            p.host.invalidate();
         }
     }
 

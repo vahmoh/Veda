@@ -14,13 +14,15 @@
 //!   they register stay theirs; other programs only names of their own. A
 //!   registry channel can be confined to a few services, for good
 //!   (`registry::confine`), as are the channels cloned from it.
-//! * Implements the **launcher** service: starting programs and installed
-//!   applications, listing and ending tasks, and power control, each as
-//!   far as the caller's identity allows (see [`Init::end`]). What it
-//!   starts runs its threads at [`APPLICATION_PRIORITY`] at most, and,
-//!   like the programs the kernel command line asks for, is an
-//!   application's memory class (`abi::memory_class`): when memory runs
-//!   out, the kernel ends one of them before any system service.
+//! * Implements the **launcher** service: starting programs of the system
+//!   image and installed applications, the system image's and the
+//!   installed packages' (read through the VFS, never waiting for it: see
+//!   [`apps`]), listing and ending tasks, and power control, each as far
+//!   as the caller's identity allows (see [`Init::end`]). What it starts
+//!   runs its threads at [`APPLICATION_PRIORITY`] at most, and, like the
+//!   programs the kernel command line asks for, is an application's memory
+//!   class (`abi::memory_class`): when memory runs out, the kernel ends one
+//!   of them before any system service.
 
 #![no_std]
 #![no_main]
@@ -40,6 +42,7 @@ use alloc::vec::Vec;
 use abi::startup::role;
 use abi::{resource_kind, signals};
 use ipc::WaitSet;
+use proto::fs::vfs;
 use proto::init::{
     AppInfo, ClientIdentity, LISTENER_CONNECT, LaunchError, RegistryError, TASK_EVENT, TaskEvent, TaskInfo, launcher,
     registry,
@@ -129,7 +132,12 @@ pub struct Init {
     pending: BTreeMap<String, Vec<(Channel, ClientIdentity)>>,
     conns: BTreeMap<u64, Conn>,
     children: BTreeMap<u64, Child>,
+    /// The system image's applications, and every application: those and
+    /// the installed packages'.
+    system_apps: Vec<AppInfo>,
     apps: Vec<AppInfo>,
+    /// What init reads of the installed packages through the VFS.
+    installed: apps::Installed,
     next_key: u64,
     /// Recent restart times of each supervised service.
     restarts: BTreeMap<String, Vec<u64>>,
@@ -138,6 +146,15 @@ pub struct Init {
 }
 
 const CHILD_KEY: u64 = 1 << 48;
+/// The wait key of init's connection to the VFS.
+const VFS_KEY: u64 = 1 << 47;
+
+/// A program to start: a file of the system image, or one read whole
+/// through the VFS (into a VMO of its own, and its size).
+pub enum Image<'a> {
+    System(initrd::File<'static>),
+    Read(&'a Vmo, usize),
+}
 
 impl Init {
     fn add_conn(&mut self, channel: Channel, kind: ConnKind) {
@@ -203,8 +220,22 @@ impl Init {
         origin: Origin,
     ) -> Result<u64, LaunchError> {
         let (file, file_path) = self.program(path).ok_or(LaunchError::NotFound)?;
+        self.spawn_image(name, &file_path, args, extra, origin, Image::System(file))
+    }
+
+    /// Starts the program `image`, which is the file at `path`, with a
+    /// registry channel plus `extra` handles.
+    pub fn spawn_image(
+        &mut self,
+        name: &str,
+        path: &str,
+        args: &[String],
+        extra: Vec<(u32, Handle)>,
+        origin: Origin,
+        image: Image,
+    ) -> Result<u64, LaunchError> {
         let registry = self.new_registry_channel(0, None).ok_or(LaunchError::NoMemory)?;
-        let mut spawn = rt::process::Spawn::new(name).path(&file_path).handle(role::REGISTRY, registry.into_handle());
+        let mut spawn = rt::process::Spawn::new(name).path(path).handle(role::REGISTRY, registry.into_handle());
         for a in args {
             spawn = spawn.arg(a);
         }
@@ -220,11 +251,16 @@ impl Init {
         if origin != Origin::Service {
             spawn = spawn.memory_class(abi::memory_class::APPLICATION);
         }
-        // It runs from the image's pages, which every process running it
-        // shares (from a copy of them if they cannot be had).
-        let started = match self.initrd_vmo.slice(file.offset as usize, file.data.len()) {
-            Ok(pages) => spawn.start_file(&pages, file.data.len()),
-            Err(_) => spawn.start(file.data),
+        let started = match image {
+            // It runs from the image's pages, which every process running
+            // it shares (from a copy of them if they cannot be had).
+            Image::System(file) => match self.initrd_vmo.slice(file.offset as usize, file.data.len()) {
+                Ok(pages) => spawn.start_file(&pages, file.data.len()),
+                Err(_) => spawn.start(file.data),
+            },
+            // From the copy of the file that the VFS made for init, which
+            // nothing else changes.
+            Image::Read(vmo, len) => spawn.start_file(vmo, len),
         };
         let process = started.map_err(|e| {
             println!("failed to start {}: {}", path, e);
@@ -397,6 +433,11 @@ impl Init {
                     // Queued again should the service be gone already.
                     let _ = self.init.connect(&name, ch, client);
                 }
+                // What packages installed is read from the moment the file
+                // system is there.
+                if client.service && name == vfs::NAME {
+                    self.init.read_installed_apps();
+                }
                 Ok(())
             }
 
@@ -437,6 +478,12 @@ impl Init {
 
     fn handle_launcher(&mut self, key: u64, msg: rt::Message) {
         let Some(Conn { kind: ConnKind::Launcher { who }, .. }) = self.conns.get(&key) else { return };
+        let who = who.clone();
+        // Starting an application is answered apart: an installed
+        // package's once its program is read.
+        if ipc::Header::parse(&msg.bytes).is_ok_and(|h| h.ordinal == apps::LAUNCH_APP) {
+            return self.launch_app_call(key, msg);
+        }
         struct Launch<'a> {
             init: &'a mut Init,
             who: ClientIdentity,
@@ -447,9 +494,9 @@ impl Init {
                 self.init.spawn(&name, &path, &args, Vec::new(), Origin::Launched)
             }
 
-            fn launch_app(&mut self, id: String, args: Vec<String>) -> Result<u64, LaunchError> {
-                let app = self.init.apps.iter().find(|a| a.id == id).cloned().ok_or(LaunchError::NotFound)?;
-                self.init.spawn(&app.id, &app.exe, &args, Vec::new(), Origin::Launched)
+            /// Not reached: `Init::launch_app_call` answers these.
+            fn launch_app(&mut self, _id: String, _args: Vec<String>) -> Result<u64, LaunchError> {
+                Err(LaunchError::Failed)
             }
 
             fn apps(&mut self) -> Vec<AppInfo> {
@@ -507,8 +554,12 @@ impl Init {
                 self.init.watchers.push(ours);
                 Ok(theirs)
             }
+
+            /// For the packages service alone.
+            fn refresh_apps(&mut self) -> Result<(), LaunchError> {
+                self.init.refresh_apps(&self.who)
+            }
         }
-        let who = who.clone();
         let reply = launcher::dispatch(&mut Launch { init: self, who }, msg);
         if let (Ok(reply), Some(conn)) = (reply, self.conns.get(&key)) {
             let _ = reply.send(&conn.channel);
@@ -528,11 +579,8 @@ impl Init {
             _ => println!("{} exited with code {}", child.name, code),
         }
         if child.origin != Origin::Service && abi::crashed(code) {
-            // Tell the watchers (the shell shows a notification). Watchers
-            // that went away are dropped; a full channel just misses this.
-            let event = TaskEvent::Crashed { koid, name: child.name.clone() };
-            self.watchers
-                .retain(|w| !matches!(ipc::send_event(w, TASK_EVENT, event.clone()), Err(ipc::IpcError::PeerClosed)));
+            // The shell shows a notification.
+            self.tell(TaskEvent::Crashed { koid, name: child.name.clone() });
         }
         // Drop the services it provided.
         self.services.retain(|name, (_, owner)| {
@@ -545,6 +593,13 @@ impl Init {
         if child.origin == Origin::Service {
             self.supervise(&child.name);
         }
+    }
+
+    /// Tells the watchers `event`. Watchers that went away are dropped; a
+    /// full channel just misses it.
+    fn tell(&mut self, event: TaskEvent) {
+        self.watchers
+            .retain(|w| !matches!(ipc::send_event(w, TASK_EVENT, event.clone()), Err(ipc::IpcError::PeerClosed)));
     }
 
     /// Restarts a system service that exited, unless it is not restartable
@@ -580,6 +635,9 @@ impl Init {
             for (&koid, c) in &self.children {
                 ws.add(c.process.raw(), signals::TERMINATED, CHILD_KEY | koid);
             }
+            if let Some(vfs) = &self.installed.vfs {
+                ws.add(vfs.raw(), signals::READABLE | signals::PEER_CLOSED, VFS_KEY);
+            }
             let ready = match ws.wait(abi::DEADLINE_INFINITE) {
                 Ok(r) => r,
                 Err(e) => {
@@ -590,6 +648,10 @@ impl Init {
             for (key, observed) in ready {
                 if key & CHILD_KEY != 0 {
                     self.on_child_exit(key & !CHILD_KEY);
+                    continue;
+                }
+                if key == VFS_KEY {
+                    self.take_vfs_answers(observed);
                     continue;
                 }
                 if observed & signals::READABLE != 0 {
@@ -632,12 +694,15 @@ fn main() -> i32 {
         pending: BTreeMap::new(),
         conns: BTreeMap::new(),
         children: BTreeMap::new(),
+        system_apps: Vec::new(),
         apps: Vec::new(),
+        installed: apps::Installed::default(),
         next_key: 0,
         restarts: BTreeMap::new(),
         watchers: Vec::new(),
     };
-    init.apps = apps::load(&init.initrd);
+    init.system_apps = apps::load(&init.initrd);
+    init.apps = init.system_apps.clone();
     println!("{} application(s) installed", init.apps.len());
     boot::start_system(&mut init);
     boot::start_requested(&mut init);

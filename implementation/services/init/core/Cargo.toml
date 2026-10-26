@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "init-core"
+description = "What init's launcher decides, testable on the host: the applications' manifests, and which of the installed packages' applications it lists and starts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "source/lib.rs"
+
+[dependencies]
+proto = { workspace = true }
+
+[dev-dependencies]
+abi = { workspace = true }
+ipc = { workspace = true }
+
+[lints]
+workspace = true

@@ -206,8 +206,14 @@ fn test_crash_report() -> TestResult {
         .map_err(|e| e.to_string())?
         .map_err(|e| alloc::format!("launch: {e:?}"))?;
     let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(10));
-    let msg = events.read_blocking(deadline).map_err(|e| alloc::format!("no crash report: {e}"))?;
-    let (_, event) = ipc::decode_event::<TaskEvent>(msg).map_err(|e| e.to_string())?;
+    // News that the installed applications changed may come first.
+    let event = loop {
+        let msg = events.read_blocking(deadline).map_err(|e| alloc::format!("no crash report: {e}"))?;
+        match ipc::decode_event::<TaskEvent>(msg).map_err(|e| e.to_string())? {
+            (_, TaskEvent::AppsChanged {}) => continue,
+            (_, event) => break event,
+        }
+    };
     check(event == TaskEvent::Crashed { koid, name: "systest".into() }, "the report names the crashed process")
 }
 
@@ -821,7 +827,7 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 46] = [
+    let tests: [Test; 47] = [
         ("starved threads run", test_starved_threads_run),
         ("ipc primitives", test_ipc_primitives),
         ("short sleeps", test_short_sleeps),
@@ -863,6 +869,7 @@ fn main() -> i32 {
         ("giving abilities up", posix::test_process_restrict),
         ("launcher", test_launcher),
         ("packages", packages::test_packages),
+        ("packages' applications", packages::test_applications),
         ("what applications may do", policy::test_application_limits),
         ("the lock", policy::test_the_lock),
         ("crash report", test_crash_report),

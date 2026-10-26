@@ -41,6 +41,7 @@ members = [
     "implementation/libraries/iommu",
     "implementation/libraries/packages",
     "implementation/services/init",
+    "implementation/services/init/core",
     "implementation/services/mediadec",
     "implementation/services/vfs",
     "implementation/services/vfs/core",

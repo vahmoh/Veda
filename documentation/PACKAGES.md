@@ -15,7 +15,9 @@ This document describes how packages are used and made, their formats,
 who may do what, how a change is made and recovered from, what the system
 image holds, and why it is so. The code is `implementation/libraries/packages`
 (what is decided, tested on the host), `implementation/services/packages`
-(the service) and `implementation/applications/pkg` (the command).
+(the service) and `implementation/applications/pkg` (the command); the
+launcher in `init` lists and starts the applications packages install
+(`implementation/services/init`, its rules in `init-core`).
 
 **Contents:** [Using packages](#using-packages) · [How it fits together](#how-it-fits-together) · [Packages](#packages-1) · [Repositories](#repositories) · [The system image's repository](#the-system-images-repository) · [Working out a change](#working-out-a-change) · [Making a change, and recovering](#making-a-change-and-recovering) · [Security](#security) · [Limits](#limits) · [Decisions](#decisions) · [Testing](#testing) · [What comes next](#what-comes-next)
 
@@ -64,17 +66,21 @@ pid=10932 cwd=/home/user
 Packages install their files under `/home/packages`, which every program
 reads and only the packages service changes. Their commands are in
 `/home/packages/bin`, on the Terminal's `PATH` after `/system/bin` (a
-package cannot stand in for one of the system's commands).
+package cannot stand in for one of the system's commands), and their
+applications in the start menu beside the system's
+([Applications](#applications)).
 
 ## How it fits together
 
 | Part | What it is |
 |------|------------|
 | `packages` (`implementation/libraries/packages`) | Everything decided: names and versions, the package and index formats, keys and signatures, the repositories' configuration, the database of what is installed, the resolver, plans, and the transactions that make changes and recover them; `no_std`, tested on the host, with a file system of the standard library's (`std` feature) |
-| The `packages` service (`implementation/services/packages`, program `packages`) | A system service on the standard library, which `init` starts last and restarts if it ends: serves `proto::packages`, keeps its state in `/home/.private/packages`, fetches indexes and packages, and alone writes `/home/packages` |
+| The `packages` service (`implementation/services/packages`, program `packages`) | A system service on the standard library, which `init` starts last and restarts if it ends: serves `proto::packages`, keeps its state in `/home/.private/packages`, fetches indexes and packages, alone writes `/home/packages`, and tells the launcher when what is installed changed |
 | `pkg` (`implementation/applications/pkg`) | The command: asks the service, shows plans and progress; and makes keys, packages and repositories without it, in Veda or on the build machine |
 | The VFS (`vfs-core`'s `access`) | Lets none but the packages service change `/home/packages`, which it makes at every start and nothing removes or moves |
 | `init` (`boot.rs`) | Starts the service after the desktop shell, and again if it ends |
+| The launcher in `init` (`apps.rs`; `init-core`'s `apps`) | Lists the installed packages' applications beside the system's, reading them through the VFS when the service says what is installed changed, and starts them |
+| The desktop shell | Shows them in the start menu, taking the list again when the launcher says it changed |
 | The Terminal | Has `/home/packages/bin` on its `PATH`, and completes its commands |
 | `automation` (`automation/source/packages.rs`) | Puts the system's repository, its configuration and the tests' repositories into the image |
 
@@ -197,6 +203,54 @@ depends=veda (>= 0.1)
 `pkg build hello` makes `hello-1.0-1.amd64.vpkg` of it, in Veda or on the
 build machine (`cargo run -p pkg -- build hello`).
 
+### Applications
+
+A package puts an application in the start menu with a manifest in
+`apps/`, as the system image's applications have, beside its program:
+
+```text
+abacus/files/apps/abacus.app
+abacus/files/bin/abacus
+```
+
+```text
+name=Abacus
+icon=calculator
+category=Accessories
+description=Sums
+```
+
+The application's id is the manifest's name without `.app` (`abacus`):
+the name its program runs under, which services know it by. Its program
+is `exe`, by default `/home/packages/bin/<id>`, and `icon` names one of
+the system's glyphs. The launcher in `init` lists the installed packages'
+applications beside the system's (`launcher::apps`), and starts one as it
+starts the system's (`launcher::launch_app`): under its id, at the same
+priority and of the same memory class, from its program read whole (an
+upgrade meanwhile does not change what runs). It leaves out, saying so in
+the log, a manifest:
+
+| Left out | Why |
+|----------|-----|
+| Whose id is not 1 to 64 bytes of lower-case letters, digits and `+`, `-`, `.`, beginning with a letter or digit (a package's name's rule) | An id names a process and a window, and is shown |
+| Whose id is the system's: a system application's id, or the name of a program of the system image (`terminal`, `shell`, `pkg`) | Services decide what a program may do by that name: a package's `terminal.app` would have the Terminal's rights |
+| Whose program is not a plain path (no `.`, `..` or empty part) in `/home/packages` or `/system` | Nothing runs as an application but what is installed or the system's: another program could write anywhere else |
+| Beyond the 64th, or larger than 4 KiB | The list of every application fits one message |
+
+`pinned` and `taskbar` count for nothing: a package's application is in
+the start menu's list and its search, never in the pinned grid or on the
+taskbar, which hold what the system image puts there. Its name, icon and
+category are cut to 64 bytes, its description to 256, all of them rid of
+control characters.
+
+The launcher reads the manifests through a connection of its own to the
+VFS, which reaches nothing but `/home/packages`, to read, and does not
+wait for its answers: `init`, the launcher's process, is every process's
+registry, which a busy VFS must not hold up. It reads them once the VFS is
+there, and again whenever the packages service has made a change, or
+started (which may have finished or rolled one back), and the shell takes
+the list again when it changed.
+
 ## Repositories
 
 A repository is a directory of package files and its index,
@@ -291,7 +345,7 @@ Every system image has (`automation/source/packages.rs`):
 | `/system/packages/index.vidx` | The repository `system`: valid, signed, and offering no packages yet. What a release puts there installs from the image itself, without a network |
 | `/system/etc/packages/repositories/system.repo` | Its configuration: `url=file:///system/packages`, and the public key its index is checked against |
 | `/system/etc/packages/provides` | What the system provides: `veda (= VERSION)` |
-| `/system/tests/packages/` | The tests' repositories, `one` and `two` (newer versions), both `test`, and their public key, `test.pub`; with the C test programs alone (`cargo automation toolchain`) |
+| `/system/tests/packages/` | The tests' repositories, `one` and `two` (newer versions), both `test`, with the C test programs alone (`cargo automation toolchain`); `apps`, whose `abacus` installs an application (the Calculator's program) and `impostor` applications the launcher leaves out; and their public key, `test.pub` |
 
 **The key** that signs the system's repository is a release's, whose
 secret key file `VEDA_REPOSITORY_KEY` names when the release is built
@@ -413,6 +467,9 @@ before the change or as it is after, never between.
 | A package runs code as it installs | Packages run nothing as they install: the service only writes files |
 | A program changes what another runs, or what the user installed | Only the packages service changes `/home/packages` (the VFS's rule, by the identity the registry gives each connection) |
 | A program installs or removes software unasked | Only the Terminal (whose programs speak for it), Settings and the programs the kernel command line asks for may change packages or repositories |
+| A package's application passes for one of the system's, whose rights services give by name | The launcher lists none whose id is a system application's or a system program's name |
+| A package's application runs a program that another program wrote | Its program is in `/home/packages` or `/system`, which only the packages service and the image change; the launcher reads it through a connection that reaches nothing else |
+| A package crowds the start menu or the taskbar, or makes the list of applications too large to send | Its applications are in the start menu's list alone, at most 64, each manifest's values bounded |
 | A repository added later takes a package over with a higher version | An installed package is upgraded only from the repository it came from |
 | What the user agreed to is not what is done | Changes are made by the digest of the plan shown |
 | A change cut short leaves a broken system | Changes are journalled, and rolled back or finished at the next start |
@@ -435,6 +492,7 @@ the system anyway.
 | A resolution | 200 000 choices |
 | A plan, a check of the files | 200 steps or problems listed (the rest counted) |
 | Connections to the service | 32, 8 of one process |
+| Applications of packages in the start menu | 64; a manifest 4 KiB, its program's path 256 bytes, its name, icon and category 64, its description 256 |
 
 `/home` is kept in memory, and on the home disk where there is one: what
 packages install takes memory, and room on the disk.
@@ -458,6 +516,8 @@ packages install takes memory, and room on the disk.
 | Staging, a journal and a commit by the database's replacement | Undoing from a log of operations (dpkg's half-installed states): a change staged whole first fails before anything installed is touched, and the journal makes the rest exact both ways |
 | The system image's repository read from the image at every start | Copying its configuration into the user's: a newer image's address or key would not reach a system that had started from an older one |
 | A repository in the system image, read in place | On the ISO's own file system: Veda reads nothing of the stick but the files its loader loads |
+| The launcher reads the packages' applications through the VFS itself, sending its requests and taking the answers as they come | Waiting for each answer: `init` is every process's registry, so a VFS busy saving `/home` would hold up every connection in the system. The packages service handing `init` the list: the launcher would show what another process says is installed, not what is there |
+| A package's application takes no name of the system's, and is pinned nowhere | Letting a package replace a system application (a Terminal of its own): it would have the system application's rights, which services give by name. Pinning itself: the pinned grid and the taskbar would fill with what packages chose, and a script's clicks would miss |
 
 ## Testing
 
@@ -466,19 +526,22 @@ packages install takes memory, and room on the disk.
 | Versions, requirements, manifests, the package and index formats (damaged, false and endless input), keys, the configuration, the database, the resolver, plans | Unit tests in `implementation/libraries/packages` (`cargo test -p packages --features std`) |
 | Changes: install, upgrade, removal, conflicts, no room, checks of the files; every change cut short at every step, and every recovery at every step of its own | `packages`' `tests.rs`, on a file system in memory that loses its power on cue, and on the build machine's |
 | The image's repositories: valid, the same from build to build | `automation`'s tests (`packages.rs`) |
+| Applications' manifests: what they say, the ids and programs left out, the values cut short, the list of every application fitting a message | `init-core`'s unit tests (`cargo test -p init-core`) |
 | The protocol's messages, and that the largest answers fit one | `proto`'s tests |
 | Only the packages service changes `/home/packages` | `vfs-core`'s tests |
 | In Veda: the system's repository at start; a repository added, a package installed with its dependency and run, the VFS refusing others' writes there, a conflict and a newer system refused, the files checked, the packages removed | `systest`'s `packages` (`verification/systest/source/packages.rs`), which `cargo automation test` runs, in the continuous integration too |
+| In Veda: a package's application listed once installed, started from `/home/packages` as an application of its own, gone with its package; another package's applications that take the Terminal's id or run programs from elsewhere left out | `systest`'s `packages' applications`, from the image's repository `apps` |
 | `pkg` in the Terminal, through a restart and an upgrade | `verification/ui/packages.vts` |
+| A package's application installed with `pkg`, found and opened from the start menu, gone once removed | `verification/ui/packages-apps.vts` |
 | The live system from a USB stick: the image's repository found and used, a package installed into memory | `verification/ui/packages-live.vts` |
 | Repositories on a web server (the host's, `automation/source/hostweb.rs`): an index that never expires refused, one that does taken, a package downloaded, installed and run | `verification/ui/packages-web.vts` |
 
 ## What comes next
 
-* **Applications in the start menu.** Packages may install `.app`
-  manifests (`/home/packages/apps`), which the launcher in `init` does not
-  read yet, nor start programs from outside the system image: their
-  programs run from the Terminal until it does.
+* **Applications' own icons, and the files they open.** A package's
+  application shows one of the system's glyphs (`icon=`), and opens no
+  file by its type: `launcher::launch`, which the Files application opens
+  files with, starts programs of the system image alone.
 * **Downloads in pieces.** `web` reads a response whole: a package is
   held in memory once as it downloads.
 * **Settings and the agent.** A page of Settings for software, and the

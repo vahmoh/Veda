@@ -81,6 +81,7 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("lock-core", &[]),
     ("shell-common", &[]),
     ("vfs-core", &[]),
+    ("init-core", &[]),
     ("gencommon", &[]),
     ("assetgen", &[]),
     ("musicgen", &[]),

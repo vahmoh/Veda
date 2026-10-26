@@ -308,13 +308,29 @@ says which each is:
   Terminal). System services may register any name and keep it; other
   programs register only names of their own (`music`, `music/...`), so
   that none can stand in for a service not registered yet.
-- **The launcher** in `init` starts programs and installed applications
-  (their `.app` manifests), whose threads run at `NORMAL` at most
+- **The launcher** in `init` starts programs of the system image and
+  installed applications, whose threads run at `NORMAL` at most
   ([The kernel](#the-kernel)), lists the running ones and ends them with
   their jobs. Applications may end applications; only system services, Task
   Manager, the Terminal's `kill -f` and programs the kernel command line
   asked for may end the system's processes. Only system services shut the
-  machine down or restart it, and hear of crashes (`launcher::watch`).
+  machine down or restart it, and hear of crashes and of the applications
+  changing (`launcher::watch`).
+- **Applications** are described by `.app` manifests: the system image's
+  (`/system/apps`), and the installed packages' (`/home/packages/apps`).
+  `init` reads the packages' through a connection of its own to the VFS,
+  confined to reading `/home/packages`, as it reads their programs when
+  they start: it sends its requests and takes the answers in its loop,
+  never waiting for the VFS, as every process's registry is `init`'s. It
+  reads them once the VFS has registered, and again whenever the packages
+  service has changed what is installed (`launcher::refresh_apps`). A
+  package's application starts as one of the system's does, its id its
+  identity's name; it never has a name of the system's (a system
+  application's id, or the name of a program of the system image, by which
+  services know a program), runs no program outside `/home/packages` and
+  `/system`, and stays out of the start menu's pinned grid and off the
+  taskbar. `init-core` (`implementation/services/init/core`) holds these
+  rules, tested on the host.
 
 ## Devices
 
@@ -552,6 +568,10 @@ tested on the host.
   the database in place in one step. A change cut short is rolled back or
   finished when the service starts again. No package runs anything as it
   installs.
+- **Applications.** A package may install applications, each a manifest
+  in `/home/packages/apps` and its program, which the start menu lists
+  beside the system's and the launcher starts from where they are
+  installed ([User space](#user-space)).
 
 ## The window system
 
@@ -704,7 +724,8 @@ surfaces (the desktop, the taskbar, the start menu and calendar,
 notifications) are `ui::Host`s that draw from one shared model and change
 it through actions the main loop performs. Windows come from the compositor
 (`list_windows`, refreshed on `WindowsChanged`), installed applications
-from the launcher.
+from the launcher (taken again when it says they changed, as packages add
+or remove some).
 
 - **The `shell` protocol** lets applications change the wallpaper and post
   notifications, which show the application's own tile and name, at most

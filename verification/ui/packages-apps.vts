@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# An application installed as a package (1280x800), from the start menu:
+# pkg, in the Terminal, adds the image's test repository of applications
+# and installs abacus, whose manifest (/home/packages/apps/abacus.app)
+# names its program, the Calculator's as the package installs it
+# (/home/packages/bin/abacus), and impostor, whose applications take the
+# Terminal's id or run programs from elsewhere. The launcher lists abacus
+# alone, and the shell takes the new list: the start menu's search finds
+# it, and Enter starts it from where it is installed, as an application of
+# its own. Removed, it is gone from the start menu.
+boot-cmdline "run=terminal"
+fail-on "PANIC"
+fail-on "abacus crashed"
+fail-on "the connection to the VFS is lost"
+wait-serial "desktop ready" 90
+wait-serial "packages: ready (0 installed; repositories: system)" 60
+wait-serial "started terminal" 60
+wait 3
+# Maximise the window (Super+Up).
+key meta_l-up
+wait 2
+type "pkg repo add apps file:///system/tests/packages/apps /system/tests/packages/test.pub && pkg update && logger apps-added-ok"
+key ret
+wait-serial "packages: apps: 2 packages (serial 1)" 60
+wait-serial "terminal: apps-added-ok" 60
+type "pkg install -y abacus impostor && logger apps-installed-ok"
+key ret
+wait-serial "packages: installed abacus 1.0 (from apps)" 180
+wait-serial "terminal: apps-installed-ok" 60
+wait-serial "init: /home/packages/apps/terminal.app is left out: its id is the system's own" 30
+wait-serial "init: /home/packages/apps/stray.app is left out: its program is not a plain path" 30
+wait-serial "init: /home/packages/apps/sneak.app is left out: its program is not a plain path" 30
+wait-serial "init: 1 application(s) of installed packages" 30
+wait-serial "shell: the applications changed" 30
+# The start menu (Super) finds it by name; Enter opens it.
+key meta_l
+wait 2
+type "abacus"
+wait 2
+shot target/veda/packages-apps-1-search.png
+key ret
+wait-serial "init: started abacus" 30
+wait-serial "abacus: Standard mode" 30
+wait 3
+shot target/veda/packages-apps-2-opened.png
+# Closed, and removed: the start menu no longer has it.
+key alt-f4
+wait-serial "abacus exited with code 0" 30
+wait 2
+checkpoint
+type "pkg remove -y abacus impostor && logger apps-removed-ok"
+key ret
+wait-serial "packages: removed abacus 1.0" 120
+wait-serial "terminal: apps-removed-ok" 60
+wait-serial "init: 0 application(s) of installed packages" 30
+wait-serial "shell: the applications changed" 30
+key meta_l
+wait 2
+type "abacus"
+wait 2
+shot target/veda/packages-apps-3-removed.png
+key esc
+key esc

@@ -24,6 +24,10 @@
 //!   change out take time, so the worker ([`worker`]) does them on a thread
 //!   of its own, one at a time, and the service answers them once done,
 //!   answering every other call meanwhile.
+//! * **The start menu.** After every change, and at its start (which may
+//!   have finished or rolled one back), it has the launcher in `init` read
+//!   the installed packages' applications again (`launcher::refresh_apps`),
+//!   which it lists beside the system's.
 //! * **Bounds.** At most [`MAX_CLIENTS`] connections, [`MAX_CLIENTS_EACH`]
 //!   of one process; lists come in pages, and plans and reports list a
 //!   bounded number of entries.
@@ -36,7 +40,7 @@ use std::sync::Arc;
 
 use abi::signals;
 use ipc::{Decode, Encode, WaitSet};
-use proto::init::ClientIdentity;
+use proto::init::{ClientIdentity, launcher};
 use proto::packages::{
     self as protocol, Failure, Outcome, PackageError, PackageInfo, PackageSummary, Plan, Refreshed, Report,
     RepositoryChange, RepositoryInfo, Request, Scope, Status, packages,
@@ -50,6 +54,9 @@ use crate::worker::{Done, Job, Worker};
 /// Connections served at once, and of one process.
 const MAX_CLIENTS: usize = 32;
 const MAX_CLIENTS_EACH: usize = 8;
+
+/// How long the launcher may take to answer.
+const LAUNCHER_TIMEOUT_NS: u64 = 5_000_000_000;
 
 /// The applications that change the installed software: the Terminal
 /// (whose programs speak for it) and Settings.
@@ -89,6 +96,8 @@ struct Service {
     next_client: u64,
     /// The job under way, and the call it answers.
     waiting: Option<Waiting>,
+    /// The launcher, told when what is installed changed.
+    launcher: Option<launcher::Client>,
 }
 
 /// Sends the answer to the call `txid` of method `ordinal`.
@@ -96,6 +105,26 @@ fn answer<T: Encode>(channel: &Channel, ordinal: u32, txid: u32, result: T) {
     let mut e = ipc::Encoder::with_header(ordinal, txid, ipc::FLAG_RESPONSE);
     result.encode(&mut e);
     let _ = e.send(channel);
+}
+
+/// Has the launcher read the installed packages' applications again
+/// (connecting to it first, into `launcher`, if need be).
+fn refresh_apps(launcher: &mut Option<launcher::Client>) {
+    if launcher.is_none() {
+        *launcher = proto::connect(launcher::NAME).ok().map(launcher::Client::new);
+        if let Some(l) = launcher {
+            l.set_timeout(LAUNCHER_TIMEOUT_NS);
+        }
+    }
+    let Some(l) = launcher else { return };
+    match l.refresh_apps() {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => println!("the launcher did not read the applications again: {e}"),
+        Err(e) => {
+            println!("the launcher is not answering: {e}");
+            *launcher = None;
+        }
+    }
 }
 
 impl Service {
@@ -257,6 +286,9 @@ impl Service {
                     if let Some(db) = db {
                         self.state.db = Arc::new(db);
                     }
+                    // Even a change that failed may have finished or rolled
+                    // back one cut short before it.
+                    refresh_apps(&mut self.launcher);
                     if let Some((ch, ordinal, txid)) = caller {
                         answer(ch, ordinal, txid, result);
                     }
@@ -418,6 +450,9 @@ fn main() {
         state.db.packages.len(),
         if names.is_empty() { String::from("none") } else { names.join(", ") }
     );
-    let mut service = Service { state, worker, listener, clients: Vec::new(), next_client: 0, waiting: None };
+    let mut service =
+        Service { state, worker, listener, clients: Vec::new(), next_client: 0, waiting: None, launcher: None };
+    // What is installed may have changed as it was recovered.
+    refresh_apps(&mut service.launcher);
     service.run()
 }

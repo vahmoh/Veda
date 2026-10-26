@@ -13,12 +13,14 @@
 //!   what the system provides (`/system/etc/packages/provides`: `veda` at
 //!   the image's version), which packages may depend on.
 //! * **The tests' repositories**, in `/system/tests/packages`: `one` and
-//!   `two` (newer versions), both called `test`, signed by a key whose
-//!   secret is no secret (it is made from a fixed seed, so that test images
-//!   are the same everywhere): no system trusts it unless a test adds the
-//!   repository, giving its public key (`test.pub`). They need the C test
+//!   `two` (newer versions), both called `test`, and `apps`, of packages
+//!   that install applications, signed by a key whose secret is no secret
+//!   (it is made from a fixed seed, so that test images are the same
+//!   everywhere): no system trusts it unless a test adds the repository,
+//!   giving its public key (`test.pub`). `one` and `two` need the C test
 //!   programs (`cargo automation toolchain`), whose `hello` is their
-//!   packages' program. The host's web server serves `one`'s packages too,
+//!   packages' program, and `apps` the Calculator, whose program its
+//!   application's is. The host's web server serves `one`'s packages too,
 //!   as repositories on the network are ([`web_files`]).
 //!
 //! **The key** that signs the system's repository is a release's, whose
@@ -47,6 +49,9 @@ const SYSTEM_URL: &str = "file:///system/packages";
 /// The tests' repositories' name, and where they are.
 const TEST: &str = "test";
 const TEST_DIR: &str = "tests/packages";
+/// The name of the tests' repository of applications, which is in
+/// `TEST_DIR/apps`.
+const APPS: &str = "apps";
 /// When the image's indexes were made (2026-01-01 12:00:00 UTC), and the
 /// system's index's serial: an image's own repository is read from the
 /// image every time, so it needs neither to grow.
@@ -195,10 +200,9 @@ fn first_packages(hello: &[u8]) -> Result<Vec<(Offer, Vec<u8>)>> {
     ])
 }
 
-/// The tests' repositories: `one`, and `two`, newer versions of its first
-/// two.
-fn test_repositories(hello: &[u8]) -> Result<Vec<(String, Vec<u8>)>> {
-    let key = test_key();
+/// The tests' repositories of `hello`: `one`, and `two`, newer versions of
+/// its first two, signed by `key`.
+fn test_repositories(hello: &[u8], key: &SecretKey) -> Result<Vec<(String, Vec<u8>)>> {
     let common = COMMON;
     let two = vec![
         package(
@@ -217,10 +221,45 @@ fn test_repositories(hello: &[u8]) -> Result<Vec<(String, Vec<u8>)>> {
             &[("share/libgreet/greeting", b"Hello from libgreet 2.0\n")],
         )?,
     ];
-    let mut files = repository(&format!("{TEST_DIR}/one"), TEST, 1, first_packages(hello)?, &key, IMAGE)?;
-    files.extend(repository(&format!("{TEST_DIR}/two"), TEST, 2, two, &key, IMAGE)?);
-    files.push((format!("{TEST_DIR}/test.pub"), format!("{}\n", key.public()).into_bytes()));
+    let mut files = repository(&format!("{TEST_DIR}/one"), TEST, 1, first_packages(hello)?, key, IMAGE)?;
+    files.extend(repository(&format!("{TEST_DIR}/two"), TEST, 2, two, key, IMAGE)?);
     Ok(files)
+}
+
+/// The packages of the tests' repository of applications: `abacus`, an
+/// application whose program is the Calculator's, as a package installs
+/// it, and `impostor`, whose applications the launcher refuses: one takes
+/// the Terminal's id, and two have programs elsewhere than the installed
+/// packages and the system.
+fn app_packages(calculator: &[u8]) -> Result<Vec<(Offer, Vec<u8>)>> {
+    let common = COMMON;
+    Ok(vec![
+        package(
+            &format!(
+                "name=abacus\nversion=1.0\narchitecture=amd64\nsummary=Sums, an application for the tests\n{common}\
+                 depends=veda (>= 0.1)\n"
+            ),
+            &[
+                (
+                    "apps/abacus.app",
+                    b"name=Abacus\nicon=calculator\ncategory=Accessories\n\
+                      description=Sums, from a package of the tests\npinned=true\n",
+                ),
+                ("bin/abacus", calculator),
+            ],
+        )?,
+        package(
+            &format!(
+                "name=impostor\nversion=1.0\narchitecture=any\n\
+                 summary=Applications the launcher refuses, for the tests\n{common}"
+            ),
+            &[
+                ("apps/sneak.app", b"name=Sneak\nexe=/home/packages/../user/sneak\n"),
+                ("apps/stray.app", b"name=Stray\nexe=/home/user/stray\n"),
+                ("apps/terminal.app", b"name=Terminal\nexe=/home/packages/bin/abacus\n"),
+            ],
+        )?,
+    ])
 }
 
 /// What the host's web server serves the scripts as repositories on the
@@ -238,13 +277,14 @@ pub fn web_files(hello: &[u8], now: u64) -> Result<Vec<(String, Vec<u8>)>> {
 }
 
 /// The image's packages, repositories and their configuration;
-/// `hello`, the C test program, if the toolchain has made it.
-pub fn image_files(hello: Option<&[u8]>) -> Result<Vec<(String, Vec<u8>)>> {
-    signed_files(&signing_key()?, hello)
+/// `hello`, the C test program, if the toolchain has made it, and
+/// `calculator`, the Calculator's program, if the image has it.
+pub fn image_files(hello: Option<&[u8]>, calculator: Option<&[u8]>) -> Result<Vec<(String, Vec<u8>)>> {
+    signed_files(&signing_key()?, hello, calculator)
 }
 
 /// [`image_files`], the system's repository signed by `key`.
-fn signed_files(key: &SecretKey, hello: Option<&[u8]>) -> Result<Vec<(String, Vec<u8>)>> {
+fn signed_files(key: &SecretKey, hello: Option<&[u8]>, calculator: Option<&[u8]>) -> Result<Vec<(String, Vec<u8>)>> {
     let mut files = repository(SYSTEM_DIR, SYSTEM, SERIAL, Vec::new(), key, IMAGE)?;
     let config = format!(
         "# The repository of the system image: every Veda has it, and finds it at\n\
@@ -256,10 +296,27 @@ fn signed_files(key: &SecretKey, hello: Option<&[u8]>) -> Result<Vec<(String, Ve
     );
     files.push((format!("etc/packages/repositories/{SYSTEM}.repo"), config.into_bytes()));
     files.push(("etc/packages/provides".into(), format!("veda (= {})\n", env!("CARGO_PKG_VERSION")).into_bytes()));
+    let test_key = test_key();
+    let mut tests = Vec::new();
     match hello {
-        Some(hello) => files.extend(test_repositories(hello)?),
-        None => util::status("Note", "no test repositories in the image: they need the C test programs"),
+        Some(hello) => tests.extend(test_repositories(hello, &test_key)?),
+        None => util::status("Note", "no test repositories of hello in the image: they need the C test programs"),
     }
+    match calculator {
+        Some(calculator) => tests.extend(repository(
+            &format!("{TEST_DIR}/{APPS}"),
+            APPS,
+            1,
+            app_packages(calculator)?,
+            &test_key,
+            IMAGE,
+        )?),
+        None => util::status("Note", "no test repository of applications in the image: it needs the Calculator"),
+    }
+    if !tests.is_empty() {
+        tests.push((format!("{TEST_DIR}/test.pub"), format!("{}\n", test_key.public()).into_bytes()));
+    }
+    files.extend(tests);
     Ok(files)
 }
 
@@ -282,7 +339,7 @@ mod tests {
     #[test]
     fn the_image_has_a_valid_empty_repository_and_its_configuration() {
         let key = SecretKey::from_seed(&[5; 32]);
-        let files = signed_files(&key, Some(b"\x7fELF hello")).unwrap();
+        let files = signed_files(&key, Some(b"\x7fELF hello"), Some(b"\x7fELF calculator")).unwrap();
         let file = |path: &str| &files.iter().find(|(p, _)| p == path).unwrap().1;
         // The configuration names the key the index checks against.
         let config = String::from_utf8(file("etc/packages/repositories/system.repo").clone()).unwrap();
@@ -302,14 +359,14 @@ mod tests {
         assert!(packages::requirement::Provision::parse(provides.trim()).is_ok(), "{provides}");
         assert_eq!(repository.keys, [key.public()]);
         // The same key makes the same image.
-        assert_eq!(signed_files(&key, Some(b"\x7fELF hello")).unwrap(), files);
+        assert_eq!(signed_files(&key, Some(b"\x7fELF hello"), Some(b"\x7fELF calculator")).unwrap(), files);
         // The tests' repositories check against the public key they come
         // with, and offer what the scripts install.
         let test_key = PublicKey::parse(std::str::from_utf8(file("tests/packages/test.pub")).unwrap()).unwrap();
-        for (dir, serial, count) in [("one", 1, 4), ("two", 2, 2)] {
+        for (dir, name, serial, count) in [("one", TEST, 1, 4), ("two", TEST, 2, 2), ("apps", APPS, 1, 2)] {
             let keys = [test_key.clone()];
             let policy =
-                Policy { keys: &keys, repository: TEST, now: GENERATED + 1, must_expire: false, previous: None };
+                Policy { keys: &keys, repository: name, now: GENERATED + 1, must_expire: false, previous: None };
             let v = index::verify(file(&format!("tests/packages/{dir}/index.vidx")), &policy).unwrap();
             assert_eq!((v.contents.serial, v.contents.packages.len()), (serial, count));
             for offer in &v.contents.packages {
@@ -317,6 +374,10 @@ mod tests {
                 assert_eq!(Digest::of(bytes), offer.sha256);
             }
         }
+        // The application's package installs its manifest and its program.
+        let abacus = file("tests/packages/apps/abacus-1.0.amd64.vpkg");
+        let paths: Vec<String> = archive::Archive::open(abacus).unwrap().files.into_iter().map(|f| f.path).collect();
+        assert_eq!(paths, ["apps/abacus.app", "bin/abacus"]);
         // The network's: one expires, one does not.
         let web = web_files(b"\x7fELF hello", GENERATED).unwrap();
         let web_file = |path: &str| &web.iter().find(|(p, _)| p == path).unwrap().1;
@@ -327,8 +388,15 @@ mod tests {
             let v = index::verify(web_file(&format!("packages/{name}/index.vidx")), &policy).unwrap();
             assert_eq!((v.contents.expires, v.contents.packages.len()), (expires, 4));
         }
-        // Without the C test programs, the system's repository alone.
-        let alone = signed_files(&key, None).unwrap();
+        // Without the C test programs, the repository of applications and
+        // its key; without the Calculator too, the system's repository
+        // alone.
+        let apps = signed_files(&key, None, Some(b"\x7fELF calculator")).unwrap();
+        let tests: Vec<&str> = apps.iter().filter_map(|(p, _)| p.strip_prefix("tests/packages/")).collect();
+        assert!(
+            tests.contains(&"apps/index.vidx") && tests.contains(&"test.pub") && !tests.contains(&"one/index.vidx")
+        );
+        let alone = signed_files(&key, None, None).unwrap();
         assert!(alone.iter().all(|(p, _)| !p.starts_with(TEST_DIR)) && alone.len() == 3);
     }
 }
