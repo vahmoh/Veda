@@ -59,7 +59,7 @@ pub fn system_info(ptr: usize) -> SysResult {
     let mut version = [0u8; 32];
     let v = concat!("Veda ", env!("CARGO_PKG_VERSION"));
     version[..v.len()].copy_from_slice(v.as_bytes());
-    let procs = crate::object::process::all();
+    let procs = crate::scheduler::process::all();
     let info = SystemInfo {
         version,
         cpu_count: crate::scheduler::percpu::online().count() as u32,

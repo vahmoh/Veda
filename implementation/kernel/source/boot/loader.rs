@@ -16,15 +16,15 @@ use abi::startup::{self, role};
 use abi::{KernelBootInfo, Rights};
 use bootinfo::{BootInfo, MemoryKind};
 
+use crate::capability::KObject;
+use crate::capability::handle::Handle;
+use crate::hardware::resource::Resource;
 use crate::ipc::channel::{self, Message};
 use crate::memory::aspace::Perms;
 use crate::memory::paging::Cache;
 use crate::memory::phys_to_virt;
 use crate::memory::vmo::Vmo;
-use crate::object::KObject;
-use crate::object::handle::Handle;
-use crate::object::process::Process;
-use crate::object::resource::Resource;
+use crate::scheduler::process::Process;
 use crate::scheduler::{self, Thread};
 
 const INIT_PATH: &str = "bin/init";
@@ -191,7 +191,7 @@ fn keep_alive(p: Arc<Process>) {
 /// What the machine offers beyond what Veda needs (`abi::platform`).
 fn platform() -> u32 {
     let mut bits = 0;
-    if crate::architecture::hv::available().is_ok() {
+    if crate::architecture::virtualization::available().is_ok() {
         bits |= abi::platform::VIRTUALIZATION;
     }
     if crate::architecture::iommu::active() {

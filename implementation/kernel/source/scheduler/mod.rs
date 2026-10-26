@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The scheduler.
+//! The scheduler: threads ([`thread`]), the processes they belong to
+//! ([`process`]), and how threads share the processors.
 //!
 //! * 32 priority levels with round-robin within a level; a global run queue
 //!   shared by all CPUs (the BKL makes a global queue cheap and fair).
@@ -32,6 +33,7 @@
 //!   whatever it is doing.
 
 pub mod percpu;
+pub mod process;
 pub mod thread;
 
 use alloc::collections::{BTreeMap, VecDeque};
@@ -115,6 +117,34 @@ impl Budget {
         } else {
             self.used_ns += ran;
         }
+    }
+}
+
+/// A short, fixed-capacity name (processes and threads).
+#[derive(Clone, Copy)]
+pub struct Name {
+    bytes: [u8; abi::NAME_MAX],
+    len: u8,
+}
+
+impl Name {
+    pub fn new(s: &str) -> Name {
+        let mut bytes = [0u8; abi::NAME_MAX];
+        // Truncate on a char boundary.
+        let mut len = s.len().min(abi::NAME_MAX);
+        while !s.is_char_boundary(len) {
+            len -= 1;
+        }
+        bytes[..len].copy_from_slice(&s.as_bytes()[..len]);
+        Name { bytes, len: len as u8 }
+    }
+
+    pub fn as_str(&self) -> &str {
+        core::str::from_utf8(&self.bytes[..self.len as usize]).unwrap_or("?")
+    }
+
+    pub fn raw(&self) -> [u8; abi::NAME_MAX] {
+        self.bytes
     }
 }
 
@@ -860,7 +890,7 @@ pub fn user_exception(frame: &mut TrapFrame) {
             // memory, rather than blame the program.
             code = abi::EXIT_CODE_OUT_OF_MEMORY;
             let (total, free) = crate::memory::phys::stats();
-            let largest = crate::object::process::largest(4);
+            let largest = process::largest(4);
             let holders = core::fmt::from_fn(|f| {
                 for (i, (p, bytes)) in largest.iter().enumerate() {
                     let sep = if i == 0 { "" } else { ", " };

@@ -7,11 +7,11 @@
 use abi::{Error, MsiInfo, RawHandle, Rights, irq_flags, resource_kind};
 
 use super::{SysResult, get_event, get_interrupt, get_ioports, get_resource, insert, ok};
+use crate::capability::KObject;
+use crate::hardware::ioport::IoPorts;
+use crate::hardware::resource::Resource;
 use crate::interrupt::Interrupt;
 use crate::memory::user;
-use crate::object::KObject;
-use crate::object::ioport::IoPorts;
-use crate::object::resource::Resource;
 
 pub fn resource_create(parent: RawHandle, kind: usize, base: u64, size: u64) -> SysResult {
     let p = get_resource(parent, Rights::DUPLICATE)?;

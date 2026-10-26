@@ -75,7 +75,7 @@ memory and their devices.
 
 | Piece | Where | What it does |
 |-------|-------|--------------|
-| Hypervisor | `implementation/kernel/source/hv`, `implementation/kernel/source/architectures/amd64/hv` | `Guest` and `Vcpu` objects; on AMD64, VMX with EPT and the virtual x2APIC |
+| Hypervisor | `implementation/kernel/source/virtualization`, `implementation/kernel/source/architectures/amd64/virtualization` | `Guest` and `Vcpu` objects; on AMD64, VMX with EPT and the virtual x2APIC |
 | IOMMU | `implementation/kernel/source/architectures/amd64/iommu` | Intel VT-d: DMA and interrupt remapping |
 | `hv` | `implementation/libraries/hv` | The platform's and the bridge's ABIs, the guest's ACPI tables, a given function's configuration space; on AMD64 the virtual local APIC, `cpuid` and Linux's boot protocol |
 | `iommu` | `implementation/libraries/iommu` | The DMAR table; the units' registers and structures |
@@ -144,17 +144,18 @@ time in every 100 ms, so a guest that keeps its processors busy runs at
 
 ## The hypervisor
 
-On AMD64 (`implementation/kernel/source/architectures/amd64/hv`), `vcpu_run`
-enters the guest on the calling thread with the BKL released; host
-interrupts and the scheduler preempt it as they do user code, and `hlt`
-blocks it until an interrupt or the guest's timer. While the guest runs,
-the VMX-preemption timer brings it back at its timer's deadline; while it
-halts, its thread sleeps until that deadline, however near (a processor's
-timer is armed for the next deadline itself). The guest's FPU and the
-MSRs it shares with the host are swapped, and its VMCS cleared, only when
-it leaves the kernel's loop, so it may run next on any CPU, which first
-drops stale translations (`invvpid`, `invept`). Unmapping guest memory
-shoots the translations down on every CPU before the pages are reused.
+On AMD64 (`implementation/kernel/source/architectures/amd64/virtualization`),
+`vcpu_run` enters the guest on the calling thread with the BKL released;
+host interrupts and the scheduler preempt it as they do user code, and
+`hlt` blocks it until an interrupt or the guest's timer. While the guest
+runs, the VMX-preemption timer brings it back at its timer's deadline;
+while it halts, its thread sleeps until that deadline, however near (a
+processor's timer is armed for the next deadline itself). The guest's FPU
+and the MSRs it shares with the host are swapped, and its VMCS cleared,
+only when it leaves the kernel's loop, so it may run next on any CPU,
+which first drops stale translations (`invvpid`, `invept`). Unmapping
+guest memory shoots the translations down on every CPU before the pages
+are reused.
 
 ## Devices
 

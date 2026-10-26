@@ -9,13 +9,13 @@ use abi::signals::{self, SIGNALED, USER_ALL};
 use abi::{Error, HandleBasicInfo, PortPacket, RawHandle, Rights, WaitItem, channel_flags, info_topic};
 
 use super::{SysResult, current_process, deadline, get_channel, get_port, get_socket, handle, insert, ok};
+use crate::capability::handle::Handle;
+use crate::capability::{KObject, new_koid};
 use crate::ipc::channel::{self, Message};
 use crate::ipc::event::Event;
 use crate::ipc::port::{Observer, Port};
 use crate::ipc::socket;
 use crate::memory::user;
-use crate::object::handle::Handle;
-use crate::object::{KObject, new_koid};
 use crate::scheduler::{self, Interruptible, WakeReason};
 
 const CHANNEL_RIGHTS: Rights = Rights(

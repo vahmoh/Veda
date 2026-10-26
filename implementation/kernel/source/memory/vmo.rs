@@ -47,7 +47,7 @@ pub struct Vmo {
 impl Vmo {
     fn new(size: u64, kind: VmoKind, cache: Cache) -> Arc<Vmo> {
         Arc::new(Vmo {
-            koid: crate::object::new_koid(),
+            koid: crate::capability::new_koid(),
             size: AtomicU64::new(size),
             kind,
             cache,
@@ -135,7 +135,7 @@ impl Vmo {
     fn flush(&self, phys: u64, len: u64) {
         let ram = !matches!(self.kind, VmoKind::Physical { .. });
         if ram && self.cache != Cache::WriteBack {
-            crate::architecture::mm::flush_cache_range(phys_to_virt(phys), len);
+            crate::architecture::memory::flush_cache_range(phys_to_virt(phys), len);
         }
     }
 

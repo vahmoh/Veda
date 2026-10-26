@@ -38,10 +38,10 @@ use abi::Error;
 use abi::signals::SIGNALED;
 
 use crate::architecture::irq;
-use crate::hv::Vcpu;
+use crate::capability::Signals;
 use crate::ipc::event::Event;
-use crate::object::Signals;
 use crate::synchronization::SpinLock;
+use crate::virtualization::Vcpu;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Source {
@@ -90,7 +90,7 @@ impl Interrupt {
 
     fn with_ended(vector: u8, source: Source, ended: Option<Arc<Event>>) -> Arc<Interrupt> {
         Arc::new(Interrupt {
-            koid: crate::object::new_koid(),
+            koid: crate::capability::new_koid(),
             vector,
             source,
             signals: Signals::new(0),

@@ -37,7 +37,7 @@ pub fn service_pending() {
         cpu::flush_tlb();
     }
     if ept && me.vmx_on.load(Ordering::Relaxed) {
-        super::hv::vmx::invept_all();
+        super::virtualization::vmx::invept_all();
     }
     if tlb || ept {
         me.tlb_flush_done.fetch_add(1, Ordering::AcqRel);
@@ -82,7 +82,7 @@ pub fn shootdown_space(root: u64, addr: u64, len: u64) {
 /// caches, before memory unmapped from a guest is reused.
 pub fn shootdown_guest_memory() {
     if percpu::current().vmx_on.load(Ordering::Relaxed) {
-        super::hv::vmx::invept_all();
+        super::virtualization::vmx::invept_all();
     }
     request(|_| true, |p| &p.ept_flush_pending);
 }

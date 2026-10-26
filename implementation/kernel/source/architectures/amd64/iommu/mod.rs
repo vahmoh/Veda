@@ -108,7 +108,7 @@ pub fn active() -> bool {
 /// reads memory around the caches.
 fn publish(iommu: &Iommu, phys: u64, len: u64) {
     if !iommu.coherent {
-        crate::architecture::amd64::mm::flush_cache_range(phys_to_virt(phys), len);
+        crate::architecture::amd64::memory::flush_cache_range(phys_to_virt(phys), len);
     }
 }
 

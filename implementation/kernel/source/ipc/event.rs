@@ -6,7 +6,7 @@
 
 use alloc::sync::Arc;
 
-use crate::object::Signals;
+use crate::capability::Signals;
 
 pub struct Event {
     pub koid: u64,
@@ -15,6 +15,6 @@ pub struct Event {
 
 impl Event {
     pub fn new() -> Arc<Event> {
-        Arc::new(Event { koid: crate::object::new_koid(), signals: Signals::new(0) })
+        Arc::new(Event { koid: crate::capability::new_koid(), signals: Signals::new(0) })
     }
 }

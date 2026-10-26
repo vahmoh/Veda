@@ -22,10 +22,10 @@ use core::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 use abi::{ProcessInfo, SentSignals, process_state};
 
-use super::handle::HandleTable;
-use super::{Name, Signals};
+use crate::capability::Signals;
+use crate::capability::handle::HandleTable;
 use crate::memory::aspace::AddressSpace;
-use crate::scheduler::{self, Budget, Thread, WakeReason};
+use crate::scheduler::{self, Budget, Name, Thread, WakeReason};
 use crate::synchronization::SpinLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,7 +135,7 @@ impl Process {
 
     pub fn new(name: &str, parent_koid: u64, max_priority: u8, memory_class: u8) -> Option<Arc<Process>> {
         let p = Arc::new(Process {
-            koid: super::new_koid(),
+            koid: crate::capability::new_koid(),
             parent_koid,
             name: Name::new(name),
             aspace: SpinLock::new(Some(AddressSpace::new()?)),

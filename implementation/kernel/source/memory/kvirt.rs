@@ -13,9 +13,9 @@ use super::paging::{self, Cache, Flags};
 use super::{PAGE_SIZE, phys};
 use crate::synchronization::SpinLock;
 
-const MMIO_BASE: u64 = crate::architecture::mm::MMIO_BASE;
-const MMIO_LIMIT: u64 = MMIO_BASE + crate::architecture::mm::MMIO_SIZE;
-const STACK_BASE: u64 = crate::architecture::mm::STACKS_BASE;
+const MMIO_BASE: u64 = crate::architecture::memory::MMIO_BASE;
+const MMIO_LIMIT: u64 = MMIO_BASE + crate::architecture::memory::MMIO_SIZE;
+const STACK_BASE: u64 = crate::architecture::memory::STACKS_BASE;
 /// Virtual size reserved per stack slot (stack + guard).
 const STACK_SLOT: u64 = 128 * 1024;
 
@@ -59,13 +59,13 @@ pub fn map_mmio(phys_addr: u64, size: u64, cache: Cache) -> u64 {
 
 /// Whether `[base, base + size)` reaches registers the kernel keeps for
 /// itself: those it has mapped, and those the architecture reserves
-/// (`architecture::mm::RESERVED_MMIO`). A device whose BAR the firmware or
-/// the device itself put over them must not give its driver the kernel's
-/// interrupt controllers or IOMMU.
+/// (`architecture::memory::RESERVED_MMIO`). A device whose BAR the firmware
+/// or the device itself put over them must not give its driver the
+/// kernel's interrupt controllers or IOMMU.
 pub fn is_kernels(base: u64, size: u64) -> bool {
     let end = base.saturating_add(size);
     let overlaps = |s: u64, e: u64| base < e && s < end;
-    let reserved = crate::architecture::mm::RESERVED_MMIO;
+    let reserved = crate::architecture::memory::RESERVED_MMIO;
     overlaps(reserved.start, reserved.end) || STATE.lock().kernel_mmio.iter().any(|&(s, e)| overlaps(s, e))
 }
 
@@ -135,6 +135,6 @@ impl Drop for KernelStack {
 
 /// Returns `true` if `addr` lies in a kernel stack guard page.
 pub fn is_stack_guard(addr: u64) -> bool {
-    (STACK_BASE..STACK_BASE + crate::architecture::mm::STACKS_SIZE).contains(&addr)
+    (STACK_BASE..STACK_BASE + crate::architecture::memory::STACKS_SIZE).contains(&addr)
         && (addr - STACK_BASE) % STACK_SLOT < PAGE_SIZE
 }

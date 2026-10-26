@@ -9,9 +9,9 @@
 
 use alloc::vec::Vec;
 
-use crate::hv::Access;
 use crate::memory::paging::Cache;
 use crate::memory::{phys, phys_to_virt};
+use crate::virtualization::Access;
 
 const READ: u64 = 1 << 0;
 const WRITE: u64 = 1 << 1;

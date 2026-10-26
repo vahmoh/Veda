@@ -19,14 +19,14 @@
 //! | `trap` | the registers a trap saves: a system call's arguments and results, page faults, where the code was, descriptions for the log |
 //! | `thread` | a thread's saved context, and switching between threads |
 //! | `paging` | page tables: mappings, address spaces, the kernel's own |
-//! | `mm` | the layout of the kernel's address space, memory and registers the architecture keeps, caches, access to user memory |
+//! | `memory` | the layout of the kernel's address space, memory and registers the architecture keeps, caches, access to user memory |
 //! | `tlb` | TLB shootdowns, of the processors' and of guests' translations |
 //! | `irq` | devices' interrupts: their vectors, lines and MSIs |
 //! | `timer`, `clock` | each CPU's one-shot timer; the clock's counter |
 //! | `serial` | the serial console the kernel log goes to |
 //! | `ioport` | I/O ports, for I/O port objects |
 //! | `power` | powering off and resetting |
-//! | `hv` | virtual machines: guests' address translation, virtual processors |
+//! | `virtualization` | virtual machines: guests' address translation, virtual processors |
 //! | `iommu` | the IOMMU: devices' DMA and interrupts remapped, devices given to guests |
 //!
 //! Code in `source/architectures/<architecture>/` may use the rest of the
@@ -36,8 +36,8 @@
 mod amd64;
 #[cfg(target_arch = "x86_64")]
 pub use amd64::{
-    clock, cpu, hv, init_cpu, init_platform, init_timer, iommu, ioport, irq, mm, paging, percpu, power, serial, smp,
-    thread, timer, tlb, trap,
+    clock, cpu, init_cpu, init_platform, init_timer, iommu, ioport, irq, memory, paging, percpu, power, serial, smp,
+    thread, timer, tlb, trap, virtualization,
 };
 
 #[cfg(not(target_arch = "x86_64"))]

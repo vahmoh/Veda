@@ -15,12 +15,11 @@ pub mod clock;
 pub mod cpu;
 mod entry;
 mod gdt;
-pub mod hv;
 mod idt;
 pub mod iommu;
 pub mod ioport;
 pub mod irq;
-pub mod mm;
+pub mod memory;
 pub mod paging;
 pub mod percpu;
 mod port;
@@ -31,6 +30,7 @@ pub mod thread;
 pub mod timer;
 pub mod tlb;
 pub mod trap;
+pub mod virtualization;
 
 use bootinfo::BootInfo;
 

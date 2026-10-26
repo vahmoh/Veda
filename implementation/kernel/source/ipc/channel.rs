@@ -29,8 +29,8 @@ use alloc::vec::Vec;
 use abi::Error;
 use abi::signals::{PEER_CLOSED, READABLE, WRITABLE};
 
-use crate::object::handle::Handle;
-use crate::object::{KObject, Signals};
+use crate::capability::handle::Handle;
+use crate::capability::{KObject, Signals};
 use crate::synchronization::SpinLock;
 
 /// Messages queued per endpoint before writers get `ShouldWait`.
@@ -67,7 +67,7 @@ pub fn create() -> (Arc<ChannelEnd>, Arc<ChannelEnd>) {
     let pair = Arc::new(Pair {
         ends: SpinLock::new([empty(), empty()]),
         signals: [Signals::new(WRITABLE), Signals::new(WRITABLE)],
-        koids: [crate::object::new_koid(), crate::object::new_koid()],
+        koids: [crate::capability::new_koid(), crate::capability::new_koid()],
     });
     (Arc::new(ChannelEnd { pair: pair.clone(), side: 0 }), Arc::new(ChannelEnd { pair, side: 1 }))
 }

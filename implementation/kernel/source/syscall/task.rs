@@ -9,10 +9,10 @@ use abi::{Error, ProcessInfo, RawHandle, Rights, SentSignals, resource_kind, res
 
 use super::{SysResult, current_process, get_process, get_resource, get_thread, insert, ok, read_str, target_process};
 use crate::architecture::trap::TrapFrame;
+use crate::capability::KObject;
+use crate::capability::handle::Handle;
 use crate::memory::user;
-use crate::object::KObject;
-use crate::object::handle::Handle;
-use crate::object::process::{self, Process, ProcessState};
+use crate::scheduler::process::{self, Process, ProcessState};
 use crate::scheduler::{self, State, Thread};
 
 const PROCESS_RIGHTS: Rights = Rights(Rights::BASIC.0 | Rights::MANAGE.0 | Rights::GET_INFO.0 | Rights::SIGNAL.0);

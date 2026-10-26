@@ -21,7 +21,7 @@ pub struct Resource {
 
 impl Resource {
     pub fn new(kind: usize, base: u64, size: u64) -> Arc<Resource> {
-        Arc::new(Resource { koid: super::new_koid(), kind, base, size })
+        Arc::new(Resource { koid: crate::capability::new_koid(), kind, base, size })
     }
 
     pub fn root() -> Arc<Resource> {

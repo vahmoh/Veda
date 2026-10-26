@@ -20,7 +20,7 @@ use alloc::vec::Vec;
 
 use abi::Error;
 
-use crate::architecture::mm::{user_access_begin, user_access_end};
+use crate::architecture::memory::{user_access_begin, user_access_end};
 use crate::scheduler;
 
 /// A range of the current address space's user memory, validated (and

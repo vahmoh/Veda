@@ -4,11 +4,11 @@
 //! System call dispatch. See `abi` for the calling convention and the
 //! meaning of each call.
 
-mod hv;
-mod hw;
+mod hardware;
 mod ipc;
 mod misc;
 mod task;
+mod virtualization;
 mod vm;
 
 use alloc::sync::Arc;
@@ -16,10 +16,10 @@ use alloc::sync::Arc;
 use abi::{Error, RawHandle, Rights, nr};
 
 use crate::architecture::trap::TrapFrame;
-use crate::object::KObject;
-use crate::object::handle::Handle;
-use crate::object::process::Process;
+use crate::capability::KObject;
+use crate::capability::handle::Handle;
 use crate::scheduler;
+use crate::scheduler::process::Process;
 use crate::synchronization::bkl;
 
 /// Successful result: primary value and optional second value.
@@ -141,25 +141,25 @@ fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
         }
         nr::FUTEX_WAKE => ok(crate::synchronization::futex::wake(a[0] as u64, a[1])?),
 
-        nr::RESOURCE_CREATE => hw::resource_create(a[0] as RawHandle, a[1], a[2] as u64, a[3] as u64),
-        nr::IOPORT_CREATE => hw::ioport_create(a[0] as RawHandle, a[1], a[2]),
-        nr::IOPORT_READ => hw::ioport_read(a[0] as RawHandle, a[1], a[2]),
-        nr::IOPORT_WRITE => hw::ioport_write(a[0] as RawHandle, a[1], a[2], a[3]),
-        nr::IRQ_CREATE => hw::irq_create(a[0] as RawHandle, a[1], a[2]),
-        nr::IRQ_ACK => hw::irq_ack(a[0] as RawHandle),
-        nr::MSI_CREATE => hw::msi_create(a[0] as RawHandle, a[1], a[2], a[3]),
-        nr::IRQ_CREATE_SOFTWARE => hw::irq_create_software(a[0], a[1] as RawHandle),
-        nr::IRQ_RAISE => hw::irq_raise(a[0] as RawHandle),
+        nr::RESOURCE_CREATE => hardware::resource_create(a[0] as RawHandle, a[1], a[2] as u64, a[3] as u64),
+        nr::IOPORT_CREATE => hardware::ioport_create(a[0] as RawHandle, a[1], a[2]),
+        nr::IOPORT_READ => hardware::ioport_read(a[0] as RawHandle, a[1], a[2]),
+        nr::IOPORT_WRITE => hardware::ioport_write(a[0] as RawHandle, a[1], a[2], a[3]),
+        nr::IRQ_CREATE => hardware::irq_create(a[0] as RawHandle, a[1], a[2]),
+        nr::IRQ_ACK => hardware::irq_ack(a[0] as RawHandle),
+        nr::MSI_CREATE => hardware::msi_create(a[0] as RawHandle, a[1], a[2], a[3]),
+        nr::IRQ_CREATE_SOFTWARE => hardware::irq_create_software(a[0], a[1] as RawHandle),
+        nr::IRQ_RAISE => hardware::irq_raise(a[0] as RawHandle),
 
-        nr::GUEST_CREATE => hv::guest_create(a[0] as RawHandle, a[1]),
-        nr::GUEST_MAP => hv::guest_map(a[0] as RawHandle, a[1] as RawHandle, a[2], a[3], a[4], a[5]),
-        nr::GUEST_UNMAP => hv::guest_unmap(a[0] as RawHandle, a[1], a[2]),
-        nr::VCPU_CREATE => hv::vcpu_create(a[0] as RawHandle, a[1], a[2]),
-        nr::VCPU_RUN => hv::vcpu_run(a[0] as RawHandle, a[1]),
-        nr::VCPU_INTERRUPT => hv::vcpu_interrupt(a[0] as RawHandle, a[1]),
-        nr::VCPU_READ_STATE => hv::vcpu_read_state(a[0] as RawHandle, a[1]),
-        nr::GUEST_ATTACH_DEVICE => hv::guest_attach_device(a[0] as RawHandle, a[1] as RawHandle, a[2]),
-        nr::VCPU_BIND_INTERRUPT => hv::vcpu_bind_interrupt(a[0] as RawHandle, a[1] as RawHandle, a[2]),
+        nr::GUEST_CREATE => virtualization::guest_create(a[0] as RawHandle, a[1]),
+        nr::GUEST_MAP => virtualization::guest_map(a[0] as RawHandle, a[1] as RawHandle, a[2], a[3], a[4], a[5]),
+        nr::GUEST_UNMAP => virtualization::guest_unmap(a[0] as RawHandle, a[1], a[2]),
+        nr::VCPU_CREATE => virtualization::vcpu_create(a[0] as RawHandle, a[1], a[2]),
+        nr::VCPU_RUN => virtualization::vcpu_run(a[0] as RawHandle, a[1]),
+        nr::VCPU_INTERRUPT => virtualization::vcpu_interrupt(a[0] as RawHandle, a[1]),
+        nr::VCPU_READ_STATE => virtualization::vcpu_read_state(a[0] as RawHandle, a[1]),
+        nr::GUEST_ATTACH_DEVICE => virtualization::guest_attach_device(a[0] as RawHandle, a[1] as RawHandle, a[2]),
+        nr::VCPU_BIND_INTERRUPT => virtualization::vcpu_bind_interrupt(a[0] as RawHandle, a[1] as RawHandle, a[2]),
         _ => Err(Error::UnknownSyscall),
     }
 }
@@ -217,8 +217,8 @@ typed_getter!(get_socket, Socket, crate::ipc::socket::SocketEnd);
 typed_getter!(get_vmo, Vmo, crate::memory::vmo::Vmo);
 typed_getter!(get_process, Process, Process);
 typed_getter!(get_thread, Thread, crate::scheduler::Thread);
-typed_getter!(get_resource, Resource, crate::object::resource::Resource);
-typed_getter!(get_ioports, IoPorts, crate::object::ioport::IoPorts);
+typed_getter!(get_resource, Resource, crate::hardware::resource::Resource);
+typed_getter!(get_ioports, IoPorts, crate::hardware::ioport::IoPorts);
 typed_getter!(get_interrupt, Interrupt, crate::interrupt::Interrupt);
 typed_getter!(get_event, Event, crate::ipc::event::Event);
 typed_getter!(get_port, Port, crate::ipc::port::Port);

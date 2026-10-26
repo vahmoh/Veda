@@ -18,7 +18,7 @@ pub struct IoPorts {
 
 impl IoPorts {
     pub fn new(base: u16, count: u16) -> Arc<IoPorts> {
-        Arc::new(IoPorts { koid: super::new_koid(), base, count })
+        Arc::new(IoPorts { koid: crate::capability::new_koid(), base, count })
     }
 
     fn check(&self, p: u16, width: usize) -> Result<(), Error> {

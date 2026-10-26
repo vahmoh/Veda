@@ -19,8 +19,8 @@ pub mod socket;
 
 use alloc::vec::Vec;
 
-use crate::object::KObject;
-use crate::object::handle::Handle;
+use crate::capability::KObject;
+use crate::capability::handle::Handle;
 
 /// How many queued handles [`would_cycle`] looks at before it gives up,
 /// refusing the transfer: the safe answer.

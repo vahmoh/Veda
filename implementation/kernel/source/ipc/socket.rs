@@ -34,8 +34,8 @@ use alloc::vec::Vec;
 use abi::Error;
 use abi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE, WRITABLE};
 
-use crate::object::handle::Handle;
-use crate::object::{KObject, Signals};
+use crate::capability::handle::Handle;
+use crate::capability::{KObject, Signals};
 use crate::synchronization::SpinLock;
 
 /// Bytes buffered per direction before writers get `ShouldWait`.
@@ -140,7 +140,7 @@ pub fn create() -> (Arc<SocketEnd>, Arc<SocketEnd>) {
     let pair = Arc::new(Pair {
         ends: SpinLock::new([empty(), empty()]),
         signals: [Signals::new(WRITABLE), Signals::new(WRITABLE)],
-        koids: [crate::object::new_koid(), crate::object::new_koid()],
+        koids: [crate::capability::new_koid(), crate::capability::new_koid()],
     });
     (Arc::new(SocketEnd { pair: pair.clone(), side: 0 }), Arc::new(SocketEnd { pair, side: 1 }))
 }

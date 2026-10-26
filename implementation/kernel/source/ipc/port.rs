@@ -28,7 +28,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use abi::PortPacket;
 use abi::signals::READABLE;
 
-use crate::object::Signals;
+use crate::capability::Signals;
 use crate::synchronization::SpinLock;
 
 pub struct Port {
@@ -44,7 +44,7 @@ pub struct Port {
 impl Port {
     pub fn new() -> Arc<Port> {
         Arc::new(Port {
-            koid: crate::object::new_koid(),
+            koid: crate::capability::new_koid(),
             signals: Signals::new(0),
             packets: SpinLock::new(VecDeque::new()),
             held: AtomicUsize::new(0),

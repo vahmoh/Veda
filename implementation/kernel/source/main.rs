@@ -19,18 +19,19 @@ extern crate alloc;
 #[path = "architectures/mod.rs"]
 mod architecture;
 mod boot;
+mod capability;
 mod diagnostics;
 mod firmware;
-mod hv;
+mod hardware;
 mod interrupt;
 mod ipc;
 mod memory;
-mod object;
 mod random;
 mod scheduler;
 mod synchronization;
 mod syscall;
 mod time;
+mod virtualization;
 
 use alloc::sync::Arc;
 use core::sync::atomic::Ordering;
@@ -163,7 +164,7 @@ fn kernel_main(boot: &'static BootInfo) -> ! {
 
     let others = architecture::smp::start_secondary_cpus(opts.max_cpus);
     kinfo!("smp: {} CPU(s) online", others + 1);
-    architecture::hv::report();
+    architecture::virtualization::report();
     architecture::iommu::init();
 
     bkl::acquire();

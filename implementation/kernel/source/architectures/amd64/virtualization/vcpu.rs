@@ -38,11 +38,11 @@ use super::vmx::{self, entry_ctl, field, proc, reason};
 use crate::architecture::amd64::cpu::{self, rdmsr, wrmsr};
 use crate::architecture::amd64::thread::FpuArea;
 use crate::architecture::amd64::{apic, gdt, idt, percpu};
-use crate::hv::Guest;
 use crate::interrupt::Interrupt;
 use crate::memory::{phys, phys_to_virt};
 use crate::scheduler::{self, Thread, WakeReason};
 use crate::synchronization::{SpinLock, bkl};
+use crate::virtualization::Guest;
 
 const RFLAGS_IF: u64 = 1 << 9;
 const BLOCKING_STI: u64 = 1 << 0;
@@ -311,7 +311,7 @@ impl Vcpu {
             return Err(Error::NoMemory);
         };
         let vcpu = Arc::new(Vcpu {
-            koid: crate::object::new_koid(),
+            koid: crate::capability::new_koid(),
             guest: guest.clone(),
             id,
             vpid: next_vpid(),

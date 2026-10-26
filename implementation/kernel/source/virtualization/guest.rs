@@ -23,8 +23,8 @@ use alloc::vec::Vec;
 use abi::Error;
 
 use super::{Access, Vcpu};
-use crate::architecture::hv::GuestTables;
 use crate::architecture::iommu::Domain;
+use crate::architecture::virtualization::GuestTables;
 use crate::memory::PAGE_SIZE;
 use crate::memory::vmo::Vmo;
 use crate::synchronization::{SpinLock, SpinLockGuard};
@@ -68,7 +68,7 @@ impl Guest {
             return Err(Error::InvalidArgs);
         }
         Ok(Arc::new(Guest {
-            koid: crate::object::new_koid(),
+            koid: crate::capability::new_koid(),
             cpus,
             tables: SpinLock::new(GuestTables::new().ok_or(Error::NoMemory)?),
             mappings: SpinLock::new(BTreeMap::new()),

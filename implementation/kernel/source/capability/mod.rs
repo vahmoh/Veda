@@ -1,22 +1,21 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Kernel objects, handles and signals.
+//! Capabilities: handles to kernel objects, and the objects' signals.
 //!
 //! Every object user space can reach is a [`KObject`] stored in a process's
-//! [`handle::HandleTable`]. Waitable objects carry a [`Signals`] word; threads
-//! wait for signal bits with `object_wait_one/many`, or have a [`port`] told
-//! (`object_wait_async`).
+//! [`handle::HandleTable`], with the rights granted through it: a handle is
+//! a capability, the only way to reach an object. Waitable objects carry a
+//! [`Signals`] word; threads wait for signal bits with
+//! `object_wait_one/many`, or have a [`port`] told (`object_wait_async`).
 //!
 //! Each kind of object is its subsystem's: channels, sockets, events and
-//! ports are [`crate::ipc`]'s, interrupts [`crate::interrupt`]'s, threads
-//! [`crate::scheduler`]'s, VMOs [`crate::memory`]'s and guests
-//! [`crate::hv`]'s; processes, I/O ports and resources are here.
+//! ports are [`crate::ipc`]'s, interrupts [`crate::interrupt`]'s, processes
+//! and threads [`crate::scheduler`]'s, VMOs [`crate::memory`]'s, resources
+//! and I/O ports [`crate::hardware`]'s, and guests
+//! [`crate::virtualization`]'s.
 
 pub mod handle;
-pub mod ioport;
-pub mod process;
-pub mod resource;
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -24,10 +23,11 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use abi::ObjectType;
 
+use crate::hardware::{ioport, resource};
 use crate::interrupt;
 use crate::ipc::{channel, event, port, socket};
 use crate::memory::vmo::Vmo;
-use crate::scheduler::{self, Thread, WakeReason};
+use crate::scheduler::{self, Thread, WakeReason, process};
 use crate::synchronization::SpinLock;
 
 static NEXT_KOID: AtomicU64 = AtomicU64::new(1);
@@ -35,34 +35,6 @@ static NEXT_KOID: AtomicU64 = AtomicU64::new(1);
 /// Allocates a kernel object id (unique for the lifetime of the system).
 pub fn new_koid() -> u64 {
     NEXT_KOID.fetch_add(1, Ordering::Relaxed)
-}
-
-/// A short, fixed-capacity name (processes and threads).
-#[derive(Clone, Copy)]
-pub struct Name {
-    bytes: [u8; abi::NAME_MAX],
-    len: u8,
-}
-
-impl Name {
-    pub fn new(s: &str) -> Name {
-        let mut bytes = [0u8; abi::NAME_MAX];
-        // Truncate on a char boundary.
-        let mut len = s.len().min(abi::NAME_MAX);
-        while !s.is_char_boundary(len) {
-            len -= 1;
-        }
-        bytes[..len].copy_from_slice(&s.as_bytes()[..len]);
-        Name { bytes, len: len as u8 }
-    }
-
-    pub fn as_str(&self) -> &str {
-        core::str::from_utf8(&self.bytes[..self.len as usize]).unwrap_or("?")
-    }
-
-    pub fn raw(&self) -> [u8; abi::NAME_MAX] {
-        self.bytes
-    }
 }
 
 struct Waiter {
@@ -175,8 +147,8 @@ pub enum KObject {
     Interrupt(Arc<interrupt::Interrupt>),
     IoPorts(Arc<ioport::IoPorts>),
     Resource(Arc<resource::Resource>),
-    Guest(Arc<crate::hv::Guest>),
-    Vcpu(Arc<crate::hv::Vcpu>),
+    Guest(Arc<crate::virtualization::Guest>),
+    Vcpu(Arc<crate::virtualization::Vcpu>),
     Port(Arc<port::Port>),
 }
 

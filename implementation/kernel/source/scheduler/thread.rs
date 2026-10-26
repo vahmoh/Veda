@@ -8,10 +8,11 @@ use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::architecture::thread::Context;
+use crate::capability::Signals;
 use crate::memory::aspace::AddressSpace;
 use crate::memory::kvirt::KernelStack;
-use crate::object::process::Process;
-use crate::object::{Name, Signals};
+use crate::scheduler::Name;
+use crate::scheduler::process::Process;
 use crate::synchronization::SpinLock;
 
 /// Kernel stack size of every thread.
@@ -115,7 +116,7 @@ impl Thread {
     ) -> Option<Arc<Thread>> {
         let top = kstack.as_ref().map(|s| s.top()).unwrap_or(0);
         Some(Arc::new(Thread {
-            koid: crate::object::new_koid(),
+            koid: crate::capability::new_koid(),
             name: Name::new(name),
             process,
             aspace,

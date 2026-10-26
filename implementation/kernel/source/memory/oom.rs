@@ -21,7 +21,7 @@
 
 use alloc::sync::Arc;
 
-use crate::object::process::{self, Process};
+use crate::scheduler::process::{self, Process};
 use crate::scheduler::{self, Thread, WakeReason};
 
 /// How long a thread waits for a process ended for memory to be gone, at
@@ -91,7 +91,7 @@ fn choose(me: &Arc<Process>) -> Option<(Arc<Process>, u64)> {
 /// [`PATIENCE_NS`] at most: `true` if it is, `false` if it is not by then
 /// or `cur` is ended meanwhile.
 fn wait_gone(cur: &Arc<Thread>, victim: &Arc<Process>) -> bool {
-    let id = crate::object::new_koid();
+    let id = crate::capability::new_koid();
     let deadline = crate::time::now_ns().saturating_add(PATIENCE_NS);
     while !victim.is_terminated() {
         victim.signals.add_waiter(id, cur.clone(), abi::signals::TERMINATED);

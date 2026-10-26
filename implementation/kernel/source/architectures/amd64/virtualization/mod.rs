@@ -30,10 +30,10 @@ pub fn interrupt_vector(vector: usize) -> Option<u8> {
 pub fn report() {
     match vmx::caps() {
         Ok(c) => crate::kinfo!(
-            "hv: VMX with EPT{}; preemption timer at TSC/{}",
+            "virtualization: VMX with EPT{}; preemption timer at TSC/{}",
             if c.vpid { " and VPIDs" } else { "" },
             1u32 << c.preemption_rate
         ),
-        Err(why) => crate::kinfo!("hv: no virtual machines ({})", why),
+        Err(why) => crate::kinfo!("virtualization: no virtual machines ({})", why),
     }
 }

@@ -6,11 +6,11 @@
 use abi::{Error, RawHandle, Rights, cache_policy, dma_flags, map_flags, resource_kind, vmo_flags};
 
 use super::{SysResult, get_resource, get_vmo, handle, insert, ok, target_process};
+use crate::capability::KObject;
 use crate::memory::aspace::Perms;
 use crate::memory::paging::Cache;
 use crate::memory::user;
 use crate::memory::vmo::Vmo;
-use crate::object::KObject;
 use crate::synchronization::bkl;
 
 const VMO_RIGHTS: Rights =
