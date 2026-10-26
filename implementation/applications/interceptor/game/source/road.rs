@@ -96,6 +96,29 @@ pub struct Profile {
 /// Height of a kerb (m).
 pub const KERB: f32 = 0.15;
 
+/// How far into a tunnel's stretch its roof begins (m): its first metres
+/// run open, in a cutting, up to the headwall.
+pub const PORTAL_DEPTH: f32 = 20.0;
+
+/// A tunnel's headwall, the concrete face of the hillside its roof begins
+/// at: how thick it is, how far it reaches beyond the tunnel's walls on
+/// either side, how high its top stands over the road and how deep its
+/// foot goes under it (m).
+pub const HEADWALL_THICKNESS: f32 = 1.5;
+pub const HEADWALL_REACH: f32 = 11.0;
+pub const HEADWALL_TOP: f32 = 10.4;
+pub const HEADWALL_FOOT: f32 = 2.0;
+
+/// A tunnel's mouth: the ring of its walls and roof at the headwall.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Portal {
+    /// The road sample the ring is at.
+    pub index: usize,
+    /// 1 at an entrance (the tunnel lies ahead, along the road), -1 at an
+    /// exit.
+    pub inward: f32,
+}
+
 /// One sample of the centre line.
 #[derive(Clone, Copy, Debug)]
 pub struct Sample {
@@ -529,6 +552,29 @@ impl Road {
         let (i, t) = self.index_of(s);
         let (a, b) = (self.sample(i as isize), self.sample(i as isize + 1));
         (a.paved + (b.paved - a.paved) * t, a.wall + (b.wall - a.wall) * t)
+    }
+
+    /// Whether a tunnel's roof is over sample `i` (`depth` being
+    /// [`Road::section_depths`]).
+    pub fn roofed(&self, depth: &[f32], i: usize) -> bool {
+        let i = i % self.samples.len();
+        self.samples[i].section == Section::Tunnel && depth[i] >= PORTAL_DEPTH
+    }
+
+    /// The tunnels' mouths, in order along the road. The roof's last ring
+    /// is at the first sample past it, as the roof's mesh ends there.
+    pub fn portals(&self) -> Vec<Portal> {
+        let depth = self.section_depths();
+        let n = self.samples.len();
+        let mut out = Vec::new();
+        for i in 0..n {
+            match (self.roofed(&depth, i + n - 1), self.roofed(&depth, i)) {
+                (false, true) => out.push(Portal { index: i, inward: 1.0 }),
+                (true, false) => out.push(Portal { index: i, inward: -1.0 }),
+                _ => {}
+            }
+        }
+        out
     }
 
     /// How much a roof covers the road at `s`: 1 in a tunnel, 0 in the

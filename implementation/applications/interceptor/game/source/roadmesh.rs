@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The road's meshes: the tarmac, and what lines it (kerbs and pavements,
-//! barriers, verges and guardrails, a tunnel's walls and roof), swept
-//! along the centre line in chunks that can be culled one by one.
+//! barriers, verges and guardrails, a tunnel's walls and roof, and the
+//! headwalls at its mouths), swept along the centre line in chunks that
+//! can be culled one by one.
 //!
 //! The tarmac's texture coordinates are road coordinates, `(lateral, s)`,
 //! from which its program paints the markings. Everything else carries a
@@ -15,7 +16,9 @@ use alloc::vec::Vec;
 use crate::prelude::*;
 
 use crate::mesh::{Mesh, Params};
-use crate::road::{EDGE, KERB, MEDIAN, Road, Section};
+use crate::road::{
+    EDGE, HEADWALL_FOOT, HEADWALL_REACH, HEADWALL_THICKNESS, HEADWALL_TOP, KERB, MEDIAN, PORTAL_DEPTH, Road, Section,
+};
 
 /// Samples per chunk.
 pub const CHUNK: usize = 48;
@@ -49,14 +52,19 @@ pub struct Chunk {
 /// How exposed to the sky the road is at sample `i` (255 open, low in a
 /// tunnel), as the shade parameter.
 fn shade(road: &Road, depth: &[f32], i: usize) -> u8 {
-    let s = road.samples()[i];
-    if s.section == Section::Tunnel {
-        // Daylight reaches 30 m in.
-        let t = (depth[i] / 30.0).clamp(0.0, 1.0);
+    if road.roofed(depth, i) {
+        // Daylight reaches 30 m in from the headwall.
+        let t = ((depth[i] - PORTAL_DEPTH) / 30.0).clamp(0.0, 1.0);
         (255.0 - t * 225.0) as u8
     } else {
         255
     }
+}
+
+/// The ring of a tunnel's walls and roof on the right of the centre line
+/// (`wall` from it), from the walkway's edge to the top of the roof.
+fn tunnel_profile(wall: f32) -> [Point; 5] {
+    [pt(wall, 0.25), pt(wall, 4.2), pt(wall - 1.2, 6.2), pt(wall - 3.4, 7.2), pt(0.0, 7.6)]
 }
 
 /// The road's chunks.
@@ -119,6 +127,62 @@ fn sweep(mesh: &mut Mesh, road: &Road, start: usize, end: usize, profile: &[Poin
             // left of the profile's direction.
             mesh.quad(i0, i0 + 1, i1 + 1, i1);
         }
+    }
+}
+
+/// A tunnel's headwall: a slab of concrete [`HEADWALL_THICKNESS`] thick
+/// round the ring of its walls and roof at sample `i`, facing along the
+/// road if `out` is 1 (an exit), against it if -1 (an entrance). Its face
+/// is in the ring's plane, so that the tunnel's walls line its opening;
+/// the hillside covers its foot and meets it under its top.
+fn headwall(mesh: &mut Mesh, road: &Road, i: usize, out: f32, paved: f32, wall: f32) {
+    let s = road.sample(i as isize);
+    let into = s.forward * -out;
+    let reach = wall + HEADWALL_REACH;
+    let (foot, top) = (-HEADWALL_FOOT, HEADWALL_TOP);
+    let at = |x: f32, y: f32, d: f32| s.pos + s.right * x + s.up * y + into * d;
+    let par: Params = [material::CONCRETE, 255, 0, 0];
+    // A quad by its corners (and their texture coordinates, in metres),
+    // wound to face `normal`.
+    let mut quad = |c: [Vec3; 4], uv: [Vec2; 4], normal: Vec3| {
+        let base = mesh.base();
+        for (p, t) in c.iter().zip(uv) {
+            mesh.push(*p, normal, t, par);
+        }
+        if (c[1] - c[0]).cross(c[2] - c[0]).dot(normal) > 0.0 {
+            mesh.quad(base, base + 1, base + 2, base + 3);
+        } else {
+            mesh.quad(base, base + 3, base + 2, base + 1);
+        }
+    };
+    // The face, and its back: the piers either side of the opening, the
+    // ends of the walkways under it, and above the arch, the lintel, a
+    // strip over each of the ring's sloping segments.
+    let ring = tunnel_profile(wall);
+    let mut panels = Vec::new();
+    for side in [-1.0f32, 1.0] {
+        panels.push((wall * side, reach * side, foot, foot, top, top));
+        panels.push((paved * side, wall * side, foot, foot, 0.25, 0.25));
+        for seg in ring[1..].windows(2) {
+            let (x0, x1) = (seg[0].lateral * side, seg[1].lateral * side);
+            panels.push((x0, x1, seg[0].height, seg[1].height, top, top));
+        }
+    }
+    for (d, facing) in [(0.0, -into), (HEADWALL_THICKNESS, into)] {
+        for &(x0, x1, b0, b1, t0, t1) in &panels {
+            let c = [at(x0, b0, d), at(x1, b1, d), at(x1, t1, d), at(x0, t0, d)];
+            let uv = [Vec2::new(x0, b0), Vec2::new(x1, b1), Vec2::new(x1, t1), Vec2::new(x0, t0)];
+            quad(c, uv, facing);
+        }
+    }
+    // The top, and the ends.
+    let t = HEADWALL_THICKNESS;
+    let c = [at(-reach, top, 0.0), at(reach, top, 0.0), at(reach, top, t), at(-reach, top, t)];
+    quad(c, [Vec2::new(-reach, 0.0), Vec2::new(reach, 0.0), Vec2::new(reach, t), Vec2::new(-reach, t)], s.up);
+    for side in [-1.0f32, 1.0] {
+        let x = reach * side;
+        let c = [at(x, foot, 0.0), at(x, foot, t), at(x, top, t), at(x, top, 0.0)];
+        quad(c, [Vec2::new(0.0, foot), Vec2::new(t, foot), Vec2::new(t, top), Vec2::new(0.0, top)], s.right * side);
     }
 }
 
@@ -208,19 +272,16 @@ fn chunk(road: &Road, depth: &[f32], start: usize, end: usize) -> Chunk {
             sweep(&mut sides, road, a, b, &mirror(&walk), &params(material::PAVING));
         }
         // In a tunnel: its wall, a walkway and the roof.
-        for (a, b) in runs(start, end, &|i| sample(i).section == Section::Tunnel && depth[i % n] >= 20.0) {
+        for (a, b) in runs(start, end, &|i| road.roofed(depth, i)) {
             let (paved, wall) = (sample(a).paved, sample(a).wall);
             let walkway = [pt(paved, 0.0), pt(paved, 0.25), pt(paved, 0.25), pt(wall, 0.25)];
             sweep(&mut sides, road, a, b, &mirror(&walkway), &params(material::CONCRETE));
-            let wall_profile = [pt(wall, 0.25), pt(wall, 4.2), pt(wall - 1.2, 6.2), pt(wall - 3.4, 7.2), pt(0.0, 7.6)];
+            let wall_profile = tunnel_profile(wall);
             sweep(&mut sides, road, a, b, &mirror(&wall_profile[..2]), &params(material::TILES));
             sweep(&mut sides, road, a, b, &mirror(&wall_profile[1..]), &params(material::DARK));
         }
         // Elsewhere off the tarmac: a verge, and a guardrail on posts.
-        for (a, b) in runs(start, end, &|i| {
-            let s = sample(i);
-            s.pavement < 0.5 && !(s.section == Section::Tunnel && depth[i % n] >= 20.0)
-        }) {
+        for (a, b) in runs(start, end, &|i| sample(i).pavement < 0.5 && !road.roofed(depth, i)) {
             let (paved, wall) = (sample(a).paved, sample(a).wall);
             let bridge = sample(a).section == Section::Bridge;
             if bridge {
@@ -251,6 +312,18 @@ fn chunk(road: &Road, depth: &[f32], start: usize, end: usize) -> Chunk {
                 pt(rail_at, 0.42),
             ];
             sweep(&mut sides, road, a, b, &mirror(&rail), &params(material::METAL));
+        }
+    }
+
+    // A headwall round each of a tunnel's rings at its mouths (the ring's
+    // widths those of its stretch of walls, as above).
+    for (a, b) in runs(start, end, &|i| road.roofed(depth, i)) {
+        let (paved, wall) = (sample(a).paved, sample(a).wall);
+        if !road.roofed(depth, a + n - 1) {
+            headwall(&mut sides, road, a, -1.0, paved, wall);
+        }
+        if !road.roofed(depth, b) {
+            headwall(&mut sides, road, b, 1.0, paved, wall);
         }
     }
 

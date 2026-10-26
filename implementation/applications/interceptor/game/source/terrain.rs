@@ -15,6 +15,12 @@
 //! road the ground meets it in cuttings and embankments; further away it
 //! takes its own shape; past the shore lines it falls into the water. The
 //! sea's surface is at height 0.
+//!
+//! A hill covers the tunnel's roof. At each of its mouths the road comes
+//! to it in a cutting, which ends at the headwall (see [`Cut`]): the
+//! ground before the headwall is the cutting's, low across the road;
+//! behind it, the hillside's, over the roof. The ground's mesh is cut
+//! along the middle of the headwall, which hides the step between them.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -23,7 +29,7 @@ use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
 
 use crate::prelude::*;
 
-use crate::road::{Location, Road, Section};
+use crate::road::{HEADWALL_REACH, HEADWALL_THICKNESS, HEADWALL_TOP, Location, Portal, Road, Section};
 
 /// The grid's cell size (m).
 pub const CELL: f32 = 8.0;
@@ -74,9 +80,6 @@ struct Shore {
     /// Inside the loop (towards the bay) and outside.
     inside: Side,
     outside: Side,
-    /// 1 inside a tunnel (the hill stays over it), 0 outside, a short ramp
-    /// at its mouths.
-    tunnel: f32,
     /// 1 on a bridge (water under it), 0 off it and on its abutments.
     bridge: f32,
 }
@@ -98,15 +101,151 @@ fn shore_of(section: Section) -> Shore {
         // Quays either side of the port.
         Section::Port => (Side::new(140.0, 0.4, -1.0, 4.0, 4.0), Side::new(150.0, 0.4, -1.0, 4.0, 4.0)),
     };
-    Shore { inside, outside, tunnel: 0.0, bridge: 0.0 }
+    Shore { inside, outside, bridge: 0.0 }
 }
 
 fn lerp_shore(a: &Shore, b: &Shore, t: f32) -> Shore {
     Shore {
         inside: a.inside.lerp(&b.inside, t),
         outside: a.outside.lerp(&b.outside, t),
-        tunnel: a.tunnel + (b.tunnel - a.tunnel) * t,
         bridge: a.bridge + (b.bridge - a.bridge) * t,
+    }
+}
+
+/// How far the cutting before a tunnel's headwall reaches beyond the
+/// tunnel's walls: its floor, level with the ground under the road, and
+/// the top of its sides, where they meet the hillside (m).
+const CUTTING_FLOOR: f32 = 5.0;
+const CUTTING_TOP: f32 = 9.5;
+/// How high over the road the hillside meets a headwall: a little under
+/// its top.
+const HILLSIDE: f32 = HEADWALL_TOP - 0.4;
+/// How steeply the hillside rises behind a headwall and beyond its ends,
+/// and over how many metres before it the hill's face rises from the
+/// land.
+const HILLSIDE_SLOPE: f32 = 0.9;
+const FACE: f32 = 14.0;
+/// Further than this from a tunnel's mouth along the road (m), the ground
+/// is under its hill or clear of it whatever its cut's frame says.
+const MOUTH: f32 = 60.0;
+
+/// How far the hill over a tunnel stands above the road's level, the
+/// ground under it, `x` across the road (m).
+fn hill(x: f32) -> f32 {
+    let x = x.abs();
+    (18.0 + UNDER_ROAD + 20.0 * x.smoothstep(0.0, 100.0)) * (1.0 - x.smoothstep(30.0, 140.0))
+}
+
+/// The cut in the ground at a tunnel's mouth: a line across the road
+/// along the middle of its headwall, from one top of the cutting's sides
+/// to the other. Before the cut the ground is the cutting's; behind it,
+/// the hillside's, higher across the cutting, the same at its ends.
+#[derive(Clone, Copy, Debug)]
+pub struct Cut {
+    /// The middle of the cut, and unit vectors on the ground: into the
+    /// tunnel, and across the road (to its right).
+    center: Vec2,
+    inward: Vec2,
+    across: Vec2,
+    /// The road's surface at the middle of the cut, and how much it rises
+    /// per metre to the right.
+    road: f32,
+    bank: f32,
+    /// Where the headwall's ring is along the road (m), and whether the
+    /// tunnel is ahead of it (1) or behind (-1).
+    s: f32,
+    sign: f32,
+    /// How far the tunnel's walls are from the centre line.
+    wall: f32,
+}
+
+impl Cut {
+    fn new(road: &Road, portal: &Portal) -> Cut {
+        let s = road.samples()[portal.index];
+        let flat = |v: Vec3| Vec2::new(v.x, v.z);
+        let inward = (flat(s.forward) * portal.inward).normalize_or(Vec2::Y);
+        let half = HEADWALL_THICKNESS * 0.5;
+        // How much the road rises per metre into the tunnel.
+        let grade = s.forward.y / flat(s.forward).length().max(1e-4) * portal.inward;
+        Cut {
+            center: flat(s.pos) + inward * half,
+            inward,
+            across: flat(s.right).normalize_or(Vec2::X),
+            road: s.pos.y + grade * half,
+            bank: s.right.y / flat(s.right).length().max(1e-4),
+            s: portal.index as f32 * road.spacing(),
+            sign: portal.inward,
+            wall: s.wall,
+        }
+    }
+
+    /// How far `p` is past the cut, into the tunnel (m): the ground at 0
+    /// or more is the hillside's.
+    pub fn along(&self, p: Vec2) -> f32 {
+        (p - self.center).dot(self.inward)
+    }
+
+    /// How far `p` is across the road from the middle of the cut,
+    /// positive to the right.
+    pub fn across(&self, p: Vec2) -> f32 {
+        (p - self.center).dot(self.across)
+    }
+
+    /// The point on the cut `x` across the road.
+    pub fn point(&self, x: f32) -> Vec2 {
+        self.center + self.across * x
+    }
+
+    /// How far the cut reaches either side of the road's centre line: to
+    /// the tops of the cutting's sides.
+    pub fn reach(&self) -> f32 {
+        self.wall + CUTTING_TOP
+    }
+
+    /// Where across the cut the ground's height bends between its ends:
+    /// at the edges of the cutting's floor.
+    pub fn bends(&self) -> [f32; 2] {
+        let x = self.wall + CUTTING_FLOOR;
+        [-x, x]
+    }
+
+    /// The ground's height `x` across the cut: before it and behind it.
+    pub fn heights(&self, x: f32) -> (f32, f32) {
+        let under = self.road + self.bank * x - UNDER_ROAD;
+        let side = self.hillside(0.0, x, hill(x));
+        (under + side * self.cutting(x), under + side)
+    }
+
+    /// Whether `p` is within `margin` of the cut.
+    pub fn near(&self, p: Vec2, margin: f32) -> bool {
+        self.along(p).abs() < margin && self.across(p).abs() < self.reach() + margin
+    }
+
+    /// How far the hillside round the headwall stands above the road's
+    /// level, `a` past the cut and `x` across, where the hill would stand
+    /// `hill` above it: up to the headwall's top, rising away from it.
+    fn hillside(&self, a: f32, x: f32, hill: f32) -> f32 {
+        let beyond = (a - HEADWALL_THICKNESS * 0.5).max(0.0) + (x.abs() - self.wall - HEADWALL_REACH).max(0.0);
+        hill.min(HILLSIDE + UNDER_ROAD + HILLSIDE_SLOPE * beyond)
+    }
+
+    /// How much of the hillside's height is left before the cut, `x`
+    /// across it: none on the cutting's floor, all past its sides.
+    fn cutting(&self, x: f32) -> f32 {
+        1.0 - ((self.reach() - x.abs()) / (CUTTING_TOP - CUTTING_FLOOR)).clamp(0.0, 1.0)
+    }
+
+    /// How far the ground at `p` stands above the road's level, the hill
+    /// there standing `hill` above it, and whether `p` is past the cut.
+    fn lift(&self, p: Vec2, hill: f32) -> (bool, f32) {
+        let (a, x) = (self.along(p), self.across(p));
+        let side = self.hillside(a, x, hill);
+        if a >= 0.0 {
+            return (true, side);
+        }
+        // The hill's face, rising to the headwall, and the cutting in it.
+        let face = (a + HEADWALL_THICKNESS * 0.5).smoothstep(-FACE, 0.0);
+        (false, side * face * self.cutting(x))
     }
 }
 
@@ -118,6 +257,8 @@ pub struct Terrain {
     heights: Vec<f32>,
     /// For each vertex, the road sample nearest it.
     nearest: Vec<u32>,
+    /// The cuts at the tunnels' mouths.
+    cuts: Vec<Cut>,
 }
 
 impl Terrain {
@@ -129,6 +270,7 @@ impl Terrain {
         let inside = inside_loop(road, w, h);
         let shores = shores_along(road);
         let relief = Relief::new(seed);
+        let cuts: Vec<Cut> = road.portals().iter().map(|p| Cut::new(road, p)).collect();
         // Where each vertex is relative to the road, and what the ground
         // is like there as the nearest stretch of road has it. Those fields
         // change abruptly where another stretch becomes the nearest, so
@@ -157,9 +299,15 @@ impl Terrain {
         for (k, height) in heights.iter_mut().enumerate() {
             let p = Vec2::new(-HALF_X + (k % w) as f32 * CELL, -HALF_Z + (k / w) as f32 * CELL);
             let values: [f32; FIELDS] = core::array::from_fn(|f| fields[f][k]);
-            *height = natural(road, &shores[at[k].index], &relief, p, &at[k], &values, inside[k]);
+            let tunnel = tunnel(road, &cuts, p, &at[k]);
+            *height = natural(road, &shores[at[k].index], &relief, p, &at[k], &values, inside[k], tunnel);
         }
-        Terrain { w, h, heights, nearest }
+        Terrain { w, h, heights, nearest, cuts }
+    }
+
+    /// The cuts at the tunnels' mouths.
+    pub fn cuts(&self) -> &[Cut] {
+        &self.cuts
     }
 
     /// The vertex `(i, j)`'s height.
@@ -226,16 +374,32 @@ fn shores_along(road: &Road) -> Vec<Shore> {
         }
         cur = next;
     }
-    // Tunnels and bridges have exact ends: the hill covers a tunnel from
-    // 20 m inside its mouths, and a bridge stands on land for its first
-    // and last 30 m.
+    // Bridges have exact ends: a bridge stands on land for its first and
+    // last 30 m. (A tunnel's hill ends at its headwalls: see `tunnel`.)
     let depth = road.section_depths();
     for (i, sh) in cur.iter_mut().enumerate() {
         let s = road.samples()[i].section;
-        sh.tunnel = if s == Section::Tunnel { depth[i].smoothstep(14.0, 26.0) } else { 0.0 };
         sh.bridge = if s == Section::Bridge { depth[i].smoothstep(24.0, 40.0) } else { 0.0 };
     }
     cur
+}
+
+/// Whether `p` (at `at` on the road) is under a tunnel's hill, past the
+/// cut at its nearest mouth, and how far the hill there, or its face
+/// before the mouth, stands above the road's level.
+fn tunnel(road: &Road, cuts: &[Cut], p: Vec2, at: &Location) -> (bool, f32) {
+    let nearest =
+        cuts.iter().map(|c| (c, c.sign * road.delta(c.s, at.s))).min_by(|a, b| a.1.abs().total_cmp(&b.1.abs()));
+    let Some((cut, along)) = nearest else {
+        return (false, 0.0);
+    };
+    let hill = hill(at.lateral);
+    // Far from the mouth the cut's straight frame strays from the road's,
+    // and all is hill, or none.
+    if along.abs() > MOUTH {
+        return (along > 0.0, if along > 0.0 { hill } else { 0.0 });
+    }
+    cut.lift(p, hill)
 }
 
 /// How many fields [`Terrain::new`] blurs: the road's height, then the
@@ -294,7 +458,10 @@ fn fractal(seed: i32, kind: FractalType, frequency: f32, octaves: i32, lacunarit
 }
 
 /// The natural height at `p`, which is at `at` relative to the road, with
-/// the blurred fields `f` and the nearest stretch's `shore`.
+/// the blurred fields `f` and the nearest stretch's `shore`; `tunnel` is
+/// whether a tunnel's hill is over it, and how far above the road's level
+/// that hill (or its face) stands there.
+#[allow(clippy::too_many_arguments, reason = "the road's fields, and what lies over the road here")]
 fn natural(
     road: &Road,
     shore: &Shore,
@@ -303,6 +470,7 @@ fn natural(
     at: &Location,
     f: &[f32; FIELDS],
     inside: bool,
+    tunnel: (bool, f32),
 ) -> f32 {
     let [base, coast, rough, rise, shelf, wobble] = *f;
     // Under a bridge's span, water right up to it.
@@ -336,19 +504,17 @@ fn natural(
 
     // The road's corridor: the ground under the road, and cuttings and
     // embankments either side, except over a tunnel and under a bridge.
-    let road_h = at.height;
+    let under = at.height - UNDER_ROAD;
+    let (covered, lift) = tunnel;
     let corridor = 1.0 - d.smoothstep(wall + 2.0, wall + 28.0);
-    let open = (1.0 - shore.tunnel) * (1.0 - shore.bridge);
+    let open = if covered { 0.0 } else { 1.0 - shore.bridge };
     if corridor > 0.0 && open > 0.0 {
-        let under = road_h - UNDER_ROAD;
         h += (under - h) * corridor * open;
     }
-    // Over a tunnel the hill stays well above its roof.
-    let over = shore.tunnel * (1.0 - d.smoothstep(30.0, 140.0));
-    if over > 0.0 {
-        let cover = road_h + 18.0 + 20.0 * d.smoothstep(0.0, 100.0);
-        let under = road_h - UNDER_ROAD;
-        h = h.max(under + (cover - under) * over);
+    // Over a tunnel the hill stays well above its roof; before its mouths
+    // its face rises to the headwalls, cut through by the road.
+    if lift > 0.0 {
+        h = h.max(under + lift);
     }
     h
 }
@@ -521,5 +687,48 @@ mod tests {
         let mid = road.samples().iter().position(|s| s.section == Section::Tunnel).unwrap() + 60;
         let p = road.samples()[mid].pos;
         assert!(t.height(p.x, p.z) > p.y + 12.0, "only {:.1} m over the tunnel", t.height(p.x, p.z) - p.y);
+    }
+
+    #[test]
+    fn the_cuts_at_the_tunnels_mouths_are_inside_their_headwalls() {
+        use crate::road::{HEADWALL_FOOT, PORTAL_DEPTH};
+        let road = Road::new(VEDA_BAY);
+        let t = Terrain::new(&road, 7);
+        let portals = road.portals();
+        assert_eq!(t.cuts().len(), 2);
+        let depth = road.section_depths();
+        // The headwall is as wide as the tunnel's ring, which is no
+        // narrower than its stretch's.
+        let tunnel = Section::Tunnel.profile();
+        for (c, portal) in t.cuts().iter().zip(&portals) {
+            assert!(depth[portal.index] >= PORTAL_DEPTH - road.spacing());
+            let ring = road.samples()[portal.index];
+            let into = ring.forward * portal.inward;
+            let reach = tunnel.wall + HEADWALL_REACH;
+            // Where the ground meets the cut, either side: in the slab of
+            // the headwall, under its top, and not in its opening (under
+            // the road before the cut, over the roof behind it). Past the
+            // cut's ends, the same either side, under the headwall's top.
+            for k in -40..=40 {
+                let x = k as f32 / 40.0 * reach;
+                let p = c.point(x);
+                let (before, behind) = c.heights(x);
+                for (h, past) in [(before, false), (behind, true)] {
+                    let q = Vec3::new(p.x, h, p.y) - ring.pos;
+                    let (d, across, up) = (q.dot(into), q.dot(ring.right), q.dot(ring.up));
+                    assert!(up < HEADWALL_TOP - 0.2, "the ground at {up:.1} m on the headwall, {x:.1} m across");
+                    if x.abs() > c.reach() {
+                        assert_eq!(before, behind, "a step past the cut's end, {x:.1} m across");
+                        continue;
+                    }
+                    assert!(d > 0.1 && d < HEADWALL_THICKNESS - 0.1, "the cut {d:.2} m into the headwall");
+                    assert!(across.abs() < reach - 0.5, "the cut beyond the headwall, {across:.1} m across");
+                    assert!(up > -HEADWALL_FOOT, "the ground {up:.1} m under the headwall's foot");
+                    if across.abs() < ring.wall {
+                        assert!(if past { up > 7.6 } else { up < 0.0 }, "the ground in the opening, {up:.1} m up");
+                    }
+                }
+            }
+        }
     }
 }

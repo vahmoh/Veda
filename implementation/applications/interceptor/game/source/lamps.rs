@@ -66,13 +66,14 @@ pub fn place(road: &Road) -> Vec<Lamp> {
         let flat_r = Vec3::new(r.x, 0.0, r.z).normalize_or(Vec3::X);
         match sample.section {
             Section::Tunnel => {
-                // Lit only well inside; the mouths are lit by day.
-                if depth[i] < 12.0 {
-                    continue;
-                }
-                // Three fittings to every post's spacing, in two rows.
+                // Three fittings to every post's spacing, in two rows,
+                // under the roof only: its mouths are lit by day.
                 for j in 0..3 {
                     let s = s + j as f32 * spacing / 3.0;
+                    let at = (s / road.spacing()) as usize;
+                    if !road.roofed(&depth, at) || !road.roofed(&depth, at + 1) {
+                        continue;
+                    }
                     let (p, f, r, u) = road.frame(s);
                     let yaw = libm::atan2f(f.x, f.z);
                     for lateral in [-3.6f32, 3.6] {
@@ -188,6 +189,17 @@ mod tests {
                 assert!(at.lateral.abs() > paved, "a post on the tarmac at {:?}", l.base);
                 assert!(l.heads[0].y > l.base.y + 8.0);
             }
+        }
+    }
+
+    #[test]
+    fn a_tunnels_lights_hang_under_its_roof() {
+        let road = Road::new(VEDA_BAY);
+        let depth = road.section_depths();
+        for l in place(&road).iter().filter(|l| l.kind == Kind::Ceiling) {
+            let at = road.locate(l.base, None);
+            let roofed = road.roofed(&depth, at.index) && road.roofed(&depth, at.index + 1);
+            assert!(roofed, "a tunnel's light outside its roof, {:.0} m along the road", at.s);
         }
     }
 }
