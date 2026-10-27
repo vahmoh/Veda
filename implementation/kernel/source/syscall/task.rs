@@ -67,11 +67,17 @@ pub fn process_set_memory_class(raw: RawHandle, class: usize) -> SysResult {
     ok(0)
 }
 
+/// Readies `t` to enter user code at `entry`, its stack at `stack`:
+/// `BadState` if it has started, or if its process has terminated (killed
+/// before this thread started, say, or its other threads all ended). There
+/// it would run outside its process's threads, where [`Process::kill`]
+/// cannot reach it, and the handles it made would never be closed: a
+/// process's handle table is emptied once, as it terminates.
 fn start_thread(t: &Thread, entry: usize, stack: usize, arg0: u64, arg1: u64) -> Result<(), Error> {
     if !is_user_address(entry) || !is_user_address(stack) {
         return Err(Error::InvalidArgs);
     }
-    if t.state() != State::New {
+    if t.state() != State::New || t.process.as_ref().is_some_and(|p| p.is_terminated()) {
         return Err(Error::BadState);
     }
     t.prepare_user_entry(entry as u64, stack as u64, arg0, arg1);
@@ -79,8 +85,9 @@ fn start_thread(t: &Thread, entry: usize, stack: usize, arg0: u64, arg1: u64) ->
 }
 
 /// Starts a process's first thread, moving the bootstrap handle `arg` into
-/// the process. The bootstrap handle is the kernel's whatever happens, as
-/// with `channel_write`: a start that fails closes it.
+/// the process: `BadState` once the process has terminated
+/// ([`start_thread`]). The bootstrap handle is the kernel's whatever
+/// happens, as with `channel_write`: a start that fails closes it.
 pub fn process_start(
     proc: RawHandle,
     thread: RawHandle,
@@ -100,6 +107,10 @@ pub fn process_start(
     }
     if !is_user_address(entry) || !is_user_address(stack) || t.state() != State::New {
         return Err(Error::InvalidArgs);
+    }
+    // Before the bootstrap handle goes in, where nothing would close it.
+    if p.is_terminated() {
+        return Err(Error::BadState);
     }
     let child_handle = match bootstrap {
         Some(h) => p.handles.lock().insert(h)?,
@@ -231,6 +242,9 @@ pub fn process_self() -> SysResult {
 pub fn thread_create(proc: RawHandle, name: usize, len: usize) -> SysResult {
     let p = target_process(proc)?;
     let name = read_str(name, len, abi::NAME_MAX * 4)?;
+    // Before the thread is made: `new_user` fails for a process that has
+    // terminated (its address space is gone) as though memory had run out.
+    p.may_add_thread()?;
     let t = Thread::new_user(&p, &name).ok_or(Error::NoMemory)?;
     p.add_thread(t.clone())?;
     ok(insert(KObject::Thread(t), THREAD_RIGHTS)? as usize)

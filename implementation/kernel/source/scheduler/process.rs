@@ -174,12 +174,19 @@ impl Process {
         matches!(self.state(), ProcessState::Terminated { .. })
     }
 
-    /// Registers a new thread: `BadState` once the process has terminated,
-    /// `LimitReached` if it has [`MAX_THREADS`] already.
+    /// Whether it may take a new thread (`BadState` if not): not once it is
+    /// ending, as [`Process::kill`] marked the threads it had to end, and
+    /// one added after would run on once started, keeping the process from
+    /// terminating; nor once it has terminated.
+    pub fn may_add_thread(&self) -> Result<(), abi::Error> {
+        if self.ending_with().is_some() || self.is_terminated() { Err(abi::Error::BadState) } else { Ok(()) }
+    }
+
+    /// Registers a new thread: `BadState` if the process may take none
+    /// ([`Process::may_add_thread`]), `LimitReached` if it has
+    /// [`MAX_THREADS`] already.
     pub fn add_thread(&self, t: Arc<Thread>) -> Result<(), abi::Error> {
-        if self.is_terminated() {
-            return Err(abi::Error::BadState);
-        }
+        self.may_add_thread()?;
         let mut threads = self.threads.lock();
         if threads.len() >= MAX_THREADS {
             return Err(abi::Error::LimitReached);

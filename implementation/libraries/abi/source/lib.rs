@@ -238,9 +238,10 @@ pub mod nr {
     /// lower; 0 gives it the caller's (`InvalidArgs` above
     /// [`REALTIME`](crate::priority::REALTIME)).
     pub const PROCESS_CREATE: usize = 60;
-    /// `process_start(process, thread, entry, stack, arg_handle, arg1)`.
-    /// The bootstrap handle `arg_handle` is consumed, closed if the start
-    /// fails.
+    /// `process_start(process, thread, entry, stack, arg_handle, arg1)`:
+    /// `BadState` once the process has terminated (killed before it
+    /// started, say). The bootstrap handle `arg_handle` is consumed, closed
+    /// if the start fails.
     pub const PROCESS_START: usize = 61;
     /// `process_exit(code) -> !`.
     pub const PROCESS_EXIT: usize = 62;
@@ -251,9 +252,11 @@ pub mod nr {
     pub const PROCESS_KILL: usize = 63;
     /// `thread_create(process, name, name_len) -> h`: a thread of the
     /// process at [`priority::NORMAL`](crate::priority::NORMAL), or at the
-    /// process's maximum if that is lower.
+    /// process's maximum if that is lower; `BadState` once the process is
+    /// ending (killed) or has terminated.
     pub const THREAD_CREATE: usize = 64;
-    /// `thread_start(thread, entry, stack, arg0, arg1)`.
+    /// `thread_start(thread, entry, stack, arg0, arg1)`: `BadState` for a
+    /// thread that has started, or whose process has terminated.
     pub const THREAD_START: usize = 65;
     /// `thread_exit() -> !`.
     pub const THREAD_EXIT: usize = 66;

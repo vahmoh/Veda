@@ -4,11 +4,11 @@
 //! Tests of what C programs stand on: sockets, memory protection, private
 //! memory, the thread exit futex and futexes in shared memory, the VFS's
 //! open-file connections and shared memory objects, ending a job, processes
-//! going once they have ended, signals between processes and the
-//! interruptions they come with, and the C programs themselves
-//! (`/system/tests/c`, built by the cross toolchain), and the Rust programs
-//! on its standard library, which stand on the C library too
-//! (`/system/tests/rust`, built by Rust's), as Python does
+//! going once they have ended and starting nothing once killed, signals
+//! between processes and the interruptions they come with, and the C
+//! programs themselves (`/system/tests/c`, built by the cross toolchain),
+//! and the Rust programs on its standard library, which stand on the C
+//! library too (`/system/tests/rust`, built by Rust's), as Python does
 //! (`/system/tests/python`).
 
 use alloc::format;
@@ -614,6 +614,42 @@ pub fn end(how: Option<&String>) -> i32 {
     };
     rt::println!("end: running still after {how} ({ended:?})");
     1
+}
+
+/// A process killed before it starts (from the task list, which shows it
+/// running, or by the out-of-memory killer) starts nothing: its thread,
+/// made as `Spawn` makes it, is refused a start by `process_start`, which
+/// closes the bootstrap handle as any start that fails does, and by
+/// `thread_start`, and no new thread is made in it. Nothing of it is left:
+/// no thread, no handle, and its thread never ran.
+pub fn test_killed_before_start() -> TestResult {
+    let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(5));
+    let process = crate::bare_process(0).map_err(s)?;
+    let made = call(nr::THREAD_CREATE, [process.raw() as usize, "main".as_ptr() as usize, 4, 0, 0, 0]).map_err(s)?;
+    // SAFETY: a fresh handle from the kernel.
+    let thread = rt::object::Thread(unsafe { rt::object::Handle::from_raw(made as u32) });
+    process.kill().map_err(s)?;
+    // None of its threads had started: it ended at once.
+    check(process.join(deadline).map_err(s)? == abi::EXIT_CODE_KILLED, "the killed process's exit code")?;
+    // Nothing is mapped where it would start: it never does.
+    let (entry, stack) = (abi::USER_SPACE_START, abi::USER_SPACE_START + abi::PAGE_SIZE);
+    let (ours, theirs) = Channel::create().map_err(s)?;
+    let bootstrap = theirs.into_handle().into_raw() as usize;
+    let started = call(nr::PROCESS_START, [process.raw() as usize, thread.raw() as usize, entry, stack, bootstrap, 0]);
+    check(started == Err(Error::BadState), &format!("process_start in a killed process: {started:?}"))?;
+    check(ours.wait(PEER_CLOSED, deadline).is_ok(), "the refused start's bootstrap handle is open still")?;
+    let started = call(nr::THREAD_START, [thread.raw() as usize, entry, stack, 0, 0, 0]);
+    check(started == Err(Error::BadState), &format!("thread_start in a killed process: {started:?}"))?;
+    let another = call(nr::THREAD_CREATE, [process.raw() as usize, "t".as_ptr() as usize, 1, 0, 0, 0]);
+    // SAFETY: a fresh handle from the kernel, if it made a thread.
+    let another = another.map(|h| unsafe { rt::object::Handle::from_raw(h as u32) });
+    check(another.as_ref().err() == Some(&Error::BadState), "a thread was made in a killed process")?;
+    let info = process.info().map_err(s)?;
+    let left = (info.state, info.threads, info.handles);
+    let what = format!("the killed process: state {}, {} threads, {} handles", left.0, left.1, left.2);
+    check(left == (abi::process_state::KILLED, 0, 0), &what)?;
+    let ran = thread.info().map_err(s)?.cpu_time_ns;
+    check(ran == 0, &format!("the killed process's thread ran for {ran} ns"))
 }
 
 /// A process that gave up abilities (`process_restrict`, as the media
