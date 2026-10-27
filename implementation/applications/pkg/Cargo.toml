@@ -3,7 +3,7 @@
 
 [package]
 name = "pkg"
-description = "The pkg command: installs, upgrades and removes packages through the packages service, and makes packages, keys and signed repositories"
+description = "The pkg command: installs, upgrades and removes packages through the package manager, and makes packages, keys and signed repositories"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

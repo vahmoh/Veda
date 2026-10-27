@@ -27,10 +27,10 @@
 //! The tables go where the guest's memory map has room for them
 //! ([`Machine::at`]); the boot parameters say where the RSDP is.
 //!
-//! What the PC's firmware describes comes from devmgr, as text: what of it
-//! the tables cannot hold (a name that is not an ACPI name, an id with a
-//! NUL in it, more GPIO pins than a descriptor takes) is left out of them,
-//! and said ([`describe`]).
+//! What the PC's firmware describes comes from the device manager, as text:
+//! what of it the tables cannot hold (a name that is not an ACPI name, an
+//! id with a NUL in it, more GPIO pins than a descriptor takes) is left out
+//! of them, and said ([`describe`]).
 
 use alloc::format;
 use alloc::string::String;
@@ -639,9 +639,10 @@ mod tests {
 
     #[test]
     fn what_cannot_be_described_is_left_out_and_said() {
-        // What devmgr says of the PC, as text: names that are no ACPI
-        // names, ids with NULs, a connection of more pins than a descriptor
-        // holds, a pin that is no INTx's; and a controller of 300 pins.
+        // What the device manager says of the PC, as text: names that are
+        // no ACPI names, ids with NULs, a connection of more pins than a
+        // descriptor holds, a pin that is no INTx's; and a controller of
+        // 300 pins.
         let many_pins = Gpio {
             interrupt: false,
             pins: alloc::vec![1; 40_000],

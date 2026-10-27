@@ -27,8 +27,8 @@
 //!   actions); it reports scans' ends, timeouts and a lost link as
 //!   [`MlmeEvent`]s.
 //!
-//! The service presents each connected radio to `netd` as an Ethernet-like
-//! interface (`wlan0`) through the `netdev` protocol.
+//! The service presents each connected radio to `network` as an
+//! Ethernet-like interface (`wlan0`) through the `netdev` protocol.
 //!
 //! # Who may do what
 //!

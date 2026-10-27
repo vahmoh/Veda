@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! What whoever publishes packages does, without the packages service:
+//! What whoever publishes packages does, without the package manager:
 //! makes a key pair (`pkg key`), a package of a directory (`pkg build`),
 //! and a repository of a directory of packages (`pkg index`), its index
 //! signed by their key.

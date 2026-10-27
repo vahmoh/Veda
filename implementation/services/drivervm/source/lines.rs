@@ -6,8 +6,8 @@
 //! keyboard controller's 1 and 12), the lines the PCI functions' INTx are
 //! wired to — by the numbers the guest's ACPI
 //! tables give them, which are the PC's; and lines the platform makes, GSIs
-//! from `PLATFORM_GSIS` on: the interrupts of GPIO pins. devmgr hands over
-//! an interrupt for each; functions that share a line share it.
+//! from `PLATFORM_GSIS` on: the interrupts of GPIO pins. The device manager
+//! hands over an interrupt for each; functions that share a line share it.
 //!
 //! The guest routes a line to one of its processors with a hypercall
 //! ([`hv::platform::hypercall::GSI`]): the line's interrupt is bound to the

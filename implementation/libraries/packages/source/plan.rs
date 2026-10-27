@@ -8,7 +8,7 @@
 //! A plan has a *digest*: the SHA-256 of what is installed (the database's
 //! generation), of every step with the SHA-256 of the package file it
 //! installs, and of the world after. Whoever shows a plan to the user hands
-//! its digest back when they agree; the packages service carries the change
+//! its digest back when they agree; the package manager carries the change
 //! out only if the plan it works out then has the same digest, so that
 //! what is done is what was agreed to, even if a repository was updated or
 //! another change was made in between.

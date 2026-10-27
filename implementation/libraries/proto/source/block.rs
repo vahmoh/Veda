@@ -92,7 +92,7 @@ protocol! {
 
 /// The program that may use a disk: the file system, a system service of
 /// this name.
-pub const CLIENT: &str = "vfs";
+pub const CLIENT: &str = "filesystem";
 
 /// Whether `who` may use a disk: the file system alone, which decides who
 /// reads and writes what of the files on it.
@@ -313,9 +313,9 @@ mod tests {
 
     #[test]
     fn only_the_file_system_may_use_a_disk() {
-        assert!(may_use(&who("vfs", true)));
+        assert!(may_use(&who("filesystem", true)));
         // An application may take the file system's name, but is none.
-        assert!(!may_use(&who("vfs", false)));
+        assert!(!may_use(&who("filesystem", false)));
         assert!(!may_use(&who("shell", true)));
         assert!(!may_use(&who("terminal", false)));
         assert!(!may_use(&ClientIdentity::default()));

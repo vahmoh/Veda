@@ -6,8 +6,9 @@
 //! table says is beyond it is not read), PCI Express configuration space
 //! (MCFG) and power control (FADT, `\_S5`). The tables that describe the architecture's own devices
 //! (its processors, interrupt controllers and IOMMU) are read by its code.
-//! The kernel loads no AML namespace (devmgr does): `\_S5`'s package is
-//! found and decoded where the DSDT defines it (`acpi::aml::sleep_type`).
+//! The kernel loads no AML namespace (the device manager does): `\_S5`'s
+//! package is found and decoded where the DSDT defines it
+//! (`acpi::aml::sleep_type`).
 
 use alloc::vec::Vec;
 

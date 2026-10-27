@@ -20,7 +20,7 @@
 //!   `key` may be given more than once (while a repository moves to a new
 //!   key, its index is signed by both); `enabled=false` leaves the
 //!   repository out until the user enables it.
-//! * **The user's** ([`UserConfig`]), which the packages service keeps:
+//! * **The user's** ([`UserConfig`]), which the package manager keeps:
 //!   the repositories the user added, and which of the system's they
 //!   disabled or enabled, by name. Nothing of a system repository but that
 //!   is kept, so that the image stays the one source of what its
@@ -71,7 +71,7 @@ impl fmt::Display for BadConfig {
 /// place.
 const SYSTEM_IMAGE: &str = "/system";
 /// The services' private directories, which no repository may be in: the
-/// packages service would read them for whoever added it.
+/// package manager would read them for whoever added it.
 const PRIVATE: &str = "/home/.private";
 
 impl Url {

@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! `packages` — Veda's packages, apart from the service that installs them
-//! (`implementation/services/packages`), so that the build machine's tools,
-//! the `pkg` command and the service share one implementation, tested on
-//! the host. [Packages](../../../../documentation/PACKAGES.md) describes the
-//! design; in short:
+//! (`implementation/services/package-manager`), so that the build machine's
+//! tools, the `pkg` command and the service share one implementation,
+//! tested on the host. [Packages](../../../../documentation/PACKAGES.md)
+//! describes the design; in short:
 //!
 //! * [`name`], [`version`], [`requirement`]: what packages are called,
 //!   how their versions are ordered (Debian's order), and what they ask of

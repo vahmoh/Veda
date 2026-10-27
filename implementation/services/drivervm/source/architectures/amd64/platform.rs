@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The PC's own devices the guest has: its keyboard controller, if devmgr
-//! hands its ports and interrupts over (`i8042`). And what the guest's
-//! processors do that is not a hypercall: reach I/O ports (the platform
-//! has none but the keyboard controller's), shut down (a triple fault),
-//! reach memory that is not there, or fail.
+//! The PC's own devices the guest has: its keyboard controller, if the
+//! device manager hands its ports and interrupts over (`i8042`). And what
+//! the guest's processors do that is not a hypercall: reach I/O ports (the
+//! platform has none but the keyboard controller's), shut down (a triple
+//! fault), reach memory that is not there, or fail.
 
 use alloc::format;
 use alloc::string::String;
@@ -29,8 +29,8 @@ pub struct Platform {
 }
 
 impl Platform {
-    /// What devmgr handed over of the PC: the keyboard controller, whose
-    /// lines join `lines`.
+    /// What the device manager handed over of the PC: the keyboard
+    /// controller, whose lines join `lines`.
     pub fn take(lines: &mut Lines) -> Platform {
         let take = |role| rt::env::take_handle(role);
         let i8042 = match (

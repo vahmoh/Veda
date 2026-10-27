@@ -8,8 +8,8 @@
 //!   flush and adjust them, and set the master volume.
 //! * Registers `audiodev` ([`proto::audio::audiodev`]): a sound driver
 //!   attaches its output device and receives the ring the mixer fills;
-//!   devmgr says whether one is coming, which the status tells (the
-//!   startup sound waits for it).
+//!   the device manager says whether one is coming, which the status tells
+//!   (the startup sound waits for it).
 //! * Mixes every playing stream into the device format (see [`mixer`]).
 //!   Without a device, audio is consumed silently in real time so that
 //!   applications behave the same on machines without sound hardware.
@@ -19,13 +19,13 @@
 //! **Who may do what** is decided by the registry's identity of each
 //! connection. A device attached receives everything the computer plays
 //! (the voice agent's voice included) or becomes every capture stream's
-//! microphone (what the agent hears), so only the drivers devmgr starts
-//! (they speak as devmgr) attach devices and say one is coming; any other
-//! program's connection to `audiodev` is closed. The one exception is the
-//! test microphone (`testmic`, when the kernel command line runs it for
-//! automated tests, as only the machine's owner can: `requested`): it may
-//! attach an input device, which a sound card's microphone then replaces.
-//! Only the voice agent ducks the other sound.
+//! microphone (what the agent hears), so only the drivers the device
+//! manager starts (they speak as the device manager) attach devices and say
+//! one is coming; any other program's connection to `audiodev` is closed.
+//! The one exception is the test microphone (`testmic`, when the kernel
+//! command line runs it for automated tests, as only the machine's owner
+//! can: `requested`): it may attach an input device, which a sound card's
+//! microphone then replaces. Only the voice agent ducks the other sound.
 //!
 //! The service runs on one high-priority thread: IPC requests are short,
 //! and mixing in the same loop avoids any locking. Once it runs, only
@@ -72,8 +72,8 @@ const MAX_DRIVERS: usize = 8;
 /// Who a driver connection is (see the module documentation).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Driver {
-    /// devmgr, or a driver it started.
-    Devmgr,
+    /// The device manager, or a driver it started.
+    DeviceManager,
     /// The test microphone.
     TestMicrophone,
     /// Anything else: it may attach nothing.
@@ -82,8 +82,8 @@ enum Driver {
 
 impl Driver {
     fn of(who: &ClientIdentity) -> Driver {
-        if who.service && who.name == "devmgr" {
-            Driver::Devmgr
+        if who.service && who.name == "device-manager" {
+            Driver::DeviceManager
         } else if who.requested && who.name == "testmic" {
             Driver::TestMicrophone
         } else {
@@ -110,7 +110,8 @@ struct Service {
     /// The driver connection whose input device is attached, and whether it
     /// is the test microphone.
     input_attached: Option<(u64, Driver)>,
-    /// The sound card devmgr said is coming, and on which connection.
+    /// The sound card the device manager said is coming, and on which
+    /// connection.
     coming: Option<(u64, String)>,
     next_key: u64,
     /// What the loop waits on, kept from pass to pass.
@@ -213,7 +214,7 @@ struct DriverSession<'a> {
 
 impl audiodev::Server for DriverSession<'_> {
     fn attach(&mut self, format: DeviceFormat) -> Result<DeviceLink, AudioError> {
-        if self.driver != Driver::Devmgr {
+        if self.driver != Driver::DeviceManager {
             return Err(AudioError::Denied);
         }
         let link = self.mixer.attach(&format)?;
@@ -229,7 +230,7 @@ impl audiodev::Server for DriverSession<'_> {
         match self.driver {
             Driver::Other => return Err(AudioError::Denied),
             // A sound card's microphone takes the test microphone's place.
-            Driver::Devmgr if self.test_input => {
+            Driver::DeviceManager if self.test_input => {
                 println!("the test microphone gives way to \"{}\"", format.name);
                 self.capture.detach();
             }
@@ -245,7 +246,7 @@ impl audiodev::Server for DriverSession<'_> {
     }
 
     fn expect(&mut self, device: Option<String>) -> Result<(), AudioError> {
-        if self.driver != Driver::Devmgr {
+        if self.driver != Driver::DeviceManager {
             return Err(AudioError::Denied);
         }
         match &device {

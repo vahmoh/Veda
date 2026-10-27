@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The file system of the standard library behind transactions: the
-//! packages service's in Veda, whose standard library reaches the VFS
+//! package manager's in Veda, whose standard library reaches the VFS
 //! (moving a file is the VFS's `replace`, in one step; syncing is the VFS's
 //! `sync`, which saves `/home` to the home disk), and the build machine's,
 //! for the tests and the tools.

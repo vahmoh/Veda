@@ -13,7 +13,7 @@ fail-on "PANIC"
 wait-serial "desktop ready" 120
 expect-serial "home directory in memory (live system)"
 expect-serial "live system: nvme not started"
-reject-serial "devmgr: started nvme"
+reject-serial "device-manager: started nvme"
 wait-serial "Product: QEMU USB HARDDRIVE" 60
 wait-serial "logkeeper: sda1 has Veda's files but cannot be written to" 60
 wait 4

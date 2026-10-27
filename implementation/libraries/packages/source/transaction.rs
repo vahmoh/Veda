@@ -4,10 +4,10 @@
 //! Carrying a change out, so that one cut short is never left half done.
 //!
 //! The installed packages' files are in the *live* directory
-//! (`/home/packages`); the packages service keeps its database, a journal
+//! (`/home/packages`); the package manager keeps its database, a journal
 //! and the change under way in its *state* directory
-//! (`/home/.private/packages`), on the same file system, where moving a
-//! file is one step ([`Layout`]). A change ([`apply`]):
+//! (`/home/.private/package-manager`), on the same file system, where
+//! moving a file is one step ([`Layout`]). A change ([`apply`]):
 //!
 //! 1. **Stages** every package it installs: unpacks it into
 //!    `transaction/new`, each file checked against its SHA-256 as it ends,
@@ -116,7 +116,7 @@ pub trait Files {
 pub struct Layout {
     /// The installed packages' files (`/home/packages`).
     pub live: String,
-    /// The service's directory (`/home/.private/packages`).
+    /// The service's directory (`/home/.private/package-manager`).
     pub state: String,
 }
 

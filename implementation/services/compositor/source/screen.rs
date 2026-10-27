@@ -32,18 +32,18 @@
 //! flip it was given up at, frames are flipped again. Its first flip sets
 //! the display's mode, which may take seconds; the others take a frame.
 //!
-//! Whether a driver is coming at all, devmgr says (`displaydev::expect`):
-//! until the screen is settled (the driver's first picture is on it, or
-//! none is coming), the startup sequence leaves the screen black
-//! (`startup`).
+//! Whether a driver is coming at all, the device manager says
+//! (`displaydev::expect`): until the screen is settled (the driver's first
+//! picture is on it, or none is coming), the startup sequence leaves the
+//! screen black (`startup`).
 //!
 //! Nothing is drawn into the firmware's framebuffer, whenever the
 //! compositor starts (at system start, or again after a crash), until it
-//! is known to be the screen's still: devmgr says no driver is coming, or
-//! a driver that keeps that memory only pixels attaches (QEMU's VGA), or
-//! [`HOLD_NS`] passes without either. A driver that does not keep it (an
-//! Intel GPU's, whose aperture its tables point at memory of their own)
-//! may have it already when a compositor started again: what the
+//! is known to be the screen's still: the device manager says no driver is
+//! coming, or a driver that keeps that memory only pixels attaches (QEMU's
+//! VGA), or [`HOLD_NS`] passes without either. A driver that does not keep
+//! it (an Intel GPU's, whose aperture its tables point at memory of their
+//! own) may have it already when a compositor started again: what the
 //! compositor drew there would land in that memory.
 //!
 //! The memory the screen shows is never borrowed as a Rust slice: the
@@ -239,7 +239,8 @@ fn rate(period: u64) -> String {
     format!("{}.{:02}", millihertz / 1000, millihertz % 1000 / 10)
 }
 
-/// What devmgr said is coming for the display (`displaydev::expect`).
+/// What the device manager said is coming for the display
+/// (`displaydev::expect`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Coming {
     /// Nothing said yet.
@@ -593,8 +594,8 @@ impl Screen {
 
     // ---- the display driver ------------------------------------------------
 
-    /// devmgr says on connection `key` whether a driver is coming for the
-    /// display, for `device`.
+    /// The device manager says on connection `key` whether a driver is
+    /// coming for the display, for `device`.
     pub(crate) fn expect(&mut self, key: u64, device: Option<String>) {
         let coming = match device {
             Some(device) => Coming::Driver { key, device },
@@ -777,12 +778,12 @@ impl Screen {
     }
 
     /// Connection `key` closed: if it was the driver's, it went away; if it
-    /// was devmgr's, what it said no longer holds.
+    /// was the device manager's, what it said no longer holds.
     pub(crate) fn detach(&mut self, key: u64) {
         if matches!(&self.coming, Coming::Driver { key: k, .. } if *k == key) {
-            // (The firmware's framebuffer stays held: a driver devmgr
-            // started may have its memory all the same.)
-            println!("devmgr went away: no driver is coming for the display");
+            // (The firmware's framebuffer stays held: a driver the device
+            // manager started may have its memory all the same.)
+            println!("the device manager went away: no driver is coming for the display");
             self.coming = Coming::Nothing;
         }
         if let Some(f) = &mut self.flips

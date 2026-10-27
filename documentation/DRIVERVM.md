@@ -63,9 +63,9 @@ memory and their devices.
    computes Veda's monotonic time itself, so timestamps mean the same on
    both sides.
 8. **The driver VM is restartable.** When Linux crashes, `drivervm` ends,
-   and `devmgr` resets the devices and starts a new one (unless Linux
-   powered it off), later after each run that fails within a minute, and
-   not at all after a few.
+   and `device-manager` resets the devices and starts a new one (unless
+   Linux powered it off), later after each run that fails within a minute,
+   and not at all after a few.
 9. **Linux is a port.** A pinned release, configured with only what the
    platform and the devices need (`implementation/ports/linux/veda.config`
    and the architecture's), and a platform patch. The guest's programs are
@@ -79,7 +79,7 @@ memory and their devices.
 | IOMMU | `implementation/kernel/source/architectures/amd64/iommu` | Intel VT-d: DMA and interrupt remapping |
 | `hv` | `implementation/libraries/hv` | The platform's and the bridge's ABIs, the guest's ACPI tables, a given function's configuration space; on AMD64 the virtual local APIC, `cpuid` and Linux's boot protocol |
 | `iommu` | `implementation/libraries/iommu` | The DMAR table; the units' registers and structures |
-| Device manager | `implementation/services/devmgr` | Picks the driver VM's devices, serves their `pcidev` channels, resets them, restarts the driver VM |
+| Device manager | `implementation/services/device-manager` | Picks the driver VM's devices, serves their `pcidev` channels, resets them, restarts the driver VM |
 | Monitor | `implementation/services/drivervm` | The machine, its hypercalls and PCI functions, the bridge, the narrowed registry |
 | `drivervm-core` | `implementation/services/drivervm/core` | The monitor's decisions that touch no object: the bridge's books, the guest's budget and window, where functions and BARs go, the keyboard controller's commands |
 | Guest kernel | `implementation/ports/linux` | Linux with `veda.patch` (`hvc_veda.c`, `drivers/virt/veda/bridge.c` and `efi.c`, `gpio-veda.c`, an i915 change) and `architectures/amd64/veda.patch` (`arch/x86/kernel/cpu/veda.c`, `arch/x86/pci/veda.c`) |
@@ -160,8 +160,8 @@ are reused.
 ## Devices
 
 Every PCI function goes to the driver VM except those Veda keeps
-(`veda_keeps` in `implementation/services/devmgr/source/main.rs`): storage
-controllers, functions Veda has drivers of its own for, and the
+(`veda_keeps` in `implementation/services/device-manager/source/main.rs`):
+storage controllers, functions Veda has drivers of its own for, and the
 platform's own (bridges, system peripherals, the SMBus, the firmware's
 flash controller). A laptop's I2C and SPI controllers, with its touchpad
 and speaker amplifiers, are Linux's. `drivervm.devices=VID:DID,...` adds
@@ -169,19 +169,20 @@ functions Veda would keep; `drivervm=off` gives nothing.
 
 The driver VM runs where the processors run virtual machines (VMX with
 EPT) and the image has its Linux, and gets PCI functions only where an
-IOMMU confines them (the kernel tells `devmgr` both, `abi::platform`).
+IOMMU confines them (the kernel tells `device-manager` both,
+`abi::platform`).
 
 ### How a function is given
 
-`devmgr` starts no driver of Veda's for the function, and hands the
+`device-manager` starts no driver of Veda's for the function, and hands the
 monitor its `pcidev` channel, which gives only what giving it away takes:
 its configuration space, BARs, MSIs, the firmware's reserved memory, and
 a resource that names it (`resource_kind::PCI`, by requester id), which
 only the driver VM's functions have. A function is given whole or not at
 all: its BARs and reserved memory are mapped, then its DMA joins the
 guest's domain, and a failure undoes all of it. A function the monitor
-could not give stays `devmgr`'s, neither reset when the driver VM ends
-nor offered to the next.
+could not give stays `device-manager`'s, neither reset when the driver VM
+ends nor offered to the next.
 
 **DMA.** Every device starts in the host's domain, which passes requests
 through. `guest_attach_device` puts a function in its guest's domain,
@@ -215,9 +216,9 @@ root's `_PRT`). Linux's command line gives each function's host addresses
 such as the compositor.
 
 **Power, errors and PCI Express.** A function woken to D0 resets, BARs
-included, unless it reports No Soft Reset, so `devmgr`, which carries out
-the guest's power state writes, puts its BARs back. SERR# and PCI
-Express error reporting stay off whatever the guest writes, as a PC may
+included, unless it reports No Soft Reset, so `device-manager`, which
+carries out the guest's power state writes, puts its BARs back. SERR# and
+PCI Express error reporting stay off whatever the guest writes, as a PC may
 turn a function's errors into NMIs that stop Veda. As in VFIO, the guest
 writes only device control and status and device control 2: phantom
 functions stay off (their DMA would carry other requester ids), the
@@ -230,7 +231,7 @@ the function through D3hot instead.
 |-------|-|
 | Interrupts | MSI or MSI-X, or an INTx the firmware routes on a root bus (QEMU's `e1000` has only that); behind a bridge, MSIs |
 | BARs | Memory BARs of whole pages; I/O BARs are not given |
-| Configuration space | The first 256 bytes (`devmgr` reaches no more yet) |
+| Configuration space | The first 256 bytes (`device-manager` reaches no more yet) |
 | MSIs | 128 for all the guest's functions at once |
 | Guest memory | At most 3 GiB |
 
@@ -245,17 +246,17 @@ RAM or BARs is not given.
 
 **Described devices.** A laptop's touchpad and touchscreen are HID
 devices on I2C controllers that only the firmware's ACPI tables describe.
-`devmgr` reads the present devices below a function's ACPI companion, and
-the monitor writes them below the function in the guest's tables: ids,
-`I2cSerialBusV2` or `SpiSerialBusV2` connections retargeted to the
-function, interrupts (GSIs), the `_DSM` answer HID over I2C needs,
+`device-manager` reads the present devices below a function's ACPI
+companion, and the monitor writes them below the function in the guest's
+tables: ids, `I2cSerialBusV2` or `SpiSerialBusV2` connections retargeted to
+the function, interrupts (GSIs), the `_DSM` answer HID over I2C needs,
 `_DSD`, and the controller's timing (`SSCN`, `FMCN`, `FPCN`, `HSCN`).
 What the guest does not get is left out, and logged.
 
 **GPIO pins.** The guest gets only the pins described devices are wired
 to (`GpioIo`, `GpioInt`), on platform GPIO controllers (`VEDA0001`) with
 the PC's pin numbers, so the connections stay the firmware's but for the
-controller. `devmgr` drives the pads and raises the pins' interrupts
+controller. `device-manager` drives the pads and raises the pins' interrupts
 (GSIs from 256; a level-triggered one stays masked until the guest's
 end-of-interrupt). Linux's driver is `drivers/gpio/gpio-veda.c`.
 
@@ -284,10 +285,10 @@ frames there until `kms` attaches.
 ### The keyboard controller
 
 The PC's i8042 goes to the driver VM too, without an IOMMU (it does no
-DMA): `devmgr` hands over its two ports and two interrupts, the guest's
-tables describe it as a PC's do (`PNP0303`, `PNP0F13`, GSIs 1 and 12),
-and Linux's i8042, atkbd and psmouse drive it. Its output port drives the
-processor's reset line and the A20 gate, so the monitor, which carries
+DMA): `device-manager` hands over its two ports and two interrupts, the
+guest's tables describe it as a PC's do (`PNP0303`, `PNP0F13`, GSIs 1 and
+12), and Linux's i8042, atkbd and psmouse drive it. Its output port drives
+the processor's reset line and the A20 gate, so the monitor, which carries
 out every access to the two ports, passes only the commands Linux's
 driver gives (none touches the output port) and drops the rest: a data
 byte is a command's parameter or the keyboard's, never the output port's
@@ -432,12 +433,13 @@ sees it closed.
 
 > [!IMPORTANT]
 > The narrowed registry passes what it allows through the monitor's own
-> registry channel, a copy of `devmgr`'s, so services see `devmgr` as the
-> guest's client. A service that trusts `devmgr` with some calls (the
-> compositor's and the audio service's `expect`, which say what drivers
-> are coming) would take them from the guest too: the narrowing sees only
-> the registry's calls. The fix is for `init` to attribute a registry
-> channel to the monitor itself, which `devmgr` would hand it instead.
+> registry channel, a copy of `device-manager`'s, so services see
+> `device-manager` as the guest's client. A service that trusts
+> `device-manager` with some calls (the compositor's and the audio service's
+> `expect`, which say what drivers are coming) would take them from the
+> guest too: the narrowing sees only the registry's calls. The fix is for
+> `init` to attribute a registry channel to the monitor itself, which
+> `device-manager` would hand it instead.
 
 ## What others learned
 
@@ -459,7 +461,7 @@ are the boundary.
 | Xen, Hyper-V's VMBus, seL4 | Signal only when the peer waits | One interrupt for all the finished waits; how often events are signalled is not yet measured |
 | Xen ([CVE-2011-1898](https://nvd.nist.gov/vuln/detail/CVE-2011-1898), [XSA-59](https://xenbits.xen.org/xsa/advisory-59.txt)) | Without interrupt remapping a driver domain forges MSIs; with it, system errors still raise the host's NMIs | Both remappings for every given device; every interrupt checked against its source; given functions report no errors |
 | Ghaf | The firmware ties devices to it: RMRRs, Intel's graphics (OpRegion, stolen memory, 00:02.0), the NHLT | RMRRs where the PC has them; the firmware's tables go with their devices |
-| Qubes; Xoar | Reset is the weak point (a function-level reset takes 100 ms, many devices lack one, AMD's GPUs need their own); restarting Xen's network backend cost 140 to 260 ms | `devmgr` resets each device (function-level reset, D3hot, or neither, logged) and starts a new guest: a network card works again about two seconds after Linux crashes. Device-specific resets and hung guests are later |
+| Qubes; Xoar | Reset is the weak point (a function-level reset takes 100 ms, many devices lack one, AMD's GPUs need their own); restarting Xen's network backend cost 140 to 260 ms | `device-manager` resets each device (function-level reset, D3hot, or neither, logged) and starts a new guest: a network card works again about two seconds after Linux crashes. Device-specific resets and hung guests are later |
 | Qubes; Ghaf | Suspend device by device | Later |
 | Qubes; Firecracker | Fixed memory (passthrough rules out ballooning), fast boot (init in 125 ms) | One committed VMO; Linux reaches its init in about 0.1 s |
 | Genode; Ghaf | Narrow, typed control: a declarative Wi-Fi configuration, a filtered D-Bus | Linux's Wi-Fi stack gets session keys, never a password, and decides nothing |

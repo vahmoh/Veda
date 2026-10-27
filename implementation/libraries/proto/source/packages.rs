@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The packages service (`packages`): what is installed, what the
+//! The package manager (`package-manager`): what is installed, what the
 //! repositories offer, and changes to both.
 //!
 //! The service alone changes the installed packages (`/home/packages`,
@@ -104,7 +104,7 @@ impl fmt::Display for Failure {
             PackageError::Conflict => "A package would take another's place.",
             PackageError::NoSpace => "There is no room left.",
             PackageError::Invalid => "That is not a valid name, version, address or key.",
-            PackageError::Unavailable => "The packages service could not do it.",
+            PackageError::Unavailable => "The package manager could not do it.",
         })
     }
 }
@@ -378,7 +378,7 @@ message! {
 pub const PROGRESS: u32 = 1;
 
 protocol! {
-    /// The packages service.
+    /// The package manager.
     pub mod packages = "packages" {
         1 => fn status() -> Status;
         /// The repositories, in the order they are preferred.

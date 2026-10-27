@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The per-device PCI protocol served by `devmgr`, and what drivers build
-//! on it.
+//! The per-device PCI protocol served by `device-manager`, and what drivers
+//! build on it.
 //!
 //! A driver is started with a channel speaking this protocol for exactly one
 //! device: it can read and write that device's configuration space, map its
@@ -210,7 +210,7 @@ enumeration! {
         NoResources = 4,
         /// No such ACPI device or GPIO connection.
         NotFound = 5,
-        /// A GPIO controller devmgr does not drive.
+        /// A GPIO controller the device manager does not drive.
         Unsupported = 6,
         /// The pin belongs to the firmware, or its settings are locked.
         Busy = 7,
@@ -465,10 +465,10 @@ fn inside(offset: usize, len: usize, total: usize) -> Option<Range<usize>> {
 /// Why a BAR could not be mapped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapError {
-    /// `devmgr` did not answer.
+    /// `device-manager` did not answer.
     Ipc(IpcError),
-    /// `devmgr` refused (`NoSuchBar`: the function has no such memory BAR,
-    /// or none a driver may have).
+    /// `device-manager` refused (`NoSuchBar`: the function has no such
+    /// memory BAR, or none a driver may have).
     Pci(PciError),
     /// The kernel would not map it.
     Kernel(abi::Error),
@@ -477,8 +477,8 @@ pub enum MapError {
 impl core::fmt::Display for MapError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            MapError::Ipc(e) => write!(f, "devmgr does not answer: {e}"),
-            MapError::Pci(e) => write!(f, "devmgr refused: {e}"),
+            MapError::Ipc(e) => write!(f, "the device manager does not answer: {e}"),
+            MapError::Pci(e) => write!(f, "the device manager refused: {e}"),
             MapError::Kernel(e) => write!(f, "it cannot be mapped: {e}"),
         }
     }

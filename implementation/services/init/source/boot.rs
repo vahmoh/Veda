@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 
 use abi::resource_kind;
 use abi::startup::role;
-use proto::startup::devmgr as roles;
+use proto::startup::device_manager as roles;
 use rt::object::Handle;
 use rt::println;
 
@@ -18,19 +18,30 @@ use crate::{Init, Origin};
 /// else loads data through them), then the network and Wi-Fi services
 /// (drivers attach to them as they start), device management and drivers,
 /// the window system and the lock screen (which unlocks it), audio, the
-/// voice agent, the desktop shell, and last the packages service, which
+/// voice agent, the desktop shell, and last the package manager, which
 /// nothing of the desktop's start waits for.
-const SERVICES: [&str; 10] =
-    ["vfs", "netd", "wlan", "devmgr", "compositor", "lock", "audio", "agent", "shell", "packages"];
+const SERVICES: [&str; 10] = [
+    "filesystem",
+    "network",
+    "wlan",
+    "device-manager",
+    "compositor",
+    "lock",
+    "audio",
+    "agent",
+    "shell",
+    "package-manager",
+];
 
 /// Services that are started again if they exit. They hold no state other
 /// processes cannot recover: drivers reconnect to a restarted compositor,
 /// network or Wi-Fi service, the shell rebuilds its windows, the lock
 /// screen shows itself again on the screen the window system kept locked,
-/// and the packages service recovers the change it was making from its
+/// and the package manager recovers the change it was making from its
 /// journal. (The file system and the device manager are not restarted: one
 /// holds the user's files, the other owns the running drivers.)
-pub const RESTARTABLE: [&str; 8] = ["compositor", "lock", "shell", "audio", "netd", "wlan", "agent", "packages"];
+pub const RESTARTABLE: [&str; 8] =
+    ["compositor", "lock", "shell", "audio", "network", "wlan", "agent", "package-manager"];
 
 fn dup(h: &Option<rt::Vmo>) -> Option<Handle> {
     h.as_ref().and_then(|v| v.0.duplicate(None).ok())
@@ -44,10 +55,10 @@ fn init_resource(init: &Init, kind: usize, base: u64, size: u64) -> Option<Handl
 fn handles_for(init: &Init, name: &str) -> Vec<(u32, Handle)> {
     let mut out = Vec::new();
     match name {
-        "vfs" => out.extend(init.initrd_vmo.0.duplicate(None).ok().map(|h| (role::INITRD, h))),
+        "filesystem" => out.extend(init.initrd_vmo.0.duplicate(None).ok().map(|h| (role::INITRD, h))),
         // Hardware resources to delegate to drivers (but not the root
         // resource), and the system image to load the drivers from.
-        "devmgr" => {
+        "device-manager" => {
             out.extend(init.initrd_vmo.0.duplicate(None).ok().map(|h| (role::INITRD, h)));
             // Where the ACPI tables are, for the devices they describe; the
             // firmware's variables, for the driver VM.
@@ -97,28 +108,29 @@ pub fn start_service(init: &mut Init, name: &str, at_boot: bool) {
     // tells the file system and the device manager to leave the computer's
     // disks alone; tests ask the device manager for the driver VM
     // (`drivervm`, with its options as `drivervm.NAME=VALUE`) or for none
-    // (`drivervm=off`), and give it options of its own (`devmgr.NAME=VALUE`). At system start the window
-    // system plays the startup sequence (`splash`) and the shell the
-    // startup sound (`startup`, unless `startup-sound=off`); started again,
-    // they do neither. With the lock screen installed, the window system
-    // starts locked (`locked`), at system start and after a crash alike:
-    // the lock service unlocks it, at once if no password is set.
+    // (`drivervm=off`), and give it options of its own
+    // (`device-manager.NAME=VALUE`). At system start the window system
+    // plays the startup sequence (`splash`) and the shell the startup sound
+    // (`startup`, unless `startup-sound=off`); started again, they do
+    // neither. With the lock screen installed, the window system starts
+    // locked (`locked`), at system start and after a crash alike: the lock
+    // service unlocks it, at once if no password is set.
     let cmdline = cmdline(init);
     let has = |option: &str| cmdline.split_whitespace().any(|a| a == option);
     let args: Vec<alloc::string::String> = match name {
         "agent" => cmdline.split_whitespace().filter(|a| a.starts_with("agent.")).map(Into::into).collect(),
-        "devmgr" => cmdline
+        "device-manager" => cmdline
             .split_whitespace()
             .filter(|a| {
                 *a == "live"
                     || *a == "drivervm"
                     || a.starts_with("drivervm.")
                     || a.starts_with("drivervm=")
-                    || a.starts_with("devmgr.")
+                    || a.starts_with("device-manager.")
             })
             .map(Into::into)
             .collect(),
-        "vfs" if has("live") => alloc::vec!["live".into()],
+        "filesystem" if has("live") => alloc::vec!["live".into()],
         "compositor" => {
             let mut args = Vec::new();
             if at_boot {

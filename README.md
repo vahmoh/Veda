@@ -197,7 +197,7 @@ a stand-in for Deepgram, so they are offline, deterministic and free.
 | [C on Veda](documentation/C.md) and [Rust on Veda](documentation/RUST.md) | Programs, the POSIX layer and the toolchains |
 | [Linking and loading](documentation/LINKING.md) | Static and dynamically linked programs, shared libraries, and loading them at run time from C, C++, Rust and Python |
 | [Python on Veda](documentation/PYTHON.md) | Python, its standard library, and CPython's port |
-| [Packages](documentation/PACKAGES.md) | Installing software with `pkg`: the packages service, signed repositories, and changes that survive the power going |
+| [Packages](documentation/PACKAGES.md) | Installing software with `pkg`: the package manager, signed repositories, and changes that survive the power going |
 | [Developing](documentation/DEVELOPING.md) | Commands, the system image and writing applications |
 | [Libraries](documentation/DEPENDENCIES.md) | What Veda builds on, and what it keeps of its own |
 | [Coding conventions](documentation/CODING.md) | How the code is written |

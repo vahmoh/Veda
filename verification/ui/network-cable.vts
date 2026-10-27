@@ -10,8 +10,8 @@ boot-cmdline "run=nettest:route-watch"
 link wired off
 
 # 1. Plug the cable in as the driver VM's net has found the card and attaches
-# it, link down: the carrier rises about when netd is told, and netd must
-# hear that the link is up.
+# it, link down: the carrier rises about when the network service is told,
+# and the network service must hear that the link is up.
 wait-serial "net: eth0 (" 120
 link wired on
 wait-serial "watch: route=eth0 ping=ok dns=ok" 120

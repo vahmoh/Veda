@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The smoltcp device behind each interface, over the interface's [`Link`]:
-//! a network device's shared frame rings in `netd`, a simulated cable in the
-//! tests, and a queue of the stack's own for the loopback interface.
+//! a network device's shared frame rings in `network`, a simulated cable in
+//! the tests, and a queue of the stack's own for the loopback interface.
 //!
 //! A frame is copied once on its way in, out of the link into the
 //! interface's receive buffer, where smoltcp parses it, and once on its way

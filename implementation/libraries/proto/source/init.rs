@@ -174,7 +174,7 @@ protocol! {
         6 => fn power(action: u32) -> Result<(), LaunchError>;
         /// A channel on which [`TaskEvent`]s arrive.
         7 => fn watch() -> Result<Channel, LaunchError>;
-        /// For the packages service alone, once it has changed what is
+        /// For the package manager alone, once it has changed what is
         /// installed: the launcher reads the installed packages'
         /// applications again, and tells the watchers if they changed
         /// ([`TaskEvent::AppsChanged`]).

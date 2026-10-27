@@ -31,7 +31,7 @@ Each is `cargo automation COMMAND`, run in the repository;
 | `scripts FILE...` | Builds once, then runs the scripts side by side (logs in `target/veda/test-logs`) |
 | `test` | Runs the [tests](#scripts-and-tests); `--ui` adds the scripts |
 | `clippy` | Clippy over every crate as it is built, warnings as errors (the browser once the web engine is built) |
-| `acpi DIR` | What devmgr makes of a PC's ACPI tables (see [Reading the logs](#reading-the-logs)) |
+| `acpi DIR` | What the device manager makes of a PC's ACPI tables (see [Reading the logs](#reading-the-logs)) |
 | `clean` | Removes build outputs |
 
 Their options (of values separated by `|`, the first is the default):
@@ -215,7 +215,7 @@ driver VM; its log comes in Veda's (`drivervm: linux:`).
 |--------------|------|
 | `boot: the loader cleared the screen in N ms; ...` | How long it took, with the framebuffer's memory type (uncached by the firmware, write-combining for the loader) |
 | `boot: the firmware's screen modes: ..., 1920x1200 (chosen), ...` | The mode chosen, of the display's shape where the firmware gives its EDID |
-| `devmgr: coming: the display's driver: ...; sound: ...` | What the window system and the audio service wait for, or `none` |
+| `device-manager: coming: the display's driver: ...; sound: ...` | What the window system and the audio service wait for, or `none` |
 | `compositor: the splash fades in (...)` | The display driver's first picture, or `... did not show its first picture in 20 s` |
 | `compositor: the desktop appears (...)` | After `the shell did not say the desktop may appear` if the startup sound was late |
 | `compositor: desktop shown after N ms (...)` | From the window system's start: time black, the splash (at least 2.1 s), frame rate, and frames: in the firmware's framebuffer or a driver's flips (as many as vertical blanks: none missed), by the GPU or the processor |
@@ -235,15 +235,15 @@ Linux's first commit kept the firmware's setup if it logs
 | `drivervm` | Linux and Veda's drivers for Linux (the display `kms` drives, its mode, whether it copies or scales the compositor's pictures; the GPU `gpu` serves; what `input` and `net` attach), and what the monitor gives the guest: GPIO pins, the firmware's variables and tables (`... comes with the firmware's NHLT`), an Intel GPU's OpRegion and host bridge |
 | `compositor` | The display attaching |
 | `snd_hda`, `cs35l41`, `alsa` | Linux's sound controllers and codecs; a laptop's speaker amplifiers; Veda's sound driver for Linux (the card, underruns, the device it records) |
-| `devmgr` | The ACPI tables (`devmgr: acpi: N tables, ...`, and the conditional definitions left out), each driver's device's devices in them (`acpi: 00:1e.3 is \_SB.PC00.SPI1, ...`), and `gpio:` a controller's register windows, the pads set up for drivers and the pins that interrupt |
+| `device-manager` | The ACPI tables (`device-manager: acpi: N tables, ...`, and the conditional definitions left out), each driver's device's devices in them (`acpi: 00:1e.3 is \_SB.PC00.SPI1, ...`), and `gpio:` a controller's register windows, the pads set up for drivers and the pins that interrupt |
 
-`cargo automation acpi DIR` runs devmgr's interpreter on the host over
-a PC's ACPI tables (`sudo cp -r /sys/firmware/acpi/tables DIR`): the PCI
-root bridges' windows (where devmgr places BARs the firmware left
-unplaced), what the motherboard reserves, and each root bus function's
-ACPI device, INTx route and devices below it. The firmware's variables
-read as zeros unless set with `--set NAME=VALUE`, so devices they enable
-may be missing; PCI configuration space comes from `DIR/pci/BB:DD.F`
+`cargo automation acpi DIR` runs the device manager's interpreter on the
+host over a PC's ACPI tables (`sudo cp -r /sys/firmware/acpi/tables DIR`):
+the PCI root bridges' windows (where the device manager places BARs the
+firmware left unplaced), what the motherboard reserves, and each root bus
+function's ACPI device, INTx route and devices below it. The firmware's
+variables read as zeros unless set with `--set NAME=VALUE`, so devices they
+enable may be missing; PCI configuration space comes from `DIR/pci/BB:DD.F`
 files (copies of `/sys/bus/pci/devices/*/config`, whole as root), else
 from this machine.
 

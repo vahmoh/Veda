@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "filesystem"
+description = "The Veda virtual file system service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "filesystem"
+path = "source/main.rs"
+test = false
+bench = false
+
+[dependencies]
+rt = { workspace = true }
+abi = { workspace = true }
+ipc = { workspace = true }
+proto = { workspace = true }
+initrd = { workspace = true }
+crc32fast = { workspace = true }
+filesystem-core = { path = "core" }
+
+[build-dependencies]
+build = { workspace = true }
+
+[lints]
+workspace = true

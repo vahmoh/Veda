@@ -79,14 +79,14 @@ impl With for Offer {
 
 /// Where the tests' system keeps the installed files and its own.
 fn layout() -> Layout {
-    Layout { live: String::from("/home/packages"), state: String::from("/home/.private/packages") }
+    Layout { live: String::from("/home/packages"), state: String::from("/home/.private/package-manager") }
 }
 
 /// A system with nothing installed.
 fn system() -> MemFiles {
     let fs = MemFiles::new();
     fs.put_dir("/home/packages");
-    fs.put_dir("/home/.private/packages");
+    fs.put_dir("/home/.private/package-manager");
     fs
 }
 
@@ -163,7 +163,7 @@ fn live(fs: &MemFiles) -> Vec<String> {
 
 /// Nothing of a change is left in the state directory but the database.
 fn tidy(fs: &MemFiles) -> bool {
-    let state = fs.tree("/home/.private/packages");
+    let state = fs.tree("/home/.private/package-manager");
     state.keys().all(|k| k == "installed.json")
 }
 
@@ -371,7 +371,7 @@ fn every_change_cut_short_is_rolled_back_or_finished() {
             assert_eq!(live(&again), after_live, "cut short after {n}: {recovered:?}");
             finished += 1;
         }
-        assert!(tidy(&again), "cut short after {n}: {:?}", again.tree("/home/.private/packages"));
+        assert!(tidy(&again), "cut short after {n}: {:?}", again.tree("/home/.private/package-manager"));
         assert_eq!(transaction::verify(&mut again, &layout(), &db, None).unwrap(), []);
         // Recovering once more finds nothing to do, and the next change
         // goes ahead.
@@ -392,7 +392,7 @@ fn a_change_waits_for_recovery() {
     cut.lose_power_after(steps / 2);
     assert!(the_change(&mut cut, &packages).is_err());
     let mut next = MemFiles::from(cut.nodes());
-    assert!(next.kind("/home/.private/packages/journal.json").unwrap().is_some());
+    assert!(next.kind("/home/.private/package-manager/journal.json").unwrap().is_some());
     assert_eq!(the_change(&mut next, &packages).unwrap_err(), Error::Interrupted);
     assert!(matches!(transaction::recover(&mut next, &layout()).unwrap(), Recovery::RolledBack | Recovery::Finished));
     the_change(&mut next, &packages).ok();
@@ -403,25 +403,25 @@ fn a_change_waits_for_recovery() {
 fn a_damaged_journal_is_not_acted_on() {
     let mut fs = system();
     fs.put(
-        "/home/.private/packages/journal.json",
+        "/home/.private/package-manager/journal.json",
         b"{\"format\":1,\"from\":0,\"to\":1,\"out\":[\"../../etc\"],\"cleared\":[],\"made\":[],\"into\":[]}",
     );
     let e = transaction::recover(&mut fs, &layout()).unwrap_err();
     assert!(e.to_string().contains("the record of a change cut short is damaged"), "{e}");
     fs.put(
-        "/home/.private/packages/journal.json",
+        "/home/.private/package-manager/journal.json",
         b"{\"format\":1,\"from\":5,\"to\":6,\"out\":[],\"cleared\":[],\"made\":[],\"into\":[]}",
     );
     let e = transaction::recover(&mut fs, &layout()).unwrap_err();
     assert!(e.to_string().contains("generation 0"), "{e}");
-    fs.put("/home/.private/packages/journal.json", b"not json");
+    fs.put("/home/.private/package-manager/journal.json", b"not json");
     assert!(matches!(transaction::recover(&mut fs, &layout()), Err(Error::Journal(_))));
 }
 
 #[test]
 fn staging_cut_short_is_discarded() {
     let mut fs = system();
-    fs.put("/home/.private/packages/transaction/new/bin/half", b"ha");
+    fs.put("/home/.private/package-manager/transaction/new/bin/half", b"ha");
     assert_eq!(transaction::recover(&mut fs, &layout()).unwrap(), Recovery::Discarded);
     assert!(tidy(&fs));
     assert_eq!(transaction::recover(&mut fs, &layout()).unwrap(), Recovery::Nothing);

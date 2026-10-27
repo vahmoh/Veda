@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "package-manager"
+description = "The package manager: installs, upgrades and removes packages from repositories their keys sign, alone changing what /home/packages holds, and recovers changes cut short"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "package-manager"
+path = "source/main.rs"
+test = false
+bench = false
+
+[dependencies]
+rt = { workspace = true }
+abi = { workspace = true }
+ipc = { workspace = true }
+proto = { workspace = true }
+web = { workspace = true }
+packages = { workspace = true, features = ["std"] }
+
+[lints]
+workspace = true

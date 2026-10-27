@@ -13,11 +13,12 @@
 //! soon as a sound card is attached to the audio service it opens a stream
 //! that holds the whole sound, paused, and says it is ready; as the
 //! desktop appears it starts the stream, which plays at once. If no sound
-//! card is coming (the audio service says whether devmgr gave one to its
-//! driver), there is nothing to wait for. Should the desktop appear before
-//! the card did (the window system waits only a few seconds for it), the
-//! sound is not played: a sound well after the desktop appeared would come
-//! out of nowhere. The stream is closed once the sound has played.
+//! card is coming (the audio service says whether the device manager gave
+//! one to its driver), there is nothing to wait for. Should the desktop
+//! appear before the card did (the window system waits only a few seconds
+//! for it), the sound is not played: a sound well after the desktop
+//! appeared would come out of nowhere. The stream is closed once the sound
+//! has played.
 
 use ::audio::wav::{self, WavInfo};
 use proto::audio::{OutputStream, StreamSpec, audio, ring};

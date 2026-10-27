@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The commands that ask the packages service (`proto::packages`): what is
+//! The commands that ask the package manager (`proto::packages`): what is
 //! installed and offered, changes to both, and checks. A change is shown
 //! as the service plans it, and carried out once the user agrees (or at
 //! once, with `-y`), by the plan's digest: what is done is what was shown.
@@ -29,7 +29,7 @@ pub struct Service(packages::Client);
 
 impl Service {
     pub fn connect() -> Result<Service, Exit> {
-        let channel = proto::connect(packages::NAME).map_err(|_| fail("the packages service is not running"))?;
+        let channel = proto::connect(packages::NAME).map_err(|_| fail("the package manager is not running"))?;
         let client = packages::Client::new(channel);
         client.set_timeout(ASK_NS);
         Ok(Service(client))
@@ -41,8 +41,8 @@ fn answered<T>(r: Result<Result<T, Failure>, ipc::IpcError>) -> Result<T, Exit> 
     match r {
         Ok(Ok(v)) => Ok(v),
         Ok(Err(f)) => Err(fail(&f.to_string())),
-        Err(ipc::IpcError::Kernel(abi::Error::TimedOut)) => Err(fail("the packages service did not answer in time")),
-        Err(e) => Err(fail(&format!("the packages service failed: {e}"))),
+        Err(ipc::IpcError::Kernel(abi::Error::TimedOut)) => Err(fail("the package manager did not answer in time")),
+        Err(e) => Err(fail(&format!("the package manager failed: {e}"))),
     }
 }
 

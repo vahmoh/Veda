@@ -51,21 +51,21 @@ who may call what, and links to each subsystem's own document.
 
 | Service | Role | Restarted if it exits |
 |---------|------|-----------------------|
-| `vfs` | the file systems | no: it holds the user's files |
-| `netd`, `wlan` | the network and Wi-Fi services | yes |
-| `devmgr` | devices, drivers and the driver VM | no: it owns the running drivers |
+| `filesystem` | the file systems | no: it holds the user's files |
+| `network`, `wlan` | the network and Wi-Fi services | yes |
+| `device-manager` | devices, drivers and the driver VM | no: it owns the running drivers |
 | `compositor` | the window system | yes |
 | `lock` | the lock screen | yes |
 | `audio` | the sound mixer | yes |
 | `agent` | the voice agent | yes |
 | `shell` | the desktop shell | yes |
-| `packages` | installed software: packages and their repositories | yes: it recovers the change it was making |
+| `package-manager` | installed software: packages and their repositories | yes: it recovers the change it was making |
 
 **The startup sequence**
 (`implementation/services/compositor/source/startup.rs`).
 The screen stays black until the screen the desktop will be on is ready:
-the driver VM's display driver has shown its first picture, or `devmgr`
-says no driver is coming (`displaydev::expect`). The splash
+the driver VM's display driver has shown its first picture, or
+`device-manager` says no driver is coming (`displaydev::expect`). The splash
 (`splash`) then fades in, and the desktop dissolves in with the startup
 sound once the desktop and the taskbar have each presented a frame, the
 splash has been up for 2.1 s and the shell has the sound ready (3 s at
@@ -78,9 +78,9 @@ a crash shows the desktop (or the lock screen) at once, silently.
 **The live system** (`cargo automation iso`) is a hybrid ISO 9660 image
 that starts the same way from a disc, or from a USB stick it is written to
 or copied onto (as Rufus does). `live` on the kernel command line makes
-`devmgr` start no disk driver and `vfs` keep `/home` in memory, so the
-computer's disks are never read or written; the stick keeps the system's
-logs (see [the driver VM](DRIVERVM.md)).
+`device-manager` start no disk driver and `filesystem` keep `/home` in
+memory, so the computer's disks are never read or written; the stick keeps
+the system's logs (see [the driver VM](DRIVERVM.md)).
 
 ## The kernel
 
@@ -296,7 +296,7 @@ each is:
 - **POSIX.** C programs and programs on the standard library run on musl,
   whose system calls go to `posix` (`implementation/libraries/posix`), a
   POSIX layer in Rust: files and their locks are the VFS's, pipes and
-  terminals kernel sockets, network sockets `netd`'s, Unix domain sockets
+  terminals kernel sockets, network sockets `network`'s, Unix domain sockets
   named by the VFS, `epoll` a kernel port, memory files VMOs, `timerfd`
   and `alarm`'s timers the layer's own, which a thread of its expires, and
   threads kernel threads, which the kernel interrupts for the signals the
@@ -346,16 +346,16 @@ each is:
 
 ## Devices
 
-`devmgr` (`implementation/services/devmgr`) owns the PCI bus and the
-firmware's ACPI tables. It starts Veda's drivers for the disks and gives
-every other device to Linux in [the driver VM](DRIVERVM.md).
+`device-manager` (`implementation/services/device-manager`) owns the PCI bus
+and the firmware's ACPI tables. It starts Veda's drivers for the disks and
+gives every other device to Linux in [the driver VM](DRIVERVM.md).
 
 - **PCI.** A driver gets a `pcidev` channel for exactly its device (matched
   by its class): its configuration space, its memory
   BARs, its MSIs or INTx line, and DMA memory. A BAR reaches its driver as
   the pages it is on, so one that shares a page with another function's BAR
-  reaches none. `devmgr` places the BARs the firmware left unplaced, and
-  puts back those a function loses (waking from D3hot, or reset alone).
+  reaches none. `device-manager` places the BARs the firmware left unplaced,
+  and puts back those a function loses (waking from D3hot, or reset alone).
 - **Devices are not trusted.** The drivers' helpers (`proto::pci`) check
   every offset a device reports against the memory it is in, and refuse a
   device that describes itself wrongly.
@@ -365,27 +365,27 @@ every other device to Linux in [the driver VM](DRIVERVM.md).
   AML interpreter that initialises devices as ACPICA does but changes
   nothing and reads no I/O port or embedded controller. A driver can ask
   for the devices described below its PCI function, with their resources;
-  `cargo automation acpi` shows, on the host, what `devmgr` makes of a
-  machine's tables.
-- **GPIO.** `devmgr` drives the GPIO pins of a driver's devices on its
-  behalf, and no others (`gpio`: Intel's Tiger Lake-LP pads, which Alder
+  `cargo automation acpi` shows, on the host, what `device-manager` makes of
+  a machine's tables.
+- **GPIO.** `device-manager` drives the GPIO pins of a driver's devices on
+  its behalf, and no others (`gpio`: Intel's Tiger Lake-LP pads, which Alder
   Lake-P kept), refusing pads the firmware owns or locked. It raises each
   pin's interrupt from its controller's line with `irq_raise`: an
   interrupt a program raises, which reaches a driver or a guest's processor
   as a line's does.
 - **The IOMMU.** Where there is one (VT-d), the kernel remaps every
   interrupt, so a device raises only its own MSIs (`msi_create` takes a
-  resource naming the PCI function, which `devmgr` holds). Devices reach
-  memory untranslated until one is given to a guest; one whose reserved
-  memory (an RMRR) is not whole pages stays the host's.
+  resource naming the PCI function, which `device-manager` holds). Devices
+  reach memory untranslated until one is given to a guest; one whose
+  reserved memory (an RMRR) is not whole pages stays the host's.
 - **The driver VM.** `drivervm` gives its Linux guest every device but the
   disks and the platform's own functions, whole, their DMA confined by the
   IOMMU. It starts when the processors run virtual machines, an IOMMU
   confines devices and the system image has its Linux. When it ends without
-  Linux powering it off, `devmgr` resets its devices and starts it again,
-  later after each failure in a row, and not after a few.
+  Linux powering it off, `device-manager` resets its devices and starts it
+  again, later after each failure in a row, and not after a few.
 - **USB** is Linux's: input devices reach the window system through `input`
-  (`implementation/guests/linux/input`), network adapters reach `netd`
+  (`implementation/guests/linux/input`), network adapters reach `network`
   through `net`. Veda has no driver for USB disks yet.
 
 ## Storage and files
@@ -398,9 +398,9 @@ every other device to Linux in [the driver VM](DRIVERVM.md).
   bypass its access rules. A request a device does not finish in time fails
   and the device is reset, so that no command left to it writes into memory
   a later one uses.
-- **The VFS** (`vfs`) serves `/system` read-only from the initrd, keeps
-  `/home` and `/tmp` in memory, and has `null`, `zero`, `full`, `random`
-  and `urandom` in `/dev`, and in `/dev/shm` shared memory objects:
+- **The VFS** (`filesystem`) serves `/system` read-only from the initrd,
+  keeps `/home` and `/tmp` in memory, and has `null`, `zero`, `full`,
+  `random` and `urandom` in `/dev`, and in `/dev/shm` shared memory objects:
   memory with names (a VMO each), which its files read and write and hand
   out to map (`file::memory`), shared by every process that maps one, and
   which alone have links (`vfs::link`), as `sem_open` gives a semaphore
@@ -417,8 +417,8 @@ every other device to Linux in [the driver VM](DRIVERVM.md).
   header last, so an interrupted save never damages the previous one; boot
   restores the newest snapshot that reads back whole. Unchanged sample
   files are stored as references to the system image. The file systems,
-  snapshots and access rules are `vfs-core`
-  (`implementation/services/vfs/core`), tested on the host.
+  snapshots and access rules are `filesystem-core`
+  (`implementation/services/filesystem/core`), tested on the host.
 - **Private directories.** `/home/.private/<service>` belongs to the system
   service of that name: only it sees and changes what is inside. The VFS
   makes `/home/.private` at every start, before any service. A
@@ -428,21 +428,21 @@ every other device to Linux in [the driver VM](DRIVERVM.md).
   replaced.
 - **Installed packages.** `/home/packages` holds the files of the packages
   installed: every program reads them and runs the programs among them,
-  and only the packages service (`packages`, a system service that has not
-  renounced its private access) changes what is there, so that no
+  and only the package manager (`package-manager`, a system service that has
+  not renounced its private access) changes what is there, so that no
   application can change what another runs ([Packages](#packages)).
 - **Confined connections.** A connection can give up, for good, all of the
   file system but a few places, each to read or to change too
   (`vfs::confine`, as OpenBSD's `unveil`): it then reaches what is inside
   them, and the directories on the way to them, whose listings show only
   what leads on to a place; nothing else is there for it, nor are
-  abstract socket names (`vfs_core::view`), and its `sync` returns at
+  abstract socket names (`filesystem_core::view`), and its `sync` returns at
   once, what it changed being saved as anything is. A sandboxed program
   confines its connection and leaves the VFS out of its registry
   channel's services, so that it opens no other. The VFS logs the first
   paths each such connection was refused where there is something.
 - **Loans.** A connection that is not confined can lend a confined one a
-  place to read (`vfs::lend`, `vfs::borrow`, `vfs_core::loans`;
+  place to read (`vfs::lend`, `vfs::borrow`, `filesystem_core::loans`;
   `veda_lend_files` and `veda_borrow_files` in `<veda/sandbox.h>`), as a
   sandbox extension does on Apple's systems, and take it back
   (`vfs::take_back`, `veda_take_back_files`): the browser lends its
@@ -493,10 +493,10 @@ every other device to Linux in [the driver VM](DRIVERVM.md).
   and datagrams through an inbox channel; a connection's bytes then go
   between the two programs, past the VFS.
 - **Locks.** The VFS arbitrates advisory locks between processes, as
-  Linux keeps them (`file::lock`, `vfs_core::locks`): `flock`'s, held by
-  an open file description, and locks on bytes, held by a process (POSIX's
-  record locks) or by an open file description (OFD locks). A process owns
-  its locks by a secret that the VFS drew for its connection
+  Linux keeps them (`file::lock`, `filesystem_core::locks`): `flock`'s, held
+  by an open file description, and locks on bytes, held by a process
+  (POSIX's record locks) or by an open file description (OFD locks). A
+  process owns its locks by a secret that the VFS drew for its connection
   (`vfs::lock_owner`), and they go as that connection closes, as the
   process ends; it takes them away itself as it closes a descriptor of the
   file, as POSIX has it, the VFS not knowing which process holds a
@@ -529,26 +529,26 @@ the detail.
 | Layer | Processes | Does |
 |-------|-----------|------|
 | Drivers | `net`, `wifi` (`implementation/guests/linux/`), in the driver VM | move Ethernet frames through shared-memory rings (`proto::netring`) that neither side trusts; `wifi` offers Linux's radios as *managed* radios, which scan, join and encrypt on `wlan`'s commands |
-| Wi-Fi | `wlan`, on the `wlan` library | chooses networks, authenticates (open system or SAE), runs the key handshakes and gives the radio only the session keys, keeps saved networks, reconnects and roams; each radio is `wlan0` to `netd` |
-| Network | `netd`, on `netstack` and smoltcp | interfaces, DHCP, IPv6 autoconfiguration, routes, a caching DNS resolver, sockets, the firewall |
+| Wi-Fi | `wlan`, on the `wlan` library | chooses networks, authenticates (open system or SAE), runs the key handshakes and gives the radio only the session keys, keeps saved networks, reconnects and roams; each radio is `wlan0` to `network` |
+| Network | `network`, on `netstack` and smoltcp | interfaces, DHCP, IPv6 autoconfiguration, routes, a caching DNS resolver, sockets, the firewall |
 
 - **Sockets.** Each `net` socket is a channel with credit-based flow
   control both ways, so a slow client holds back only its own sockets; the
   POSIX layer's sockets, which processes share, carry TCP bytes on kernel
   sockets instead.
-- **The firewall** in `netd` judges every packet from another machine
+- **The firewall** in `network` judges every packet from another machine
   before smoltcp does: replies come in, and new connections and datagrams
   only where a port rule, or the rule of the application on the port, lets
   them; in stealth mode closed ports give no answer. When an application no
-  rule covers starts listening, `netd` asks the user through the desktop
+  rule covers starts listening, `network` asks the user through the desktop
   shell, which alone answers (see [the firewall](NETWORKING.md#the-firewall)).
 - **Who may do what**, by identity: network devices attach only from
-  `devmgr` (and `wlan`), radios only from `devmgr`; only Settings changes
-  the network's configuration; Settings, the Terminal, the shell and the
-  agent change Wi-Fi; what tells where the machine is or has been, and the
-  firewall's settings and log, go only to Settings and the Terminal. Every
-  process has limits on its connections, sockets, lookups and watchers,
-  with a share of each kept for system services.
+  `device-manager` (and `wlan`), radios only from `device-manager`; only
+  Settings changes the network's configuration; Settings, the Terminal, the
+  shell and the agent change Wi-Fi; what tells where the machine is or has
+  been, and the firewall's settings and log, go only to Settings and the
+  Terminal. Every process has limits on its connections, sockets, lookups
+  and watchers, with a share of each kept for system services.
 - **TLS** is not a service: `tls` (rustls with a pure-Rust cryptography
   provider) runs inside each application, so keys and plaintext never
   leave its process.
@@ -560,10 +560,10 @@ the detail.
 
 Software beyond the system image installs as packages, from repositories
 whose keys sign their indexes ([Packages](PACKAGES.md) has it all). The
-`packages` service (`implementation/services/packages`) alone changes what
-is installed, in `/home/packages`, which the VFS lets no one else change;
-the `pkg` command (`implementation/applications/pkg`) asks it to, in the
-Terminal, whose `PATH` has `/home/packages/bin` after `/system/bin`.
+package manager (`implementation/services/package-manager`) alone changes
+what is installed, in `/home/packages`, which the VFS lets no one else
+change; the `pkg` command (`implementation/applications/pkg`) asks it to, in
+the Terminal, whose `PATH` has `/home/packages/bin` after `/system/bin`.
 What it decides is `packages` (`implementation/libraries/packages`),
 tested on the host.
 
@@ -633,10 +633,10 @@ tested on the host.
   [Displays and GPUs](#displays-and-gpus)). Then each frame goes into a
   picture that is not on the screen, shown from the next vertical blank,
   and the next is composed once it is shown: no frame is seen half drawn,
-  and frames come at the display's pace. Only drivers that `devmgr` started
-  may attach; if one goes away or leaves a flip undone for a second, frames
-  go into all its pictures and the firmware's framebuffer. Whenever it
-  starts, the compositor leaves that framebuffer alone until it knows the
+  and frames come at the display's pace. Only drivers that `device-manager`
+  started may attach; if one goes away or leaves a flip undone for a second,
+  frames go into all its pictures and the firmware's framebuffer. Whenever
+  it starts, the compositor leaves that framebuffer alone until it knows the
   memory is still the screen's (no driver is coming, a driver for which it
   stays plain pixels attaches, or 20 s pass), since a driver may use it for
   its own (an Intel GPU's aperture).
@@ -655,10 +655,10 @@ tested on the host.
   locking is the shell's, the agent's and the lock service's, and saying
   that the user is there the agent's; a client keeps the screen awake only
   from its own windows. Only drivers
-  (`devmgr`'s, and the driver VM's programs, which speak as `devmgr`)
-  report input or attach a display. A process has at most 64 windows and
-  16 screens' worth of buffers, and 256 subsurfaces and 64 screens' worth
-  of theirs.
+  (`device-manager`'s, and the driver VM's programs, which speak as
+  `device-manager`) report input or attach a display. A process has at most
+  64 windows and 16 screens' worth of buffers, and 256 subsurfaces and 64
+  screens' worth of theirs.
 - **The lock** (`compositor-core`'s `lock`). While the screen is locked,
   the compositor draws only the lock service's windows (`WindowKind::Lock`,
   above every other layer), over a backdrop of its own until one has drawn
@@ -957,10 +957,10 @@ protocol from the driver VM on Mesa's Gallium drivers: iris on i915 or xe
   native driver would; without one, a null output consumes audio in real
   time.
 - **Who may attach.** A device attached hears everything the computer plays
-  or becomes every program's microphone, so only drivers that `devmgr`
-  starts may attach one, and the test microphone (`testmic`, which the
-  kernel command line starts) an input device. Only the voice agent may
-  duck the other sound.
+  or becomes every program's microphone, so only drivers that
+  `device-manager` starts may attach one, and the test microphone
+  (`testmic`, which the kernel command line starts) an input device. Only
+  the voice agent may duck the other sound.
 - **Mixing and recording.** The `audio` service mixes every stream with
   exact rational resampling (polyphase windowed sinc in integer
   arithmetic), ramped gains, click-free pause and seek, master volume and
@@ -1132,7 +1132,7 @@ the actions every `ui` application offers over the `agentapp` protocol
   talk to a stand-in for Deepgram, with a test microphone fed from the
   host.
 - **Simulated hardware.** `gpio::sim` is a GPIO controller as its
-  registers behave, which `devmgr` drives when a test's ACPI table
+  registers behave, which `device-manager` drives when a test's ACPI table
   describes one (`drivervm-gpio.vts`).
 
 ## Architectures
@@ -1153,7 +1153,7 @@ crate's in its `source/`), reached through its `architecture` module
 | `implementation/libraries/elf` | the executables' machine type and relative relocation (on every host, for the tools) |
 | `implementation/libraries/build` | the user programs' target |
 | `implementation/libraries/{hv,iommu}` | the guests' local APIC, CPUID, memory map, platform discovery and Linux's boot protocol; Intel VT-d's tables (on every host, for the tests) |
-| `implementation/services/{devmgr,drivervm,init}` | the PC's own devices (keyboard controller, DMAR), the guest's memory map and boot, the I/O ports and IRQs `init` hands out |
+| `implementation/services/{device-manager,drivervm,init}` | the PC's own devices (keyboard controller, DMAR), the guest's memory map and boot, the I/O ports and IRQs `init` hands out |
 | `verification/{systest,c,ui}` | what the tests expect of the architecture, and the GUI scripts that hold only on QEMU's PC |
 | `automation/` | the Rust and C targets, the loader's boot path, QEMU's PC (q35, OVMF), its ACPI test tables |
 | `.cargo/`, `implementation/ports/` | Cargo's settings of the targets; the ports' settings, patches (binutils, GCC, musl, Linux) and the driver VM kernel's options |
@@ -1179,7 +1179,7 @@ Libraries are crates named after their directory
 | `implementation/libraries/files` | files for applications: paths, file types and the apps that open them, formatting, VFS access, thumbnails |
 | `implementation/libraries/{glsl,gl,egl}` | the GLSL ES compiler (with its TGSI back end), OpenGL ES 3.0 with its software and GPU (virgl) renderers, and EGL and OpenGL ES's C functions over it |
 | `implementation/libraries/audio` | audio formats, resampling, mixing, FFT, the synthesiser, echo cancellation, voice activity detection and level metering |
-| `implementation/libraries/{acpi,gpio}` | the ACPI tables, the AML interpreter and resource templates, and Intel's GPIO pads (for `devmgr`) |
+| `implementation/libraries/{acpi,gpio}` | the ACPI tables, the AML interpreter and resource templates, and Intel's GPIO pads (for `device-manager`) |
 | `implementation/libraries/{hv,iommu}` | what the hypervisor and the IOMMU driver know that touches no hardware: the guests' platform, its ACPI tables and the bridge's ABI, and each architecture's virtual devices, boot protocol and IOMMU tables |
 | `implementation/libraries/{netstack,net}` | the TCP/IP stack around smoltcp, with its firewall, and the networking API for applications |
 | `implementation/libraries/tls` | the TLS client for applications: rustls and its pure-Rust cryptography provider |

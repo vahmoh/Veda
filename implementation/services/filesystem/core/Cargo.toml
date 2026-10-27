@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "filesystem-core"
+description = "The VFS's file systems apart from the service, testable on the host: the in-memory tree, the home directory's snapshots, who may reach what, and /dev/shm's shared memory objects"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "source/lib.rs"
+
+[dependencies]
+abi = { workspace = true }
+proto = { workspace = true }
+
+[lints]
+workspace = true

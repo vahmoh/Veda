@@ -88,7 +88,7 @@ mod log;
 mod mem;
 mod memfd;
 mod native;
-mod netd;
+mod network;
 mod path;
 mod process;
 mod resolve;

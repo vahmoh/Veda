@@ -84,11 +84,11 @@ fn load_font(vfs: &proto::vfs::Client, path: &str) -> Option<&'static [u8]> {
     Some(data.leak())
 }
 
-/// Whether a connection was opened by a driver: devmgr starts the drivers
-/// (and the driver VM, whose programs connect through it) with its own
-/// registry channel, so they speak as devmgr.
+/// Whether a connection was opened by a driver: the device manager starts
+/// the drivers (and the driver VM, whose programs connect through it) with
+/// its own registry channel, so they speak as the device manager.
 fn is_driver(who: &ClientIdentity) -> bool {
-    who.service && who.name == "devmgr"
+    who.service && who.name == "device-manager"
 }
 
 /// Logs `what` the first few times, then every hundredth (`count` counts

@@ -7,15 +7,15 @@
 # libgreet, which it depends on, and runs from the Terminal's PATH. Both
 # are there after a restart, as is the repository; a newer index of the
 # repository upgrades them; then they go, with nothing left, and nothing
-# but the packages service may write where they were. What pkg does is
+# but the package manager may write where they were. What pkg does is
 # checked with the shell's `logger`, which writes to the serial log, and
 # by the service's own lines.
 requires c-toolchain
 boot-cmdline "run=terminal"
 fail-on "PANIC"
 wait-serial "desktop ready" 90
-wait-serial "packages: system: 0 packages (serial 1)" 60
-wait-serial "packages: ready (0 installed; repositories: system)" 60
+wait-serial "package-manager: system: 0 packages (serial 1)" 60
+wait-serial "package-manager: ready (0 installed; repositories: system)" 60
 wait-serial "started terminal" 60
 wait 3
 # Maximise the window (Super+Up).
@@ -29,13 +29,13 @@ key ret
 wait-serial "terminal: pkg-empty-ok" 60
 type "pkg repo add test file:///system/tests/packages/one /system/tests/packages/test.pub && pkg update && logger pkg-added-ok"
 key ret
-wait-serial "packages: added the repository test" 60
-wait-serial "packages: test: 4 packages (serial 1)" 60
+wait-serial "package-manager: added the repository test" 60
+wait-serial "package-manager: test: 4 packages (serial 1)" 60
 wait-serial "terminal: pkg-added-ok" 60
 type "pkg install -y hello && logger pkg-installed-ok"
 key ret
-wait-serial "packages: installed hello 1.0 (from test)" 180
-wait-serial "packages: installed libgreet 1.0 (from test)" 30
+wait-serial "package-manager: installed hello 1.0 (from test)" 180
+wait-serial "package-manager: installed libgreet 1.0 (from test)" 30
 wait-serial "terminal: pkg-installed-ok" 60
 type "hello; logger hello-ran-$?"
 key ret
@@ -44,18 +44,18 @@ type "pkg verify && pkg list | grep 'libgreet (for others)' && logger pkg-verifi
 key ret
 wait-serial "terminal: pkg-verified-ok" 120
 shot target/veda/packages-1-installed.png
-reject-serial "packages: the change was not made"
+reject-serial "package-manager: the change was not made"
 # A package that would take a file of libgreet's is refused.
 type "pkg install -y clash || logger pkg-clash-refused"
 key ret
-wait-serial "packages: the change was not made: clash 1.0 has a file at /home/packages/share/libgreet/greeting, which belongs to libgreet" 120
+wait-serial "package-manager: the change was not made: clash 1.0 has a file at /home/packages/share/libgreet/greeting, which belongs to libgreet" 120
 wait-serial "terminal: pkg-clash-refused" 60
 # After a restart, what was installed and the repository are there.
 reset
 wait-serial "desktop ready" 90
 expect-serial "home directory restored from the home disk"
-wait-serial "packages: test: 4 packages (serial 1)" 60
-wait-serial "packages: ready (2 installed; repositories: system, test)" 60
+wait-serial "package-manager: test: 4 packages (serial 1)" 60
+wait-serial "package-manager: ready (2 installed; repositories: system, test)" 60
 wait-serial "started terminal" 60
 wait 3
 key meta_l-up
@@ -66,12 +66,12 @@ wait-serial "terminal: hello-again-42" 60
 # The repository's next index upgrades them.
 type "pkg repo remove test && pkg repo add test file:///system/tests/packages/two /system/tests/packages/test.pub && pkg update && logger pkg-two-ok"
 key ret
-wait-serial "packages: test: 2 packages (serial 2)" 60
+wait-serial "package-manager: test: 2 packages (serial 2)" 60
 wait-serial "terminal: pkg-two-ok" 60
 type "pkg list --upgradable | grep hello && pkg upgrade -y && logger pkg-upgraded-ok"
 key ret
-wait-serial "packages: upgraded hello 1.0 to 2.0 (from test)" 180
-wait-serial "packages: upgraded libgreet 1.0 to 2.0 (from test)" 30
+wait-serial "package-manager: upgraded hello 1.0 to 2.0 (from test)" 180
+wait-serial "package-manager: upgraded libgreet 1.0 to 2.0 (from test)" 30
 wait-serial "terminal: pkg-upgraded-ok" 60
 type "grep 2.0 /home/packages/share/hello/NEWS && hello; logger hello-two-$?"
 key ret
@@ -80,8 +80,8 @@ shot target/veda/packages-2-upgraded.png
 # Removed, with what was installed only for it; no one else writes there.
 type "pkg remove -y hello && logger pkg-removed-ok"
 key ret
-wait-serial "packages: removed hello 2.0" 120
-wait-serial "packages: removed libgreet 2.0" 30
+wait-serial "package-manager: removed hello 2.0" 120
+wait-serial "package-manager: removed libgreet 2.0" 30
 wait-serial "terminal: pkg-removed-ok" 60
 type "hello || touch /home/packages/planted || logger pkg-gone-ok"
 key ret
@@ -89,4 +89,4 @@ wait-serial "terminal: pkg-gone-ok" 60
 type "pkg verify && logger pkg-clean-ok"
 key ret
 wait-serial "terminal: pkg-clean-ok" 60
-reject-serial "packages: cannot"
+reject-serial "package-manager: cannot"

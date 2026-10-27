@@ -3,37 +3,37 @@
 
 # Networking and Wi-Fi
 
-How Veda reaches the network: the network service (`netd`) and its
+How Veda reaches the network: the network service (`network`) and its
 firewall, the Wi-Fi service (`wlan`), TLS (`tls`), the API applications
 use, and the tests.
 
-**Contents:** [Components](#components) · [Who may do what](#who-may-do-what) · [Sockets in `netd`](#sockets-in-netd) · [The firewall](#the-firewall) · [Wi-Fi](#wi-fi) · [Using the network](#using-the-network) · [TLS](#tls) · [Testing](#testing) · [Limitations and next steps](#limitations-and-next-steps)
+**Contents:** [Components](#components) · [Who may do what](#who-may-do-what) · [Sockets in `network`](#sockets-in-network) · [The firewall](#the-firewall) · [Wi-Fi](#wi-fi) · [Using the network](#using-the-network) · [TLS](#tls) · [Testing](#testing) · [Limitations and next steps](#limitations-and-next-steps)
 
 ## Components
 
 The kernel knows nothing about networks: isolated processes do the work
 and talk over kernel channels. Drivers only move frames and see no
 passwords or addresses (a radio gets the session keys only), and `wlan`
-presents each radio to `netd` as the Ethernet-like interface `wlan0`, whose
-link goes up when a network is joined. Mature `no_std` crates (smoltcp,
-rustls, RustCrypto; see [Libraries](DEPENDENCIES.md)) do the protocol work
-where they exist; the 802.11 protocol, the handshakes, SAE's protocol
-logic, the TLS stream and provider, the services and the drivers are in
-this repository.
+presents each radio to `network` as the Ethernet-like interface `wlan0`,
+whose link goes up when a network is joined. Mature `no_std` crates
+(smoltcp, rustls, RustCrypto; see [Libraries](DEPENDENCIES.md)) do the
+protocol work where they exist; the 802.11 protocol, the handshakes, SAE's
+protocol logic, the TLS stream and provider, the services and the drivers
+are in this repository.
 
 | Path | What it is |
 |------|------------|
-| `implementation/guests/linux/net`, `implementation/guests/linux/wifi` | In [the driver VM](DRIVERVM.md): `net` offers Linux's network cards to `netd` (`netdev`), `wifi` Linux's Wi-Fi radios to `wlan` as *managed* radios, which join access points on `wlan`'s commands |
+| `implementation/guests/linux/net`, `implementation/guests/linux/wifi` | In [the driver VM](DRIVERVM.md): `net` offers Linux's network cards to `network` (`netdev`), `wifi` Linux's Wi-Fi radios to `wlan` as *managed* radios, which join access points on `wlan`'s commands |
 | `implementation/services/wlan` | `wlan`, the Wi-Fi service (`wlan` and `wlanphy` protocols): what to join and when, authentication, the key handshakes, saved networks |
 | `implementation/libraries/wlan` | `wlan`: 802.11 frames, RSN, CCMP/BIP, EAPOL, handshakes, SAE, station and access point state machines, the saved-network format, the connection policy |
-| `implementation/services/netd` | `netd`, the network service (`net` and `netdev` protocols), and the firewall's settings store (`store.rs`) |
+| `implementation/services/network` | `network`, the network service (`net` and `netdev` protocols), and the firewall's settings store (`store.rs`) |
 | `implementation/libraries/netstack` | `netstack`: interfaces, IPv4 and IPv6, DHCP, SLAAC, routing between interfaces, a caching DNS resolver, sockets on smoltcp, the firewall (`firewall.rs`) |
 | `implementation/ports/smoltcp` | [smoltcp](https://github.com/smoltcp-rs/smoltcp)'s release and Veda's patch (`implementation/ports/README.md` explains each change) |
 | `implementation/libraries/proto/source/{net,wlan,netring}.rs` | The service protocols and frame rings |
 | `implementation/libraries/net` | `net`: blocking, `std::net`-like `TcpStream`, `TcpListener` and `UdpSocket`, name resolution, ping, `net::wifi` |
 | `implementation/libraries/tls` | `tls`: the TLS 1.3 and 1.2 client |
 | `implementation/libraries/web` | `web`: URLs, the HTTP/1.1 client (redirects followed) and the WebSocket client, over TCP or TLS |
-| `implementation/libraries/posix/source/inet.rs` | The POSIX layer's sockets, `netd`'s too, for C programs and programs on Rust's standard library (see [C on Veda](C.md)) |
+| `implementation/libraries/posix/source/inet.rs` | The POSIX layer's sockets, `network`'s too, for C programs and programs on Rust's standard library (see [C on Veda](C.md)) |
 | `implementation/shell/components/desktop/source/firewall.rs` | The firewall's question, as the desktop shows it |
 | `implementation/libraries/entropy`, `implementation/kernel/source/random` | The kernel's random number generator |
 | `verification/nettest` | In-system network checks |
@@ -41,7 +41,7 @@ this repository.
 Frames travel through shared-memory rings (`proto::netring`), a
 single-producer, single-consumer ring each way per link with wake-up
 events: one copy in and one out per frame, a system call only when the
-other side is asleep, and a full ring makes `netd` wait rather than drop
+other side is asleep, and a full ring makes `network` wait rather than drop
 frames. Neither side trusts the other: positions are compared modulo 2^64
 and clamped to the ring, lengths are checked, and shared memory is accessed
 only through volatile reads and writes.
@@ -64,12 +64,12 @@ a process cannot forge:
 Other `netdev` and `wlanphy` connections are closed. The Terminal only
 reads, as the programs it runs have its identity. Nobody can list the DNS
 cache, a record of every name any program looked up. Each process has
-limits, however many connections it opens: on its `netd` connections,
+limits, however many connections it opens: on its `network` connections,
 sockets (with those its listeners accept), lookups in progress and status
 watchers, and on its `wlan` connections and watchers. A share of each is
 kept for system services, so that applications together cannot use it all.
 
-## Sockets in `netd`
+## Sockets in `network`
 
 * **Flow control** is credit-based both ways (`proto::net`). Received data
   leaves the stack only once its message is queued to the client, so data
@@ -78,9 +78,9 @@ kept for system services, so that applications together cannot use it all.
   channel. Nothing a client is owed is lost.
 * **POSIX sockets** go to other processes, which share their channels, so
   credit would go to whichever read it. A TCP connection's bytes go instead
-  on a kernel socket between the program and `netd`, whose buffers are the
-  flow control, and its channel brings only the connection and its
-  failure. UDP datagrams go without credit: `netd` reads no more while
+  on a kernel socket between the program and `network`, whose buffers are
+  the flow control, and its channel brings only the connection and its
+  failure. UDP datagrams go without credit: `network` reads no more while
   256 KiB wait to be sent, and still sends, for three seconds at most,
   those sent before the socket closed.
 * **Closing** a TCP socket delivers all the client sent (it may send only
@@ -99,12 +99,12 @@ kept for system services, so that applications together cannot use it all.
 * **A listener** holds at most its backlog of connections not accepted yet;
   further attempts are refused.
 * **A TCP socket bound** before it listens or connects (POSIX's `bind`,
-  `tcp_bind` in `proto::net`) is a socket of `netd`'s that holds its port,
-  a free one if it asked for none: on its channel, `Listen` makes it a
+  `tcp_bind` in `proto::net`) is a socket of `network`'s that holds its
+  port, a free one if it asked for none: on its channel, `Listen` makes it a
   listener (answering on a channel of its own, so that processes sharing
   the socket each hear theirs) and `Connect` a connection from its address
   and port. When the socket that had a port is closed, the port is free at
-  once for the next to bind, since `netd` closes the sockets in the way
+  once for the next to bind, since `network` closes the sockets in the way
   whose clients closed them first.
 * **Sockets share a port** when no address is both's, as on Linux: an
   IPv4 socket on `0.0.0.0` and an IPv6-only one on `::` (`v6only` in
@@ -117,7 +117,7 @@ kept for system services, so that applications together cannot use it all.
   its address, so pings with a small TTL find the routers on the way.
 * **IPv6 addresses** do not embed the hardware address: their interface
   identifiers, link-local included, are stable privacy identifiers (RFC
-  7217) from a secret `netd` draws when it starts.
+  7217) from a secret `network` draws when it starts.
 * **The DHCP lease** shown is the one the client accepted from its server
   (renewals included).
 * **Random protocol numbers** (TCP initial sequence numbers, DHCP and DNS
@@ -127,13 +127,13 @@ kept for system services, so that applications together cannot use it all.
 ## The firewall
 
 The firewall (`netstack`'s `firewall.rs`) filters what comes from other
-machines before smoltcp sees it, on every interface but loopback. `netd`
+machines before smoltcp sees it, on every interface but loopback. `network`
 applies its settings (`proto::net::FirewallConfig`), which Settings
 changes.
 
 * **Defaults**: on; nothing comes in that this machine did not ask for;
-  stealth; pings unanswered; a log. They hold from `netd`'s start until it
-  has read the saved settings.
+  stealth; pings unanswered; a log. They hold from `network`'s start until
+  it has read the saved settings.
 * **What always comes in**: replies (a connection's segments, which smoltcp
   takes if it has the connection; UDP datagrams from where this machine
   sent one in the last three minutes), DHCP's answers, the ICMP errors that
@@ -186,12 +186,12 @@ changes.
   count as one entry, so a scan from one address is one), and counts since
   the system started. Settings shows the latest, with "Let in" for an
   application that was not reached; the Terminal's `firewall log` lists
-  them. `netd` writes each change of the settings, and who made it, to the
-  system log.
-* **Where the settings are kept**: `/home/.private/netd/firewall`, in
-  `netd`'s private directory, which the file system opens to no other
+  them. `network` writes each change of the settings, and who made it, to
+  the system log.
+* **Where the settings are kept**: `/home/.private/network/firewall`, in
+  `network`'s private directory, which the file system opens to no other
   program, so no application can read the rules or change them to let
-  itself in. A thread of `netd`'s own reads and writes it, so the service
+  itself in. A thread of `network`'s own reads and writes it, so the service
   never waits on the file system. A new file is written beside the old and
   takes its place; one that does not read back whole and valid is not used
   (the defaults hold).
@@ -201,7 +201,7 @@ changes.
 
 ### When an application listens
 
-`netd` asks the user whether an application may accept connections when
+`network` asks the user whether an application may accept connections when
 it starts taking what other machines start (a listener, or a datagram
 socket on a port of its choosing; one on a port the system picked is a
 client's, whose replies come in anyway), not on loopback alone, and the
@@ -216,7 +216,7 @@ anywhere, ticked). Its buttons take clicks only a second after it appears,
 so a click aimed at what was there just before, or a window timed to put
 one there, does not answer it.
 
-`netd` takes answers from the shell alone (`answer_firewall`), only about
+`network` takes answers from the shell alone (`answer_firewall`), only about
 the applications it asked about; an answer sets that application's rule
 and nothing else, kept as Settings' changes are. "Don't allow" is a rule
 too, so the application is not asked again. Settings lists the questions
@@ -246,7 +246,7 @@ are read (they may answer it), nor about system services.
    from the PMK (the PBKDF2 pre-shared key for WPA2, the SAE key for WPA3)
    and gives the radio the pairwise and group keys; the group key
    handshake renews group keys.
-5. **Link up**: `netd` runs DHCP and SLAAC on `wlan0`, and the default
+5. **Link up**: `network` runs DHCP and SLAAC on `wlan0`, and the default
    route moves to it unless a wired connection is up (Ethernet has the
    lower route metric).
 
@@ -438,7 +438,7 @@ never when an application did.
 | `network-cable.vts` | Plugs the wired card's cable in as the driver VM attaches the card, then unplugs and replugs it (QMP `set_link`): the default route comes, goes and comes back |
 | `drivervm-restart.vts` | Crashes the driver VM: the network comes back with it |
 | `drivervm-net.vts`, `e1000e.vts`, `drivervm-usb.vts` | Linux's drivers of QEMU's Intel 82576 and 82574L, and of its USB network adapter |
-| `settings-firewall.vts` | Changes the firewall in Settings: `netd` applies the changes and reads them back after a restart |
+| `settings-firewall.vts` | Changes the firewall in Settings: `network` applies the changes and reads them back after a restart |
 | `firewall-question.vts` | Starts a program that listens (`run=nettest:listen,8080`), answers the question on the desktop, checks that nobody is asked again after a restart, and changes the answer in Settings |
 
 The network cards' scripts check against a server on the host
@@ -471,6 +471,6 @@ its questions.
 * **HTTP**: one request per connection (`Connection: close`); no
   compressed bodies, cookies or caching.
 * **IPv6** has no temporary addresses (RFC 8981) yet; the stable privacy
-  addresses change when `netd` starts again (its secret is not kept on
+  addresses change when `network` starts again (its secret is not kept on
   disk).
 * **Saved passphrases** are not encrypted at rest yet.

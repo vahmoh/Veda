@@ -12,22 +12,22 @@ web-server
 boot-cmdline "run=terminal"
 fail-on "PANIC"
 wait-serial "desktop ready" 90
-wait-serial "packages: ready" 60
+wait-serial "package-manager: ready" 60
 wait-serial "started terminal" 60
 wait 3
 key meta_l-up
 wait 2
 type "pkg repo add forever http://{web}/packages/forever /system/tests/packages/test.pub; pkg update; logger forever-$?"
 key ret
-wait-serial "packages: forever could not be updated: the index does not say when it expires" 120
+wait-serial "package-manager: forever could not be updated: the index does not say when it expires" 120
 wait-serial "terminal: forever-1" 60
 type "pkg repo remove forever && pkg repo add web http://{web}/packages/web /system/tests/packages/test.pub && pkg update && pkg install -y hello && logger web-installed-ok"
 key ret
-wait-serial "packages: web: 4 packages" 120
-wait-serial "packages: installed hello 1.0 (from web)" 120
+wait-serial "package-manager: web: 4 packages" 120
+wait-serial "package-manager: installed hello 1.0 (from web)" 120
 wait-serial "terminal: web-installed-ok" 60
 type "hello; logger web-hello-$?"
 key ret
 wait-serial "terminal: web-hello-42" 60
 shot target/veda/packages-web.png
-reject-serial "packages: the change was not made"
+reject-serial "package-manager: the change was not made"

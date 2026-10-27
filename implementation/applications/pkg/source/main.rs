@@ -3,7 +3,7 @@
 
 //! `pkg` — Veda's packages, in the Terminal: installs, upgrades and removes
 //! them, and lists and checks what is installed and offered, through the
-//! packages service, which alone changes them (the Terminal's programs may
+//! package manager, which alone changes them (the Terminal's programs may
 //! ask it to); and makes keys, packages and repositories, for whoever
 //! publishes them ([`author`]). [Packages](../../../../documentation/PACKAGES.md)
 //! has the whole of it.
@@ -31,7 +31,7 @@ Packages:
   pkg upgrade [-y] [NAME...]       upgrade packages (every one, if none is named)
   pkg verify [NAME]                check the files installed (of one package, or of all)
   pkg clean                        remove the downloaded package files kept
-  pkg status                       what the packages service is doing
+  pkg status                       what the package manager is doing
 
 Repositories:
   pkg repo list

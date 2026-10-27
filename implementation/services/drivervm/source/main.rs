@@ -25,12 +25,13 @@
 //! controller's commands) is its library (`drivervm`, `source/lib.rs`),
 //! tested on the host.
 //!
-//! It gives the guest the PCI functions devmgr hands over (`pci`): their
-//! DMA into the guest's memory only, their BARs, their interrupts (MSIs,
-//! and the lines their INTx are wired to: `lines`); the PC's own devices,
-//! if devmgr hands them over (`architecture::platform`: the keyboard
-//! controller); ACPI tables that describe them (`hv::acpi`); and the PC's
-//! firmware variables, read-only (`variables`).
+//! It gives the guest the PCI functions the device manager hands over
+//! (`pci`): their DMA into the guest's memory only, their BARs, their
+//! interrupts (MSIs, and the lines their INTx are wired to: `lines`); the
+//! PC's own devices, if the device manager hands them over
+//! (`architecture::platform`: the keyboard controller); ACPI tables that
+//! describe them (`hv::acpi`); and the PC's firmware variables, read-only
+//! (`variables`).
 //!
 //! The guest's life is this process's: when Linux powers the machine off,
 //! restarts it, crashes or does something the platform does not allow,
@@ -40,9 +41,9 @@
 //! `cmdline=...` (added to the kernel's command line, commas for spaces),
 //! and for tests `run=PROGRAM,...` (programs of the guest's `/bin` its
 //! `init` runs), `poweroff` (once they are done) and `crash=SECONDS`
-//! (Linux crashes that long after it starts: devmgr passes it to the first
-//! run only), `renderer=softpipe` (the guest's renderer renders on
-//! softpipe, whatever the devices).
+//! (Linux crashes that long after it starts: the device manager passes it
+//! to the first run only), `renderer=softpipe` (the guest's renderer
+//! renders on softpipe, whatever the devices).
 
 #![no_std]
 #![no_main]

@@ -24,9 +24,9 @@ wait-serial "attached as" 30
 wait-serial "nettest: PASS" 300
 reject-serial "iommu: unit at"
 wait-serial "drivervm: Linux crashed" 60
-wait-serial "devmgr: the driver VM ended: Linux crashed; its devices: " 30
-wait-serial "devmgr: started drivervm again" 30
+wait-serial "device-manager: the driver VM ended: Linux crashed; its devices: " 30
+wait-serial "device-manager: started drivervm again" 30
 # The next driver VM's.
 checkpoint
 wait-serial "net: usb0: attached as eth0" 60
-wait-serial "netd: status: Routable via eth0 (gateway 10.0.4.2)" 60
+wait-serial "network: status: Routable via eth0 (gateway 10.0.4.2)" 60

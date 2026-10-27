@@ -585,7 +585,7 @@ mod tests {
             guest,
         ];
         let crates = crates(&groups).unwrap();
-        // netd's TCP/IP stack is a port's; rt is Veda's.
+        // The network service's TCP/IP stack is a port's; rt is Veda's.
         assert!(crates.iter().any(|c| c.name == "smoltcp"), "{crates:?}");
         assert!(!crates.iter().any(|c| c.name == "rt" || c.name == "kernel"), "{crates:?}");
         let files = crate_files(&crates).unwrap();

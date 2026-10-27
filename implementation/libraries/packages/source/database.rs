@@ -9,7 +9,7 @@
 //! ([`crate::resolve`]), so a package installed only for another goes once
 //! nothing needs it any more.
 //!
-//! The database is one JSON file, which the packages service replaces whole
+//! The database is one JSON file, which the package manager replaces whole
 //! with each change: its *generation* goes up by one each time, which is
 //! how a journal tells whether the change it records was made
 //! ([`crate::transaction`]). It is checked as it is read back: names once

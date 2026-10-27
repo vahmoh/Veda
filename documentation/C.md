@@ -96,7 +96,7 @@ which calls into it.
 | Files, directories | The VFS's open files and listings (`getdents64`, with `.` and `..`). The VFS keeps the offset, which `dup` and child processes share; a file removed while open stays readable. `stat` gives inode numbers and times |
 | `/dev/null`, `zero`, `full`, `random`, `urandom`; `/dev/tty`, `/dev/stdin`, `/dev/fd/N` | Devices of the VFS; the program's own descriptors |
 | Pipes, the terminal | Kernel sockets: byte streams whose endpoints several processes can share. A shared state page (`proto::tty`) marks the terminal and holds its size and modes |
-| TCP and UDP, over IPv4 and IPv6 | Sockets of the network service (`netd`) |
+| TCP and UDP, over IPv4 and IPv6 | Sockets of the network service (`network`) |
 | Unix domain sockets: stream, datagram, seqpacket | Bound to a path, a node of the VFS (`S_IFSOCK`; `unlink` removes it); bound to an abstract name (a `sun_path` that starts with a NUL), a name in the VFS's abstract namespace while open. Connections are kernel sockets (channels for seqpacket) between the two programs |
 | Names | `getaddrinfo` and `gethostbyname` ask the network service's resolver (which caches answers, knows `localhost` and puts IPv4 first) after `/system/etc/hosts`, if there is one; `res_query`, `res_send` and reverse lookups use musl's DNS client with the service's DNS servers |
 | Users, groups, services | The databases Linux keeps in `/etc` are in `/system/etc`: `passwd` and `group` have the one user (`user`, 1000, its home `/home/user`), as which every program runs; `services` is IANA's registry of service names and ports, which `getaddrinfo`, `getservbyname` and `getnameinfo` read |

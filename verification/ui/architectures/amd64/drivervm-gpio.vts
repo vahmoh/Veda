@@ -1,17 +1,17 @@
 # SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 # SPDX-License-Identifier: GPL-3.0-only
 
-# GPIO pins for the driver VM. A test table describes one of devmgr's
-# simulated GPIO controllers (VTST0002, Alder Lake-P's pads, its even pins
-# wired to the odd ones after them) and a device below QEMU's virtio GPU
-# wired to three of its pins: 0 an output, 1 an input that interrupts on
-# both edges, 3 an input. The guest gets those pins, by the controller's
-# numbers, on a GPIO controller of the platform's, and pin 1's interrupt as
-# a line of the platform's; gpiotest drives pin 0, reads pin 1 and gets its
-# edges as events, through Linux's GPIO character device, devmgr's pads and
-# the interrupt devmgr raises. Pin 2 it does not have. The virtio GPU is in
-# QEMU's tables only with it: the script asks for it (and is skipped where
-# QEMU has none).
+# GPIO pins for the driver VM. A test table describes one of the device
+# manager's simulated GPIO controllers (VTST0002, Alder Lake-P's pads, its
+# even pins wired to the odd ones after them) and a device below QEMU's
+# virtio GPU wired to three of its pins: 0 an output, 1 an input that
+# interrupts on both edges, 3 an input. The guest gets those pins, by the
+# controller's numbers, on a GPIO controller of the platform's, and pin 1's
+# interrupt as a line of the platform's; gpiotest drives pin 0, reads pin 1
+# and gets its edges as events, through Linux's GPIO character device, the
+# device manager's pads and the interrupt the device manager raises. Pin 2
+# it does not have. The virtio GPU is in QEMU's tables only with it: the
+# script asks for it (and is skipped where QEMU has none).
 gpu on
 acpi-table gpio
 boot-cmdline "drivervm.run=gpiotest drivervm.poweroff"

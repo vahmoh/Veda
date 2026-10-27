@@ -40,7 +40,7 @@ use proto::fs::{LOAN_SIZE, MAX_PLACES, Place};
 use proto::init::RegistryError;
 
 use crate::linux::errno::{EACCES, EFAULT, EILSEQ, EINVAL, EIO};
-use crate::{error, netd, path, vfs};
+use crate::{error, network, path, vfs};
 
 /// A place of [`veda_confine_files`], as `<veda/sandbox.h>` has it.
 #[repr(C)]
@@ -202,7 +202,7 @@ pub unsafe extern "C" fn veda_confine_services(names: *const *const c_char, coun
             _ => return Err(EIO),
         }
         if !network {
-            netd::refuse();
+            network::refuse();
         }
         Ok(())
     })())

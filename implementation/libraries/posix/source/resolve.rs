@@ -24,7 +24,7 @@ use rt::object::Channel;
 use rt::time::Duration;
 
 use crate::linux::sock::{AF_INET, AF_INET6, AF_UNSPEC};
-use crate::netd;
+use crate::network;
 
 /// musl's `struct address` (`src/network/lookup.h`): an address of either
 /// family, IPv4's in the first four bytes.
@@ -92,7 +92,7 @@ fn lookup(name: &str, family: AddrFamily) -> Result<(Vec<IpAddr>, String), NetEr
     let name = String::from(name);
     // A reply channel for each attempt: one sent to a service that has
     // since restarted is gone with it.
-    let reply = netd::with(|c| {
+    let reply = network::with(|c| {
         let (ours, theirs) = Channel::create().map_err(IpcError::Kernel)?;
         Ok(c.resolve(name.clone(), family, theirs)?.map(|()| ours))
     })??;
@@ -162,7 +162,7 @@ pub unsafe extern "C" fn __veda_lookup_name(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __veda_dns_servers(out: *mut Address, max: c_int) -> c_int {
     let _layer = crate::interrupt::Layer::enter();
-    let Ok(status) = netd::with(|c| c.status()) else { return 0 };
+    let Ok(status) = network::with(|c| c.status()) else { return 0 };
     let n = status.dns_servers.len().min(usize::try_from(max).unwrap_or(0));
     for (i, ip) in status.dns_servers.into_iter().take(n).enumerate() {
         // SAFETY: `out` has room for `max` addresses.

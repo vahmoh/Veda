@@ -270,7 +270,8 @@ impl Machine {
             hv::bridge::HYPERCALL => self.bridge.call(&self.memory, &self.guest, data[1] as u32, data[2]),
             hypercall::PCI_CONFIG_READ => self.devices.config_read(data[1], data[2], data[3]),
             hypercall::PCI_CONFIG_WRITE => self.devices.config_write(data[1], data[2], data[3], data[4]),
-            // (devmgr makes the MSI: not with the processors' lock held.)
+            // (The device manager makes the MSI: not with the processors'
+            // lock held.)
             hypercall::PCI_MSI => match self.vcpu(data[3]) {
                 Some(vcpu) => self.devices.msi(data[1], data[2], &vcpu, data[4]),
                 None => error::INVALID,

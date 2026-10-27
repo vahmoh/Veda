@@ -56,11 +56,11 @@ COMMANDS:
                 standard library, with the libraries its modules stand on (OpenSSL,
                 SQLite, zlib, XZ Utils, Zstandard...) built in (see
                 documentation/PYTHON.md; --jobs N); later builds put it in /system
-    acpi DIR    What devmgr makes of a PC's ACPI tables, worked out on the host: DIR
-                holds them as Linux has them (sudo cp -r /sys/firmware/acpi/tables DIR);
-                the firmware's variables read as zeros but those given with
-                --set NAME=VALUE; PCI configuration space comes from DIR/pci, or from
-                this machine
+    acpi DIR    What the device manager makes of a PC's ACPI tables, worked out on the
+                host: DIR holds them as Linux has them
+                (sudo cp -r /sys/firmware/acpi/tables DIR); the firmware's variables
+                read as zeros but those given with --set NAME=VALUE; PCI configuration
+                space comes from DIR/pci, or from this machine
     clean       Remove build outputs
     doctor      Check that the required tools are installed
     help        Show this message

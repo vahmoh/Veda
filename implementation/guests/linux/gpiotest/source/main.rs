@@ -3,12 +3,12 @@
 
 //! `gpiotest` — checks, inside the driver VM's Linux, the GPIO pins Veda
 //! gave it, as a test's ACPI table describes them: a simulated controller
-//! of devmgr's (`VTST0002`, whose even pins drive the odd ones after them),
-//! and a device wired to three of its pins — 0 an output, 1 an input that
-//! interrupts on both edges, 3 an input. The guest has those pins, and no
-//! other, on a GPIO controller of the platform's (`VEDA0001`): driving 0
-//! reaches 1, whose edges come as events, through Linux's GPIO character
-//! device. It says `gpiotest: PASS` when all is well.
+//! of the device manager's (`VTST0002`, whose even pins drive the odd ones
+//! after them), and a device wired to three of its pins — 0 an output, 1 an
+//! input that interrupts on both edges, 3 an input. The guest has those
+//! pins, and no other, on a GPIO controller of the platform's (`VEDA0001`):
+//! driving 0 reaches 1, whose edges come as events, through Linux's GPIO
+//! character device. It says `gpiotest: PASS` when all is well.
 
 use std::fs::{self, File, OpenOptions};
 use std::mem::size_of;

@@ -6,9 +6,10 @@
 //! their reset, their interrupt), on a GPIO controller of the platform's
 //! for each of the PC's they are on (`VEDA0001`), by the PC's numbers for
 //! them. A pin is driven through the channel of the function its device is
-//! below — devmgr drives it, and only the pins that function's devices are
-//! wired to; a pin that interrupts is a line of the guest's, a GSI the
-//! platform makes (from `PLATFORM_GSIS` on), whose interrupt devmgr raises.
+//! below — the device manager drives it, and only the pins that function's
+//! devices are wired to; a pin that interrupts is a line of the guest's, a
+//! GSI the platform makes (from `PLATFORM_GSIS` on), whose interrupt the
+//! device manager raises.
 
 use alloc::collections::BTreeMap;
 use alloc::format;

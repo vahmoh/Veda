@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The network protocols served by `netd`, the network service.
+//! The network protocols served by `network`, the network service.
 //!
 //! * [`net`] (service `"net"`): what applications use — TCP and UDP sockets,
 //!   ping, name resolution, the state of interfaces and routes, and (for
@@ -46,11 +46,11 @@
 //! Every socket is its own channel. The client creates the channel pair,
 //! keeps one end and passes the other in the request that opens the socket
 //! ([`net::Client::tcp_connect`], ...). Both sides then exchange
-//! [`SocketRequest`]s (client to `netd`) and [`SocketEvent`]s (`netd` to
-//! client) as plain messages on that channel. Closing the channel closes the
-//! socket: a TCP connection is shut down gracefully, and the datagrams a UDP
-//! socket was sent go out first, if the stack can send them within a few
-//! seconds.
+//! [`SocketRequest`]s (client to `network`) and [`SocketEvent`]s (`network`
+//! to client) as plain messages on that channel. Closing the channel closes
+//! the socket: a TCP connection is shut down gracefully, and the datagrams
+//! a UDP socket was sent go out first, if the stack can send them within a
+//! few seconds.
 //!
 //! A socket bound to an address holds its port there: as on Linux, sockets
 //! share a port when no address is both's, as an IPv4 socket on `0.0.0.0`
@@ -61,17 +61,17 @@
 //! Data flow is credit-based in both directions, which bounds the memory a
 //! socket can pin in the kernel:
 //!
-//! * **Sending.** `netd` grants send credit in bytes
+//! * **Sending.** `network` grants send credit in bytes
 //!   ([`SocketEvent::Connected`], [`SocketEvent::SendCredit`]). A client may
-//!   only send that many bytes; `netd` grants more as the stack's send
+//!   only send that many bytes; `network` grants more as the stack's send
 //!   buffer frees up (for TCP, what the client may send always fits the
 //!   buffer, so closing the channel delivers everything sent before it).
-//! * **Receiving.** `netd` keeps at most [`RECEIVE_WINDOW`] bytes of
+//! * **Receiving.** `network` keeps at most [`RECEIVE_WINDOW`] bytes of
 //!   [`SocketEvent::Data`] (or datagrams) unacknowledged; the client returns
 //!   credit with [`SocketRequest::Consumed`] as its reader takes the data.
-//!   `netd` takes data from the stack only as far as the client's channel
-//!   has room for it: when the client stops reading, the data waits in the
-//!   stack and TCP's own flow control slows the peer.
+//!   `network` takes data from the stack only as far as the client's
+//!   channel has room for it: when the client stops reading, the data waits
+//!   in the stack and TCP's own flow control slows the peer.
 //!
 //! # Sockets that processes share
 //!
@@ -89,14 +89,14 @@
 //!   client holds one end: its buffers are the flow control, whoever holds
 //!   the end reads and writes, and a reader who stops reading leaves the
 //!   data in the stack (TCP's window closes).
-//!   The end of the received stream is the kernel socket's (`netd` stops
+//!   The end of the received stream is the kernel socket's (`network` stops
 //!   writing), and the client's end of its stream is its end's (it stops
 //!   writing, or every holder closes it). The channel carries only
 //!   [`SocketEvent::Connected`], and [`SocketEvent::Error`], after which
-//!   `netd` closes its end of the kernel socket; and the requests
+//!   `network` closes its end of the kernel socket; and the requests
 //!   [`SocketRequest::Abort`] and [`SocketRequest::SetNoDelay`].
 //! * **UDP without credit** ([`net::Client::udp_bind_unmetered`]). The
-//!   channel's room is the flow control both ways: `netd` writes a
+//!   channel's room is the flow control both ways: `network` writes a
 //!   datagram while the channel has room for it (otherwise it waits in the
 //!   stack, which drops what does not fit, as UDP may), and stops reading
 //!   [`SocketRequest::SendTo`]s while the datagrams it has not sent yet are
@@ -115,10 +115,10 @@ use crate::netring::LinkEndpoints;
 
 /// Largest payload of one [`SocketRequest::Send`] / `SendTo` message.
 pub const MAX_SEND: usize = 16 * 1024;
-/// Unacknowledged received bytes `netd` allows per socket.
+/// Unacknowledged received bytes `network` allows per socket.
 pub const RECEIVE_WINDOW: u32 = 256 * 1024;
 /// Bytes of datagrams a UDP socket without credit may have waiting in
-/// `netd` to be sent before it stops reading the socket's requests.
+/// `network` to be sent before it stops reading the socket's requests.
 pub const UDP_UNMETERED_WINDOW: usize = 256 * 1024;
 /// Largest UDP payload a socket carries: what fits one channel message with
 /// the datagram's address, a little less than an IPv4 datagram's 65507
@@ -277,7 +277,7 @@ union! {
 }
 
 union! {
-    /// Messages `netd` sends on a socket channel.
+    /// Messages `network` sends on a socket channel.
     #[derive(Debug)]
     pub enum SocketEvent {
         /// TCP: the connection is established. `credit` is the initial send
@@ -664,8 +664,9 @@ impl PortRule {
 }
 
 message! {
-    /// The firewall's settings, which Settings changes and `netd` keeps on
-    /// the home disk ([`FirewallConfig::default`] holds until it has them).
+    /// The firewall's settings, which Settings changes and `network` keeps
+    /// on the home disk ([`FirewallConfig::default`] holds until it has
+    /// them).
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct FirewallConfig {
         /// Off, nothing is filtered (packets no host sends are still
@@ -932,8 +933,8 @@ protocol! {
 
         /// The firewall's settings (Settings and the Terminal only).
         30 => fn firewall() -> Result<FirewallConfig, NetError>;
-        /// Replaces the firewall's settings, which `netd` keeps from then on
-        /// (Settings only; `InvalidArgument` for what
+        /// Replaces the firewall's settings, which `network` keeps from
+        /// then on (Settings only; `InvalidArgument` for what
         /// [`FirewallConfig::check`] refuses).
         31 => fn set_firewall(config: FirewallConfig) -> Result<(), NetError>;
         /// What the firewall turned away lately, oldest first (Settings and

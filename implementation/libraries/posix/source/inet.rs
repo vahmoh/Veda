@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Internet sockets: TCP and UDP over IPv4 and IPv6. Each is a socket of
-//! the network service (`netd`), with a channel of its own, opened in the
-//! ways of `proto::net` that processes can share (see "Sockets that
+//! the network service (`network`), with a channel of its own, opened in
+//! the ways of `proto::net` that processes can share (see "Sockets that
 //! processes share" there), so that it can travel to the processes a
 //! program starts and over Unix domain sockets ([`Inet::travelling`]):
 //!
@@ -78,7 +78,7 @@ use crate::error::{self, SysResult};
 use crate::io::Waitable;
 use crate::linux::errno::*;
 use crate::linux::sock::{DGRAM, IPPROTO_TCP, IPPROTO_UDP, STREAM};
-use crate::netd;
+use crate::network;
 use crate::sockaddr::Family;
 use crate::stream::Stream as Bytes;
 use crate::{signal, time};
@@ -352,7 +352,7 @@ fn send_with<T>(channel: &Channel, mut fill: impl FnMut(&mut Encoder) -> Result<
             Ok(()) => return Ok(kept),
             // Full: the processes that share the socket wrote first.
             Err(abi::Error::ShouldWait) => {}
-            Err(_) => return Err(netd::errno(NetError::Unavailable)),
+            Err(_) => return Err(network::errno(NetError::Unavailable)),
         }
         channel.wait(WRITABLE | PEER_CLOSED, abi::DEADLINE_INFINITE).map_err(error::kernel)?;
     }
@@ -362,11 +362,11 @@ fn send_with<T>(channel: &Channel, mut fill: impl FnMut(&mut Encoder) -> Result<
 fn listened(reply: &Channel) -> Result<SocketAddr, isize> {
     // It answers at once, unless it is gone.
     reply.wait(READABLE | PEER_CLOSED, abi::DEADLINE_INFINITE).map_err(error::kernel)?;
-    let answer = reply.read().map_err(|_| netd::errno(NetError::Unavailable))?;
+    let answer = reply.read().map_err(|_| network::errno(NetError::Unavailable))?;
     match ipc::decode_event::<SocketEvent>(answer) {
         Ok((_, SocketEvent::Listening { local })) => Ok(local),
-        Ok((_, SocketEvent::Error { error })) => Err(netd::errno(error)),
-        _ => Err(netd::errno(NetError::ProtocolViolation)),
+        Ok((_, SocketEvent::Error { error })) => Err(network::errno(error)),
+        _ => Err(network::errno(NetError::ProtocolViolation)),
     }
 }
 
@@ -514,7 +514,7 @@ impl State {
                 self.error.get_or_insert(match e {
                     // The service went away while connecting.
                     NetError::Closed => ECONNREFUSED,
-                    other => netd::errno(other),
+                    other => network::errno(other),
                 });
                 // Waiters keep the channel while they wait; the service
                 // drops the connection once this end is closed.
@@ -525,11 +525,11 @@ impl State {
             // kernel socket says so.
             Conn::Stream(_) if e == NetError::Closed => {}
             Conn::Stream(_) | Conn::Listening { .. } => {
-                self.error.get_or_insert(netd::errno(e));
+                self.error.get_or_insert(network::errno(e));
             }
             Conn::Datagrams(d) if !d.closed => {
                 d.closed = true;
-                self.error.get_or_insert(netd::errno(e));
+                self.error.get_or_insert(network::errno(e));
             }
             _ => {}
         }
@@ -738,13 +738,13 @@ impl Inet {
     /// until it listens or connects.
     fn bind_stream(&self, st: &mut State, addr: SocketAddr) -> Result<(), isize> {
         let v6only = st.options.v6only;
-        let (channel, local) = netd::with(|c| {
+        let (channel, local) = network::with(|c| {
             // Shared, so that the socket can travel to other processes.
             let (ours, theirs) = Channel::create_shared().map_err(IpcError::Kernel)?;
             Ok(c.tcp_bind(addr, v6only, theirs)?.map(|local| (ours, local)))
         })
-        .map_err(netd::errno)?
-        .map_err(netd::errno)?;
+        .map_err(network::errno)?
+        .map_err(network::errno)?;
         st.channel = Some(Arc::new(channel));
         st.conn = Conn::Bound { local };
         Ok(())
@@ -753,13 +753,13 @@ impl Inet {
     /// Binds a datagram socket to `addr`.
     fn bind_datagrams(&self, st: &mut State, addr: SocketAddr) -> Result<(), isize> {
         let v6only = st.options.v6only;
-        let (channel, local) = netd::with(|c| {
+        let (channel, local) = network::with(|c| {
             // Shared, so that the socket can travel to other processes.
             let (ours, theirs) = Channel::create_shared().map_err(IpcError::Kernel)?;
             Ok(c.udp_bind_unmetered(addr, v6only, theirs)?.map(|local| (ours, local)))
         })
-        .map_err(netd::errno)?
-        .map_err(netd::errno)?;
+        .map_err(network::errno)?
+        .map_err(network::errno)?;
         st.channel = Some(Arc::new(channel));
         st.conn = Conn::Datagrams(Datagrams { local, peer: None, held: None, closed: false });
         Ok(())
@@ -787,14 +787,14 @@ impl Inet {
             Conn::Listening { .. } => return Ok(0),
             Conn::Idle => {
                 let any = self.family.any();
-                let (channel, local) = netd::with(|c| {
+                let (channel, local) = network::with(|c| {
                     // Shared, so that the socket can travel to other
                     // processes.
                     let (ours, theirs) = Channel::create_shared().map_err(IpcError::Kernel)?;
                     Ok(c.tcp_listen_bytes(any, v6only, backlog, options, theirs)?.map(|local| (ours, local)))
                 })
-                .map_err(netd::errno)?
-                .map_err(netd::errno)?;
+                .map_err(network::errno)?
+                .map_err(network::errno)?;
                 st.channel = Some(Arc::new(channel));
                 local
             }
@@ -957,15 +957,15 @@ impl Inet {
             let options = st.options.tcp();
             let connecting = match st.conn {
                 Conn::Idle => {
-                    let (channel, bytes) = netd::with(|c| {
+                    let (channel, bytes) = network::with(|c| {
                         // Shared, so that the connection can travel to other
                         // processes, its bytes on a kernel socket.
                         let (ours, theirs) = Channel::create_shared().map_err(IpcError::Kernel)?;
                         let (bytes, their_bytes) = Socket::create().map_err(IpcError::Kernel)?;
                         Ok(c.tcp_connect_bytes(remote, options, theirs, their_bytes)?.map(|()| (ours, bytes)))
                     })
-                    .map_err(netd::errno)?
-                    .map_err(netd::errno)?;
+                    .map_err(network::errno)?
+                    .map_err(network::errno)?;
                     st.channel = Some(Arc::new(channel));
                     Some(Conn::Connecting { bytes, from: None })
                 }

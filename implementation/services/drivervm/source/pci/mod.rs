@@ -1,15 +1,15 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The PCI functions the guest gets. devmgr hands each over as a `pcidev`
-//! channel, and each is given to the guest whole ([`give`]): its DMA
-//! reaches the guest's memory and nothing else (the IOMMU), its memory BARs
-//! are mapped into the guest's memory, its MSIs are bound to the guest's
-//! processors, and the line its INTx is wired to is the guest's (`lines`;
-//! functions on one line share it). Linux finds them on bus 0 of the
-//! guest's PCI, their configuration space as `hv::pci` makes it, through
-//! the platform's hypercalls. What the PC's firmware describes below a
-//! function goes into the guest's ACPI tables ([`describe`]); the
+//! The PCI functions the guest gets. The device manager hands each over as
+//! a `pcidev` channel, and each is given to the guest whole ([`give`]): its
+//! DMA reaches the guest's memory and nothing else (the IOMMU), its memory
+//! BARs are mapped into the guest's memory, its MSIs are bound to the
+//! guest's processors, and the line its INTx is wired to is the guest's
+//! (`lines`; functions on one line share it). Linux finds them on bus 0 of
+//! the guest's PCI, their configuration space as `hv::pci` makes it,
+//! through the platform's hypercalls. What the PC's firmware describes
+//! below a function goes into the guest's ACPI tables ([`describe`]); the
 //! firmware's tables that describe a function's hardware go there whole (an
 //! Intel audio controller's NHLT: the links of its DSP, and the microphones
 //! on them).
@@ -24,7 +24,7 @@
 //! be given (its firmware's memory where the guest has its own, no room on
 //! the bus or for its BARs, its DMA not the guest's) is given nothing of
 //! the guest's, nor the guest anything of it: it is said so and let go of,
-//! its channel closes, which tells devmgr it stays the host's.
+//! its channel closes, which tells the device manager it stays the host's.
 //!
 //! Where a function is, and its BARs: `drivervm_core::functions`.
 //!
@@ -133,7 +133,7 @@ impl Devices {
             let pci = pcidev::Client::new(channel);
             match pci.info() {
                 Ok(info) => given.push((pci, info)),
-                Err(e) => println!("devmgr: {e}"),
+                Err(e) => println!("device-manager: {e}"),
             }
         }
         let places = places(&given.iter().map(|(_, i)| (i.bus, i.slot, i.function)).collect::<Vec<_>>());
@@ -303,7 +303,10 @@ impl Devices {
         if let Write::Device { offset, width, value } = s.config.write(offset, width, value as u32)
             && !matches!(s.pci.config_write(offset, width, value), Ok(Ok(())))
         {
-            println!("{:04x}:{:04x}: devmgr refused a write at {:#x}", d.info.vendor, d.info.device, offset);
+            println!(
+                "{:04x}:{:04x}: the device manager refused a write at {:#x}",
+                d.info.vendor, d.info.device, offset
+            );
         }
         0
     }
@@ -349,7 +352,7 @@ impl Devices {
                 }
                 _ => {
                     self.msis.fetch_sub(1, Ordering::Relaxed);
-                    return refuse("devmgr has no interrupt for it");
+                    return refuse("the device manager has no interrupt for it");
                 }
             }
         }

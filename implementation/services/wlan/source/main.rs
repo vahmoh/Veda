@@ -13,9 +13,10 @@
 //!   4-way and group key handshakes (the radio gets the session keys
 //!   only), management frame protection; for a soft MAC radio, scanning,
 //!   authentication, association and CCMP encryption too.
-//! * Each connected radio appears to `netd` as the Ethernet-like interface
-//!   `wlan0` (`netdev` protocol); the link goes up when a network is joined,
-//!   and `netd` takes care of DHCP, DNS and routing as for any interface.
+//! * Each connected radio appears to `network` as the Ethernet-like
+//!   interface `wlan0` (`netdev` protocol); the link goes up when a network
+//!   is joined, and `network` takes care of DHCP, DNS and routing as for
+//!   any interface.
 //! * Applications (the desktop's Wi-Fi menu, Settings, the Terminal) use
 //!   the `wlan` protocol: networks in range, connect and disconnect, saved
 //!   networks, the radio switch, status events and diagnostics. Who may do
@@ -89,12 +90,12 @@ const RESERVED_CLIENTS: usize = 16;
 const CLIENT_BUDGET: usize = 16;
 /// Frames taken from each link per loop iteration.
 const FRAME_BUDGET: usize = 128;
-/// Slots and slot size of the link to `netd` (Ethernet frames).
-const NETD_SLOTS: u32 = 256;
-const NETD_SLOT_SIZE: u32 = 2048;
-/// How long a call to `netd` may take, and how often to retry attaching.
-const NETD_TIMEOUT_NS: u64 = 5_000_000_000;
-const NETD_RETRY_MS: u64 = 2_000;
+/// Slots and slot size of the link to `network` (Ethernet frames).
+const NETDEV_SLOTS: u32 = 256;
+const NETDEV_SLOT_SIZE: u32 = 2048;
+/// How long a call to `network` may take, and how often to retry attaching.
+const NETDEV_TIMEOUT_NS: u64 = 5_000_000_000;
+const NETDEV_RETRY_MS: u64 = 2_000;
 /// Radio drivers whose attach request has not arrived yet.
 const MAX_PENDING_PHYS: usize = 8;
 
@@ -103,8 +104,8 @@ const KEY_PHY_LISTENER: u64 = 1;
 const KEY_API_LISTENER: u64 = 2;
 const KEY_RADIO: u64 = 3;
 const KEY_RADIO_LINK: u64 = 4;
-const KEY_NETD: u64 = 5;
-const KEY_NETD_LINK: u64 = 6;
+const KEY_NETDEV: u64 = 5;
+const KEY_NETDEV_LINK: u64 = 6;
 const KEY_DYNAMIC: u64 = 100;
 
 pub fn now_ms() -> u64 {
@@ -182,7 +183,7 @@ pub struct Wlan {
     pub radio: Option<Radio>,
     pub netdev: Option<DeviceAttachment>,
     netdev_retry_ms: u64,
-    /// Whether `netd` was told the link is up.
+    /// Whether `network` was told the link is up.
     pub link_up: bool,
     pub sta: Station,
     pub table: Table,
@@ -360,7 +361,7 @@ impl Wlan {
         while let Some((ch, who)) = proto::accept_with_identity(&self.phy_listener) {
             // Radios come from the device manager: its drivers, the driver
             // VM's programs included, speak as it.
-            if !(who.service && who.name == "devmgr") {
+            if !(who.service && who.name == "device-manager") {
                 println!("{} may not offer a radio; refused", who.name);
                 continue;
             }
@@ -442,7 +443,7 @@ impl Wlan {
     fn radio_attached(&mut self, now: u64) {
         self.sta = self.new_station();
         self.table.clear();
-        self.attach_netd(now);
+        self.attach_netdev(now);
         if self.radio_usable() {
             self.radio_ready(now);
         }
@@ -561,15 +562,15 @@ impl Wlan {
         self.log("the Wi-Fi adapter was removed".into());
         self.radio_lost(now);
         self.radio = None;
-        // Closing the attachment removes wlan0 from netd.
+        // Closing the attachment removes wlan0 from the network service.
         self.netdev = None;
         self.link_up = false;
     }
 
     // ---------------------------------------------------------------
-    // netd
+    // The network service
 
-    fn attach_netd(&mut self, now: u64) {
+    fn attach_netdev(&mut self, now: u64) {
         let Some(r) = self.radio.as_ref() else { return };
         let info = DeviceInfo {
             kind: InterfaceKind::Wireless,
@@ -579,7 +580,7 @@ impl Wlan {
             location: r.info.location.clone(),
         };
         let up = self.current.as_ref().is_some_and(|c| c.state == ConnState::Connected);
-        match DeviceAttachment::attach_timeout(info, NETD_SLOTS, NETD_SLOT_SIZE, up, NETD_TIMEOUT_NS) {
+        match DeviceAttachment::attach_timeout(info, NETDEV_SLOTS, NETDEV_SLOT_SIZE, up, NETDEV_TIMEOUT_NS) {
             Ok(att) => {
                 self.log(alloc::format!("attached to the network service as {}", att.name));
                 self.netdev = Some(att);
@@ -587,12 +588,12 @@ impl Wlan {
             }
             Err(e) => {
                 println!("cannot attach to the network service: {}", e);
-                self.netdev_retry_ms = now + NETD_RETRY_MS;
+                self.netdev_retry_ms = now + NETDEV_RETRY_MS;
             }
         }
     }
 
-    /// Tells `netd` whether the link is up.
+    /// Tells `network` whether the link is up.
     pub fn set_link(&mut self, up: bool) {
         if self.link_up == up {
             return;
@@ -640,15 +641,15 @@ impl Wlan {
         self.frame = frame;
     }
 
-    /// Whether frames from `netd` wait in their ring: a soft MAC radio is
-    /// off the network's channel for a scan (a managed radio keeps what it
-    /// is given while it scans).
+    /// Whether frames from `network` wait in their ring: a soft MAC radio
+    /// is off the network's channel for a scan (a managed radio keeps what
+    /// it is given while it scans).
     fn holding_frames(&self) -> bool {
         self.sta.is_connected() && self.scan.is_some() && !self.radio.as_ref().is_some_and(|r| r.managed())
     }
 
-    /// Frames from `netd` for the network.
-    fn forward_from_netd(&mut self, now: u64) {
+    /// Frames from `network` for the network.
+    fn forward_from_netdev(&mut self, now: u64) {
         let mut frame = core::mem::take(&mut self.frame);
         for _ in 0..FRAME_BUDGET {
             if self.holding_frames() {
@@ -720,8 +721,8 @@ impl Wlan {
             sleep &= r.link.prepare_wait(false);
         }
         if let Some(nd) = &self.netdev {
-            ws.add(nd.channel().raw(), signals::PEER_CLOSED, KEY_NETD);
-            ws.add(nd.link.wake_event().raw(), signals::SIGNALED, KEY_NETD_LINK);
+            ws.add(nd.channel().raw(), signals::PEER_CLOSED, KEY_NETDEV);
+            ws.add(nd.link.wake_event().raw(), signals::SIGNALED, KEY_NETDEV_LINK);
             // Frames held back for a scan are no reason to stay awake: the
             // scan's timer wakes the service.
             sleep &= nd.link.prepare_wait(false) || self.holding_frames();
@@ -747,11 +748,11 @@ impl Wlan {
         for (wk, observed) in ready {
             match wk {
                 KEY_RADIO => self.handle_radio(observed, now),
-                KEY_NETD if observed & signals::PEER_CLOSED != 0 => {
+                KEY_NETDEV if observed & signals::PEER_CLOSED != 0 => {
                     self.log("the network service went away".into());
                     self.netdev = None;
                     self.link_up = false;
-                    self.netdev_retry_ms = now + NETD_RETRY_MS;
+                    self.netdev_retry_ms = now + NETDEV_RETRY_MS;
                 }
                 k if k >= KEY_DYNAMIC => {
                     if let Some(&(_, key)) = dynamic.iter().find(|(w, _)| *w == k) {
@@ -772,10 +773,10 @@ impl Wlan {
             let now = now_ms();
             self.accept();
             self.receive_frames(now);
-            self.forward_from_netd(now);
+            self.forward_from_netdev(now);
             self.tick(now);
             if self.netdev.is_none() && self.radio.is_some() && now >= self.netdev_retry_ms {
-                self.attach_netd(now);
+                self.attach_netdev(now);
             }
             if self.radio.as_ref().is_some_and(|r| r.broken) {
                 self.log("the Wi-Fi adapter's driver stopped responding".into());

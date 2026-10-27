@@ -13,7 +13,7 @@ path = "source/lib.rs"
 
 [features]
 # The file system of the standard library behind transactions (`stdfs`):
-# the packages service's, and the build machine's tools'.
+# the package manager's, and the build machine's tools'.
 std = []
 
 [dependencies]

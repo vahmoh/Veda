@@ -20,8 +20,8 @@ pub const NAMES: &[&str] = &["touchpad", "gpio", "nhlt"];
 /// since nothing drives that input of QEMU's I/O APIC) below QEMU's virtio
 /// GPU at 00:10.0 (the firmware's `\_SB.PCI0.S80`), on its "bus"; `gpio`,
 /// an SSDT with a device there wired to pins of a simulated GPIO
-/// controller of devmgr's; `nhlt`, an NHLT (an Intel audio DSP's links),
-/// with none.
+/// controller of the device manager's; `nhlt`, an NHLT (an Intel audio
+/// DSP's links), with none.
 pub fn table(name_of: &str) -> Option<Vec<u8>> {
     if name_of == "nhlt" {
         return Some(whole(b"NHLT", 0, b"TESTNHLT", &[0]));
@@ -43,9 +43,10 @@ pub fn table(name_of: &str) -> Option<Vec<u8>> {
             scope(controller, &device("TPD0", &body))
         }
         "gpio" => {
-            // One of devmgr's simulated GPIO controllers, and a device below
-            // QEMU's virtio GPU wired to three of its pins: 0 an output, 1
-            // an input that interrupts on both edges, 3 an input.
+            // One of the device manager's simulated GPIO controllers, and a
+            // device below QEMU's virtio GPU wired to three of its pins: 0
+            // an output, 1 an input that interrupts on both edges, 3 an
+            // input.
             let controller = "\\_SB.TGPI";
             let pin = |pin: u16, interrupt: bool, restriction: u8| Gpio {
                 interrupt,

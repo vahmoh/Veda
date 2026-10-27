@@ -1047,7 +1047,8 @@ fn nesting_is_bounded() {
 #[test]
 fn the_deepest_code_allowed_runs_on_a_small_stack() {
     // What the nesting limit bounds: code as deep as it allows takes some
-    // 250 KiB of stack in an optimised build (devmgr's is 1 MiB).
+    // 250 KiB of stack in an optimised build (the device manager's is
+    // 1 MiB).
     let m = &crate::NoMemory;
     let nested = |inner: Vec<u8>, depth: usize| (0..depth).fold(inner, |inner, _| add(&inner, &int(1)));
     // Expressions 250 deep; Ifs 250 deep; 31 calls nested, each through

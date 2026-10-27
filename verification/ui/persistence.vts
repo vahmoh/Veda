@@ -7,7 +7,7 @@
 # one, and Veda's nvme driver serves the home disk, the other.
 fail-on "PANIC"
 wait-serial "desktop ready" 90
-expect-serial "devmgr: started nvme for"
+expect-serial "device-manager: started nvme for"
 expect-serial "nvme: disk veda-home at"
 expect-serial "home directory new, on the home disk"
 # The Terminal creates Note.txt on the desktop and opens it in the Text

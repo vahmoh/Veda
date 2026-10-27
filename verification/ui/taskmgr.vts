@@ -34,7 +34,7 @@ wait-serial "about exited with code -1002" 30
 # A system process asks with a stronger warning; Esc cancels.
 click 0.795 0.081
 key ctrl-a
-type "vfs"
+type "filesystem"
 wait 1
 key ret
 wait 1
@@ -43,7 +43,7 @@ wait 1
 shot target/veda/taskmgr-3-system.png
 key esc
 wait 1
-reject-serial "vfs exited"
+reject-serial "filesystem exited"
 # Clear the search (Esc in the box) and sort by memory (column header).
 click 0.795 0.081
 wait 1

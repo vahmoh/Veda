@@ -1,14 +1,15 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `cargo automation acpi DIR`: what devmgr makes of a PC's ACPI tables,
-//! worked out on the host. DIR holds the tables as Linux has them
-//! (`sudo cp -r /sys/firmware/acpi/tables DIR`); the same interpreter
-//! (`acpi`) loads the DSDT and the SSDTs and evaluates them by devmgr's
-//! rules: the PCI root bridges' windows (where devmgr places the BARs a
-//! firmware leaves unplaced), the memory the motherboard reserves, and for
-//! each function on a root bus its ACPI device, where its INTx goes and the
-//! devices described below it, with whatever could not be evaluated.
+//! `cargo automation acpi DIR`: what the device manager makes of a PC's
+//! ACPI tables, worked out on the host. DIR holds the tables as Linux has
+//! them (`sudo cp -r /sys/firmware/acpi/tables DIR`); the same interpreter
+//! (`acpi`) loads the DSDT and the SSDTs and evaluates them by the device
+//! manager's rules: the PCI root bridges' windows (where the device manager
+//! places the BARs a firmware leaves unplaced), the memory the motherboard
+//! reserves, and for each function on a root bus its ACPI device, where its
+//! INTx goes and the devices described below it, with whatever could not be
+//! evaluated.
 //!
 //! The firmware's variables (its NVS memory, which Linux does not show)
 //! read as zeros, but those given with `--set NAME=VALUE`. PCI
@@ -105,7 +106,8 @@ pub fn command(args: &[String]) -> Result {
     for (scope, e) in &ns.skip_reasons {
         println!("  in {scope}: {e}");
     }
-    // The devices' _INI methods finish describing them, as devmgr runs them.
+    // The devices' _INI methods finish describing them, as the device
+    // manager runs them.
     let init = ns.initialize(&host);
     println!("{} _INI methods ran; {} _INI and _STA methods failed", init.ran, init.failures);
     for (method, e) in &init.failed {

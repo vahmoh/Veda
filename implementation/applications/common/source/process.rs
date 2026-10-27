@@ -98,9 +98,10 @@ mod tests {
 
     #[test]
     fn applications_and_what_they_started() {
-        // init (1) started vfs (2), devmgr (3), the Terminal (10) as an
-        // application; devmgr started a driver (4); the Terminal a program
-        // (11), which started another (12). 20's parent has ended.
+        // init (1) started filesystem (2), device-manager (3), the Terminal
+        // (10) as an application; device-manager started a driver (4); the
+        // Terminal a program (11), which started another (12). 20's parent
+        // has ended.
         let procs = [p(1, 0), p(2, 1), p(3, 1), p(4, 3), p(10, 1), p(11, 10), p(12, 11), p(20, 99)];
         let c = Classifier::new(&procs, [10]);
         for system in [1, 2, 3, 4, 20, 404] {

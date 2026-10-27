@@ -13,7 +13,7 @@
 //! all to reading `/home/packages` ([`Installed`]): it sends its requests,
 //! and takes their answers as they come, in its loop, as it does all else.
 //! It reads the packages' manifests once the VFS has registered (`init`
-//! starts before it), and again whenever the packages service has changed
+//! starts before it), and again whenever the package manager has changed
 //! what is installed (`launcher::refresh_apps`), and tells the launcher's
 //! watchers when the list changed (`TaskEvent::AppsChanged`).
 //!
@@ -52,7 +52,7 @@ const CONFINE: u32 = 24;
 
 /// The system service that changes what is installed, and alone has the
 /// launcher read the installed packages' applications again.
-const INSTALLER: &str = "packages";
+const INSTALLER: &str = "package-manager";
 
 /// Programs of installed packages' applications read at once, each for a
 /// launcher's call that waits for it.
@@ -334,7 +334,7 @@ impl Init {
         }
     }
 
-    /// `launcher::refresh_apps`, for the packages service alone.
+    /// `launcher::refresh_apps`, for the package manager alone.
     pub fn refresh_apps(&mut self, who: &ClientIdentity) -> Result<(), LaunchError> {
         if !(who.service && who.name == INSTALLER) {
             println!("{} may not have the installed applications read again", who.name);

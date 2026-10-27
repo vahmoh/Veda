@@ -12,16 +12,17 @@
 //! programs takes one), which a thread of their own serves.
 //!
 //! The narrowed registry passes what it allows on through this process's
-//! own registry channel, which `devmgr` started it with: a copy of its own,
-//! which speaks for `devmgr` (`init` attributes every registry channel to
-//! a process). So what the guest connects to, and registers, is
-//! `devmgr`'s: a service sees `devmgr` as the client (`ClientIdentity`),
-//! and the guest's connections that wait for their services count among
-//! `devmgr`'s. The registry's calls are all the narrowing sees, not the
-//! calls the guest then makes on its connections: a service that trusts
-//! `devmgr` with some of them (the compositor's and the audio service's
-//! `expect`, which say what drivers are coming) would take them from the
-//! guest too, until the monitor speaks for itself (see DRIVERVM.md).
+//! own registry channel, which `device-manager` started it with: a copy of
+//! its own, which speaks for `device-manager` (`init` attributes every
+//! registry channel to a process). So what the guest connects to, and
+//! registers, is `device-manager`'s: a service sees `device-manager` as the
+//! client (`ClientIdentity`), and the guest's connections that wait for
+//! their services count among `device-manager`'s. The registry's calls are
+//! all the narrowing sees, not the calls the guest then makes on its
+//! connections: a service that trusts `device-manager` with some of them
+//! (the compositor's and the audio service's `expect`, which say what
+//! drivers are coming) would take them from the guest too, until the
+//! monitor speaks for itself (see DRIVERVM.md).
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;

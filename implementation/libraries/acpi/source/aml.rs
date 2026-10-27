@@ -520,9 +520,9 @@ impl<'n> Question<'n> {
 /// The sleep type values (SLP_TYPa, SLP_TYPb) of system state `\_S<state>`
 /// as a DSDT or SSDT defines them: `Name (\_S5, Package () { a, b, ... })`,
 /// the name rooted or not, wherever the definition is. For the kernel,
-/// which turns the machine off without loading the namespace (devmgr's
-/// [`Namespace`] reads the object like any other). `None` if the table
-/// does not define it with integer constants.
+/// which turns the machine off without loading the namespace (the device
+/// manager's [`Namespace`] reads the object like any other). `None` if the
+/// table does not define it with integer constants.
 pub fn sleep_type(aml: &[u8], state: u8) -> Option<(u16, u16)> {
     let name = [b'_', b'S', b'0'.checked_add(state)?, b'_'];
     (0..aml.len()).find_map(|i| {

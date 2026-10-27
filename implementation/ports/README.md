@@ -410,7 +410,7 @@ in Veda's programs on the standard library.
 
 | Port | Version | Licence | What Veda uses it for |
 |------|---------|---------|-----------------------|
-| `smoltcp` | 0.14.0 | 0BSD | `netd`'s TCP/IP stack (`netstack`) |
+| `smoltcp` | 0.14.0 | 0BSD | `network`'s TCP/IP stack (`netstack`) |
 | `zune-jpeg` | 0.5.15 | MIT OR Apache-2.0 OR Zlib | `image`'s JPEG decoder |
 | `libc` | 0.2.190 | MIT OR Apache-2.0 | Bindings of the C library |
 | `getrandom`, `getrandom-0.3` | 0.4.3, 0.3.4 | MIT OR Apache-2.0 | Random bytes; 0.3 for crates still on it (`rand` 0.9) |
@@ -468,7 +468,7 @@ What the patches change:
   * **Unpredictable protocol numbers** (`src/rand.rs`): given
     `Config::random_key`, initial sequence numbers, DHCP and DNS ids, IPv4
     identification and source ports come from ChaCha20, not the
-    predictable sPCG32 (RFC 6528); `netd` keys it from the kernel's
+    predictable sPCG32 (RFC 6528); `network` keys it from the kernel's
     generator.
   * **Quiet connections** (`src/socket/tcp.rs`): the timeout runs only
     while a SYN, data or a FIN of ours awaits acknowledgement or
@@ -478,12 +478,12 @@ What the patches change:
     furthest edge advertised (`remote_max_edge`) is accepted, as RFC 7323
     (2.4) has it, even when a rounded-down window ends short of it.
   * **The lease** (`src/socket/dhcpv4.rs`): `lease_expires_at` gives the
-    end of the lease the client accepted; `netd` had read leases from any
+    end of the lease the client accepted; `network` had read leases from any
     acknowledgement on the network.
   * **Stable privacy addresses** (`src/iface/interface`, `src/rand.rs`):
     given `Config::slaac_secret`, autoconfigured addresses get RFC 7217
     identifiers, not EUI-64 ones, which carry the hardware address between
-    networks; `Interface::ipv6_address_in` forms `netd`'s link-local
+    networks; `Interface::ipv6_address_in` forms `network`'s link-local
     addresses.
   * **Errors for ping** (`src/socket/icmp.rs`, `src/wire/icmpv4.rs`): ICMP
     sockets receive the Destination Unreachable and Time Exceeded messages

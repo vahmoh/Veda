@@ -8,14 +8,14 @@
 //! [`Firewall::inbound`] first, and every frame it sends passes
 //! [`Firewall::outbound`]; what programs of the machine send each other,
 //! on the loopback interface, passes neither. The settings are
-//! `proto::net::FirewallConfig`'s, which `netd` gives the stack.
+//! `proto::net::FirewallConfig`'s, which `network` gives the stack.
 //!
 //! * **What comes in.** A new connection (a TCP segment that only
 //!   synchronises) or a datagram for a port is let in when a port rule opens
 //!   the port to where it comes from, or the socket that takes it (the one
 //!   on the port bound to its address) is open to it (by its application's
-//!   rule, which `netd` sets with [`Firewall::set_exposure`]). A port rule
-//!   that closes the port to the source wins over both, and blocking
+//!   rule, which `network` sets with [`Firewall::set_exposure`]). A port
+//!   rule that closes the port to the source wins over both, and blocking
 //!   everything incoming sets every rule that lets something in aside.
 //!   Replies always come in: the segments of a connection (smoltcp takes
 //!   them if it has the connection), and datagrams from where this machine
@@ -1271,7 +1271,7 @@ mod tests {
         let mut quiet = on(|c| c.log = false);
         assert!(!comes_in(&mut quiet, &syn_from(STRANGER, 1), 0));
         assert_eq!((quiet.log().count(), quiet.stats().probes), (0, 1));
-        // What netd turns away is logged too.
+        // What the network service turns away is logged too.
         quiet.set_config(FirewallConfig::default());
         quiet.note_app_blocked(6, "198.51.100.1:443".parse().unwrap(), "videos", 0);
         let e = &quiet.log().last().unwrap().event;
@@ -1280,8 +1280,8 @@ mod tests {
 
     #[test]
     fn rules_name_applications_as_the_system_does() {
-        // The settings say which applications are let in; netd turns that
-        // into each socket's exposure.
+        // The settings say which applications are let in; the network
+        // service turns that into each socket's exposure.
         let c = FirewallConfig {
             incoming: vec![
                 AppRule { app: "music".to_string(), from: Some(Scope::LocalNetwork {}) },

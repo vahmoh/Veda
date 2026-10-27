@@ -8,9 +8,9 @@
 
 use abi::startup::role::USER;
 
-/// What `init` hands the device manager (`devmgr`): the hardware it shares
-/// out among drivers.
-pub mod devmgr {
+/// What `init` hands the device manager (`device-manager`): the hardware it
+/// shares out among drivers.
+pub mod device_manager {
     use super::USER;
 
     /// The I/O ports.

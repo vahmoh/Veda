@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `netstack` — the network stack behind `netd`.
+//! `netstack` — the network stack behind `network`.
 //!
 //! The stack owns the interfaces (each a smoltcp [`Interface`] with its own
 //! socket set), configures them (DHCPv4, static addresses, IPv6 link-local
 //! and stateless autoconfiguration), picks routes, resolves names (a caching
-//! stub resolver) and implements the socket operations that `netd` offers
-//! to applications.
+//! stub resolver) and implements the socket operations that `network`
+//! offers to applications.
 //!
 //! IPv6 addresses do not embed the hardware address, which would follow the
 //! machine from network to network: their interface identifiers are stable

@@ -62,7 +62,7 @@ wait-serial "about exited with code -1002" 30
 agent-call use_app '{"app":"taskmgr","action":"list_processes","arguments":{"name":"about"}}' 30
 agent-result '"processes":[],"total":0'
 # A system process is not the agent's to end, even when allowed.
-agent-call use_app '{"app":"taskmgr","action":"end_process","arguments":{"name":"vfs"}}' 30
+agent-call use_app '{"app":"taskmgr","action":"end_process","arguments":{"name":"filesystem"}}' 30
 agent-result waiting_for_approval
 wait-serial "approval 2 requested" 10
 wait 1
@@ -70,4 +70,4 @@ agent-mark
 click 0.9375 0.8275
 wait-serial "approval 2 allowed" 10
 agent-expect "system process" 20
-reject-serial "vfs exited"
+reject-serial "filesystem exited"

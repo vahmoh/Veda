@@ -90,7 +90,7 @@ impl Program {
 /// `bin/<binary>`.
 pub const PROGRAMS: &[Program] = &[
     Program::native("init"),
-    Program::native("vfs"),
+    Program::native("filesystem"),
     Program::native("systest"),
     Program::native("nettest"),
     Program::native("testmic"),
@@ -98,10 +98,10 @@ pub const PROGRAMS: &[Program] = &[
     Program::native("fakedec"),
     Program::std("stdcrates"),
     Program::dynamic("plugins"),
-    Program::native("devmgr"),
+    Program::native("device-manager"),
     Program::native("drivervm"),
     Program::native("nvme"),
-    Program::native("netd"),
+    Program::native("network"),
     Program::native("wland").named("wlan"),
     Program::native("compositor"),
     Program::std("about"),
@@ -120,7 +120,7 @@ pub const PROGRAMS: &[Program] = &[
     Program::std("paint"),
     Program::std("shell"),
     Program::std("lock"),
-    Program::std("packagesd").named("packages"),
+    Program::std("package-manager"),
     Program::std("pkg"),
     Program::web("browser"),
 ];

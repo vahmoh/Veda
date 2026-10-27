@@ -729,7 +729,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "devmgr"
+name = "device-manager"
 version = "0.1.0"
 dependencies = [
  "abi",
@@ -988,6 +988,28 @@ dependencies = [
  "ipc",
  "proto",
  "rt",
+]
+
+[[package]]
+name = "filesystem"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "build",
+ "crc32fast",
+ "filesystem-core",
+ "initrd",
+ "ipc",
+ "proto",
+ "rt",
+]
+
+[[package]]
+name = "filesystem-core"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "proto",
 ]
 
 [[package]]
@@ -1686,19 +1708,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "netd"
-version = "0.1.0"
-dependencies = [
- "abi",
- "build",
- "files",
- "ipc",
- "netstack",
- "proto",
- "rt",
-]
-
-[[package]]
 name = "netstack"
 version = "0.1.0"
 dependencies = [
@@ -1717,6 +1726,19 @@ dependencies = [
  "rt",
  "tls",
  "web",
+]
+
+[[package]]
+name = "network"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "build",
+ "files",
+ "ipc",
+ "netstack",
+ "proto",
+ "rt",
 ]
 
 [[package]]
@@ -1845,6 +1867,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "package-manager"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "ipc",
+ "packages",
+ "proto",
+ "rt",
+ "web",
+]
+
+[[package]]
 name = "packages"
 version = "0.1.0"
 dependencies = [
@@ -1856,18 +1890,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "zeroize",
-]
-
-[[package]]
-name = "packagesd"
-version = "0.1.0"
-dependencies = [
- "abi",
- "ipc",
- "packages",
- "proto",
- "rt",
- "web",
 ]
 
 [[package]]
@@ -2843,28 +2865,6 @@ dependencies = [
  "aligned-vec",
  "num-traits",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "vfs"
-version = "0.1.0"
-dependencies = [
- "abi",
- "build",
- "crc32fast",
- "initrd",
- "ipc",
- "proto",
- "rt",
- "vfs-core",
-]
-
-[[package]]
-name = "vfs-core"
-version = "0.1.0"
-dependencies = [
- "abi",
- "proto",
 ]
 
 [[package]]

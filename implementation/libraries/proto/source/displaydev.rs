@@ -19,8 +19,8 @@
 //! is, and the compositor checks it against its framebuffer. A driver that
 //! sets the mode itself (Linux's, in the driver VM) sets the compositor's
 //! ([`displaydev::screen`]). The compositor accepts drivers only
-//! (connections from `devmgr`, which starts them): it closes anyone else's
-//! connection at once.
+//! (connections from `device-manager`, which starts them): it closes anyone
+//! else's connection at once.
 //!
 //! # Flips
 //!
@@ -53,10 +53,10 @@
 //! At the system's start the screen is black (the boot loader clears it),
 //! and the compositor leaves it so until the screen its frames go to from
 //! then on is up: the driver's first picture, if a driver is coming for
-//! the display, which only `devmgr` knows ([`displaydev::expect`]: the
-//! display controller whose memory holds the firmware's framebuffer went to
-//! a driver, the driver VM's Linux's). So nothing moves on a screen a
-//! driver is about to take over, and the startup splash is first seen on
+//! the display, which only `device-manager` knows ([`displaydev::expect`]:
+//! the display controller whose memory holds the firmware's framebuffer
+//! went to a driver, the driver VM's Linux's). So nothing moves on a screen
+//! a driver is about to take over, and the startup splash is first seen on
 //! the screen the desktop will be.
 //!
 //! Whenever a compositor starts (at the system's start, or again after a
@@ -64,8 +64,8 @@
 //! told that no driver is coming, or a driver that keeps that memory only
 //! pixels ([`Screen::firmware_kept`]) attaches, or twenty seconds pass: a
 //! driver that does not keep it may have it already. A compositor started
-//! again hears what is coming as soon as `devmgr` says it again, on a
-//! connection of its own.
+//! again hears what is coming as soon as `device-manager` says it again, on
+//! a connection of its own.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -79,7 +79,7 @@ use rt::vm::Mapping;
 enumeration! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum DisplayDevError {
-        /// Only drivers (started by `devmgr`) may attach.
+        /// Only drivers (started by `device-manager`) may attach.
         Denied = 1,
         /// A driver is attached already.
         Busy = 2,
@@ -172,8 +172,8 @@ protocol! {
         /// The screen the compositor draws on: what a driver that sets the
         /// display's mode itself sets before it attaches.
         2 => fn screen() -> Result<ScreenMode, DisplayDevError>;
-        /// (devmgr) Whether a driver is coming for the display the
-        /// firmware's framebuffer is on, and the device's name (for the
+        /// (`device-manager`) Whether a driver is coming for the display
+        /// the firmware's framebuffer is on, and the device's name (for the
         /// log): said once the devices are known, and again if that changes
         /// (the driver VM failed for good). It holds while the connection
         /// is open.

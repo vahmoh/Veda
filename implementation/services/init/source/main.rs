@@ -573,7 +573,7 @@ impl Init {
                 Ok(theirs)
             }
 
-            /// For the packages service alone.
+            /// For the package manager alone.
             fn refresh_apps(&mut self) -> Result<(), LaunchError> {
                 self.init.refresh_apps(&self.who)
             }

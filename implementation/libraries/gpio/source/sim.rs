@@ -1,15 +1,16 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A controller as its registers behave, for tests: devmgr drives one in
-//! place of a PC's when a test's ACPI table describes it, and host tests
-//! use it too. Every pad starts host-owned, unlocked, in GPIO driver mode,
-//! a GPIO input with nothing on its pin. The pins are wired in pairs: an
-//! even pad of a group, when it is an output, drives the pin of the odd
-//! pad after it, as a test board's loopback wire would. A pad's events
-//! (its level, or an edge, inverted as its configuration says) set its
-//! group's interrupt status, which writing 1 clears; the controller raises
-//! its line while any status is set that its group's enables let through.
+//! A controller as its registers behave, for tests: the device manager
+//! drives one in place of a PC's when a test's ACPI table describes it, and
+//! host tests use it too. Every pad starts host-owned, unlocked, in GPIO
+//! driver mode, a GPIO input with nothing on its pin. The pins are wired in
+//! pairs: an even pad of a group, when it is an output, drives the pin of
+//! the odd pad after it, as a test board's loopback wire would. A pad's
+//! events (its level, or an edge, inverted as its configuration says) set
+//! its group's interrupt status, which writing 1 clears; the controller
+//! raises its line while any status is set that its group's enables let
+//! through.
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;

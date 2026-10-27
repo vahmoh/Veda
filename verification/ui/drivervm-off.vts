@@ -5,6 +5,6 @@
 # the device manager says so, and the desktop comes up without Linux.
 boot-cmdline "drivervm=off"
 fail-on "PANIC"
-wait-serial "devmgr: no driver VM (drivervm=off)" 60
+wait-serial "device-manager: no driver VM (drivervm=off)" 60
 wait-serial "shell: desktop ready" 60
 reject-serial "drivervm: linux:"

@@ -60,11 +60,11 @@ pub fn give(
     windows: &mut Windows,
     reserved: &[Range<u64>],
 ) -> Result<Placed, String> {
-    let resource = pci.device_resource().map_err(|e| format!("devmgr: {e}"))?.map_err(|e| format!("{e:?}"))?;
+    let resource = pci.device_resource().map_err(|e| format!("device-manager: {e}"))?.map_err(|e| format!("{e:?}"))?;
     // The memory the firmware keeps for it, where the PC has it: in the
     // guest's address space, so in its IOMMU domain, before it joins (a
     // function given before may have had the same).
-    let kept = pci.reserved_memory().map_err(|e| format!("devmgr: {e}"))?.map_err(|e| format!("{e:?}"))?;
+    let kept = pci.reserved_memory().map_err(|e| format!("device-manager: {e}"))?.map_err(|e| format!("{e:?}"))?;
     let mut ranges = Vec::new();
     let mut mapped = Mapped { guest, ranges: Vec::new() };
     for k in &kept {
@@ -130,8 +130,10 @@ fn map_bars(
         let address = windows
             .place(b.size, !is64)
             .ok_or_else(|| format!("no room for BAR {} ({} KiB)", b.index, b.size / 1024))?;
-        let vmo =
-            pci.map_bar(b.index).map_err(|e| format!("devmgr: {e}"))?.map_err(|e| format!("BAR {}: {e:?}", b.index))?;
+        let vmo = pci
+            .map_bar(b.index)
+            .map_err(|e| format!("device-manager: {e}"))?
+            .map_err(|e| format!("BAR {}: {e:?}", b.index))?;
         guest
             .map(&vmo, 0, b.size as usize, address, map_flags::READ | map_flags::WRITE)
             .map_err(|e| format!("BAR {} cannot be mapped: {e}", b.index))?;
@@ -214,7 +216,7 @@ pub fn intel_gpu(pci: &pcidev::Client, name: &str) -> (Option<Vec<u8>>, Option<H
             None
         }
         Err(e) => {
-            println!("{name}: devmgr: {e}");
+            println!("{name}: device-manager: {e}");
             None
         }
     };

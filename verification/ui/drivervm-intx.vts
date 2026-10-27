@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 # A card without MSIs: QEMU's Intel 82540EM ("e1000") interrupts through
-# its INTx, a level-triggered line of the I/O APIC. devmgr finds where the
-# firmware wires it (its _PRT), the driver VM gets the line, and the
-# guest's ACPI tables route the card's INTx to it: Linux's e1000 drives the
-# card through the line, which stays masked from when it fires until
+# its INTx, a level-triggered line of the I/O APIC. The device manager finds
+# where the firmware wires it (its _PRT), the driver VM gets the line, and
+# the guest's ACPI tables route the card's INTx to it: Linux's e1000 drives
+# the card through the line, which stays masked from when it fires until
 # Linux's end-of-interrupt. The card attaches to the network service and
 # gets an address by DHCP; nettest checks ping, TCP and HTTP through it,
 # against a server of the host's (no Internet needed).

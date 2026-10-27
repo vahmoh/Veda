@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "network"
+description = "The network service: interfaces, DHCP, DNS, routing and sockets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "network"
+path = "source/main.rs"
+test = false
+bench = false
+
+[dependencies]
+rt = { workspace = true }
+abi = { workspace = true }
+ipc = { workspace = true }
+proto = { workspace = true }
+netstack = { workspace = true }
+files = { workspace = true }
+
+[build-dependencies]
+build = { workspace = true }
+
+[lints]
+workspace = true

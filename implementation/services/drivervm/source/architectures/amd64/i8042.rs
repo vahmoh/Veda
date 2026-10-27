@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The PC's keyboard controller (the i8042), when devmgr gives it the
-//! guest: Linux's driver of it reaches its two ports through the monitor,
-//! which carries the reads and writes out on the controller, the commands
-//! only if they are those Linux's drivers give
+//! The PC's keyboard controller (the i8042), when the device manager gives
+//! it the guest: Linux's driver of it reaches its two ports through the
+//! monitor, which carries the reads and writes out on the controller, the
+//! commands only if they are those Linux's drivers give
 //! (`drivervm_core::architecture::i8042`): the controller also drives the
 //! processor's reset line, which none of them touches. Its interrupts are
 //! the guest's lines 1 and 12 (the keyboard's and the mouse's, edges: see

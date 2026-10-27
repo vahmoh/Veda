@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The packages service: the system image's repository is there, valid and
+//! The package manager: the system image's repository is there, valid and
 //! empty, at every start; packages install from a repository the test adds
 //! (the image's test repositories, signed by their own key), with what they
 //! depend on, and run from `/home/packages`, which only the service changes;
@@ -37,7 +37,7 @@ const TEST_APPS: &str = "file:///system/tests/packages/apps";
 /// under emulation.
 const CALL_NS: u64 = 120_000_000_000;
 /// How long the launcher may take to list what a change did, which it
-/// reads once the packages service has told it.
+/// reads once the package manager has told it.
 const LISTED_SECONDS: u64 = 30;
 
 fn err<E: core::fmt::Display>(e: E) -> String {
@@ -132,7 +132,7 @@ pub fn test_packages() -> TestResult {
     let outcome = answered(p.apply(install(&["hello"]), plan.digest, None))?;
     check(outcome.installed == 2, "two packages installed")?;
     // Its program runs from where everyone reads it, which no one but the
-    // packages service changes.
+    // package manager changes.
     let (code, out) = crate::posix::run_c("/home/packages/bin/hello", &[], "/tmp")?;
     check(code == 42 && out.contains("Hello from C on Veda!"), "the installed program runs")?;
     let st = fs.stat("/home/packages/bin/hello".into()).map_err(err)?.map_err(err)?;

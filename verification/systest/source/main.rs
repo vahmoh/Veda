@@ -124,7 +124,7 @@ fn test_launcher() -> TestResult {
     let l = launcher::Client::new(ch);
     let tasks = l.tasks().map_err(|e| e.to_string())?;
     check(tasks.iter().any(|t| t.name == "init"), "init is running")?;
-    check(tasks.iter().any(|t| t.name == "vfs"), "vfs is running")
+    check(tasks.iter().any(|t| t.name == "filesystem"), "filesystem is running")
 }
 
 /// The supervisor in `init` restarts crashed system services: once the

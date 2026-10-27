@@ -15,7 +15,7 @@ fail-on "PANIC"
 fail-on "abacus crashed"
 fail-on "the connection to the VFS is lost"
 wait-serial "desktop ready" 90
-wait-serial "packages: ready (0 installed; repositories: system)" 60
+wait-serial "package-manager: ready (0 installed; repositories: system)" 60
 wait-serial "started terminal" 60
 wait 3
 # Maximise the window (Super+Up).
@@ -23,11 +23,11 @@ key meta_l-up
 wait 2
 type "pkg repo add apps file:///system/tests/packages/apps /system/tests/packages/test.pub && pkg update && logger apps-added-ok"
 key ret
-wait-serial "packages: apps: 2 packages (serial 1)" 60
+wait-serial "package-manager: apps: 2 packages (serial 1)" 60
 wait-serial "terminal: apps-added-ok" 60
 type "pkg install -y abacus impostor && logger apps-installed-ok"
 key ret
-wait-serial "packages: installed abacus 1.0 (from apps)" 180
+wait-serial "package-manager: installed abacus 1.0 (from apps)" 180
 wait-serial "terminal: apps-installed-ok" 60
 wait-serial "init: /home/packages/apps/terminal.app is left out: its id is the system's own" 30
 wait-serial "init: /home/packages/apps/stray.app is left out: its program is not a plain path" 30
@@ -52,7 +52,7 @@ wait 2
 checkpoint
 type "pkg remove -y abacus impostor && logger apps-removed-ok"
 key ret
-wait-serial "packages: removed abacus 1.0" 120
+wait-serial "package-manager: removed abacus 1.0" 120
 wait-serial "terminal: apps-removed-ok" 60
 wait-serial "init: 0 application(s) of installed packages" 30
 wait-serial "shell: the applications changed" 30

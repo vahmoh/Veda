@@ -76,9 +76,9 @@ enumeration! {
         TooManyStreams = 4,
         /// A device is already attached.
         Busy = 5,
-        /// The caller may not do that: only devmgr's drivers attach devices
-        /// and say what is coming, and only the voice agent ducks the
-        /// other sound.
+        /// The caller may not do that: only the device manager's drivers
+        /// attach devices and say what is coming, and only the voice agent
+        /// ducks the other sound.
         Denied = 6,
     }
 }
@@ -214,8 +214,9 @@ message! {
         /// is no sound hardware and audio is consumed silently in real
         /// time).
         pub device: String,
-        /// No output device is attached yet, but one is coming: `devmgr`
-        /// gave a sound card to its driver ([`audiodev::expect`]).
+        /// No output device is attached yet, but one is coming:
+        /// `device-manager` gave a sound card to its driver
+        /// ([`audiodev::expect`]).
         pub coming: bool,
         pub rate: u32,
         pub channels: u32,
@@ -310,17 +311,17 @@ message! {
 
 protocol! {
     /// Sound drivers attach their devices to the audio service. Only the
-    /// drivers devmgr starts may (any other program's connection is
-    /// closed); the test microphone (`testmic`) may attach an input device,
-    /// which a driver's then replaces.
+    /// drivers the device manager starts may (any other program's
+    /// connection is closed); the test microphone (`testmic`) may attach an
+    /// input device, which a driver's then replaces.
     pub mod audiodev = "audiodev" {
         1 => fn attach(format: DeviceFormat) -> Result<DeviceLink, AudioError>;
         /// Attaches an input (capture) device. `format.max_periods` is
         /// unused.
         2 => fn attach_input(format: DeviceFormat) -> Result<InputLink, AudioError>;
-        /// (devmgr) Whether a sound card's driver is starting, and the
-        /// card's name (for the log): its output device is coming. It holds
-        /// while the connection is open.
+        /// (`device-manager`) Whether a sound card's driver is starting,
+        /// and the card's name (for the log): its output device is coming.
+        /// It holds while the connection is open.
         3 => fn expect(device: Option<String>) -> Result<(), AudioError>;
     }
 }

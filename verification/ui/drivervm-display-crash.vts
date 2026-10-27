@@ -4,8 +4,9 @@
 # Linux crashes while it drives the display (QEMU's VGA, as in
 # drivervm-display.vts), soon after the startup sequence: the compositor
 # goes on drawing in place, into its pictures and the firmware's
-# framebuffer, devmgr starts a new driver VM, and its display driver
-# attaches to the compositor again, which shows the desktop through it.
+# framebuffer, the device manager starts a new driver VM, and its display
+# driver attaches to the compositor again, which shows the desktop through
+# it.
 gpu off
 boot-cmdline "drivervm.crash=4"
 fail-on "PANIC"
