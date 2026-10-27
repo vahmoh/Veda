@@ -49,8 +49,8 @@ memory and their devices.
    `Guest` objects (guest-physical memory made of VMOs, and its devices'
    IOMMU domain) and `Vcpu` objects, and handles only what must be fast or
    belongs to the processor (the local APIC and its timer, `cpuid`, MSRs,
-   `hlt`, control registers). Policy is the monitor's: `drivervm`, an
-   ordinary process.
+   `hlt`, control registers). Policy is the monitor's:
+   `driver-virtual-machine`, an ordinary process.
 5. **Devices are given whole, behind the IOMMU.** A given PCI function's
    DMA reaches only the guest's memory, and its interrupts are remapped;
    without an IOMMU no PCI function is given away. A USB controller goes
@@ -62,10 +62,10 @@ memory and their devices.
 7. **Time is shared.** The guest reads the host's TSC unchanged and
    computes Veda's monotonic time itself, so timestamps mean the same on
    both sides.
-8. **The driver VM is restartable.** When Linux crashes, `drivervm` ends,
-   and `device-manager` resets the devices and starts a new one (unless
-   Linux powered it off), later after each run that fails within a minute,
-   and not at all after a few.
+8. **The driver VM is restartable.** When Linux crashes,
+   `driver-virtual-machine` ends, and `device-manager` resets the devices
+   and starts a new one (unless Linux powered it off), later after each run
+   that fails within a minute, and not at all after a few.
 9. **Linux is a port.** A pinned release, configured with only what the
    platform and the devices need (`implementation/ports/linux/veda.config`
    and the architecture's), and a platform patch. The guest's programs are
@@ -80,8 +80,8 @@ memory and their devices.
 | `hv` | `implementation/libraries/hv` | The platform's and the bridge's ABIs, the guest's ACPI tables, a given function's configuration space; on AMD64 the virtual local APIC, `cpuid` and Linux's boot protocol |
 | `iommu` | `implementation/libraries/iommu` | The DMAR table; the units' registers and structures |
 | Device manager | `implementation/services/device-manager` | Picks the driver VM's devices, serves their `pcidev` channels, resets them, restarts the driver VM |
-| Monitor | `implementation/services/drivervm` | The machine, its hypercalls and PCI functions, the bridge, the narrowed registry |
-| `drivervm-core` | `implementation/services/drivervm/core` | The monitor's decisions that touch no object: the bridge's books, the guest's budget and window, where functions and BARs go, the keyboard controller's commands |
+| Monitor | `implementation/services/driver-virtual-machine` | The machine, its hypercalls and PCI functions, the bridge, the narrowed registry |
+| `driver-virtual-machine-core` | `implementation/services/driver-virtual-machine/core` | The monitor's decisions that touch no object: the bridge's books, the guest's budget and window, where functions and BARs go, the keyboard controller's commands |
 | Guest kernel | `implementation/ports/linux` | Linux with `veda.patch` (`hvc_veda.c`, `drivers/virt/veda/bridge.c` and `efi.c`, `gpio-veda.c`, an i915 change) and `architectures/amd64/veda.patch` (`arch/x86/kernel/cpu/veda.c`, `arch/x86/pci/veda.c`) |
 | Guest runtime | `implementation/libraries/rt/source/guest.rs` | `rt`'s system calls through `/dev/veda`; watches |
 | Guest programs | `implementation/guests/linux` | `init`; the drivers `input`, `alsa`, `net`, `wifi`, `kms` and `renderer`; `logkeeper`; the tests `bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `timertest`, `kmspause`; shared code (`sys`, `netlink`) |
@@ -116,7 +116,7 @@ root, its functions and their INTx routing (`_PRT`), the keyboard
 controller and the platform's GPIO controllers; there is no MADT.
 
 On AMD64 the monitor boots Linux through the x86 boot protocol's 64-bit
-entry (`implementation/services/drivervm/source/architectures/amd64/boot.rs`).
+entry (`implementation/services/driver-virtual-machine/source/architectures/amd64/boot.rs`).
 The memory map leaves out the first 64 KiB (the processors' start-up GDT
 and page tables) and the legacy hole, where the ACPI tables are, from
 0xE0000 as on a PC.
@@ -164,8 +164,9 @@ Every PCI function goes to the driver VM except those Veda keeps
 storage controllers, functions Veda has drivers of its own for, and the
 platform's own (bridges, system peripherals, the SMBus, the firmware's
 flash controller). A laptop's I2C and SPI controllers, with its touchpad
-and speaker amplifiers, are Linux's. `drivervm.devices=VID:DID,...` adds
-functions Veda would keep; `drivervm=off` gives nothing.
+and speaker amplifiers, are Linux's.
+`driver-virtual-machine.devices=VID:DID,...` adds functions Veda would keep;
+`driver-virtual-machine=off` gives nothing.
 
 The driver VM runs where the processors run virtual machines (VMX with
 EPT) and the image has its Linux, and gets PCI functions only where an
@@ -292,8 +293,8 @@ the processor's reset line and the A20 gate, so the monitor, which carries
 out every access to the two ports, passes only the commands Linux's
 driver gives (none touches the output port) and drops the rest: a data
 byte is a command's parameter or the keyboard's, never the output port's
-(`drivervm_core::architecture::i8042`). The guest does not reach the
-ports around them, such as 0x61 with the NMI switches.
+(`driver_virtual_machine_core::architecture::i8042`). The guest does not
+reach the ports around them, such as 0x61 with the NMI switches.
 
 ## Veda's drivers for Linux
 
@@ -414,9 +415,10 @@ eight latest starts.
 
 The guest's kernel lets a file use only the handles it made or received,
 and closes them when the file closes. The guest's registry
-(`implementation/services/drivervm/source/registry.rs`) lets it connect only
-to `audiodev`, `displaydev`, `netdev`, `wlanphy` and `input`, and
-register only `gpu`, through 32 channels at most (one per program).
+(`implementation/services/driver-virtual-machine/source/registry.rs`) lets
+it connect only to `audiodev`, `displaydev`, `netdev`, `wlanphy` and
+`input`, and register only `gpu`, through 32 channels at most (one per
+program).
 
 Whatever Linux does, what it makes Veda keep is bounded; an operation
 beyond a bound is refused (`LimitReached`):
@@ -425,8 +427,8 @@ beyond a bound is refused (`LimitReached`):
 |------|-------|
 | Handles | 16384, those in messages it sent itself included |
 | Waits that go on | Their items fit one kernel wait (`abi::WAIT_MANY_MAX`, less the waiter's event); with the finished waits not yet in the ring, at most what the ring holds |
-| Veda's memory | A quarter of the PC's, 512 MiB at least: the VMOs it made (by size, while it or a message on its way to it holds them; pages are committed as used), the messages it sent itself until it reads them, and its window mappings (`drivervm_core::ledger`) |
-| Window mappings | 4096 (`drivervm_core::window`) |
+| Veda's memory | A quarter of the PC's, 512 MiB at least: the VMOs it made (by size, while it or a message on its way to it holds them; pages are committed as used), the messages it sent itself until it reads them, and its window mappings (`driver_virtual_machine_core::ledger`) |
+| Window mappings | 4096 (`driver_virtual_machine_core::window`) |
 
 Closing a handle a wait names ends the wait, so a closed channel's peer
 sees it closed.
@@ -542,24 +544,24 @@ script runs the driver VM, and the GUI scripts need it:
 
 ```bash
 cargo automation script verification/ui/drivervm-restart.vts   # Linux crashes, then its monitor is killed; the wired card comes back
-cargo automation run --no-iommu                  # no IOMMU in QEMU: no PCI function goes to the driver VM
-cargo automation run --cmdline "drivervm=off"    # no driver VM at all
+cargo automation run --no-iommu                                # no IOMMU in QEMU: no PCI function goes to the driver VM
+cargo automation run --cmdline "driver-virtual-machine=off"    # no driver VM at all
 ```
 
 Its options are on the kernel command line:
 
 | Option | Effect |
 |--------|--------|
-| `drivervm=off` | No driver VM |
-| `drivervm` | Start it even without devices |
-| `drivervm.devices=VID:DID,...` | Give it these functions too, which Veda would keep |
-| `drivervm.memory=MIB` | Its memory: 256 by default; 1024 with an integrated GPU, whose memory is the guest's (less where the firmware's reserved memory starts lower) |
-| `drivervm.cpus=N` | Its processors: 2 by default |
-| `drivervm.run=PROGRAM,...` | Programs of the guest's `/bin` for its `init` to run |
-| `drivervm.poweroff` | Power off once they are done |
-| `drivervm.crash=SECONDS` | Linux crashes once, that long after it starts |
-| `drivervm.cmdline=...` | Added to Linux's command line, commas for spaces; `veda.kill=NAME:SECONDS` ends a guest program by SIGKILL, and `veda.stop=NAME:SECONDS` ends a driver for good (`init` does not start it again) |
-| `drivervm.renderer=softpipe` | The renderer renders on softpipe, without a GPU |
+| `driver-virtual-machine=off` | No driver VM |
+| `driver-virtual-machine` | Start it even without devices |
+| `driver-virtual-machine.devices=VID:DID,...` | Give it these functions too, which Veda would keep |
+| `driver-virtual-machine.memory=MIB` | Its memory: 256 by default; 1024 with an integrated GPU, whose memory is the guest's (less where the firmware's reserved memory starts lower) |
+| `driver-virtual-machine.cpus=N` | Its processors: 2 by default |
+| `driver-virtual-machine.run=PROGRAM,...` | Programs of the guest's `/bin` for its `init` to run |
+| `driver-virtual-machine.poweroff` | Power off once they are done |
+| `driver-virtual-machine.crash=SECONDS` | Linux crashes once, that long after it starts |
+| `driver-virtual-machine.cmdline=...` | Added to Linux's command line, commas for spaces; `veda.kill=NAME:SECONDS` ends a guest program by SIGKILL, and `veda.stop=NAME:SECONDS` ends a driver for good (`init` does not start it again) |
+| `driver-virtual-machine.renderer=softpipe` | The renderer renders on softpipe, without a GPU |
 
 Scripts (`automation/source/script.rs`) can add a firmware variable to
 OVMF's store (`firmware-variable`) or an ACPI table (`acpi-table`), a USB
@@ -569,9 +571,9 @@ which renders on the host's GPU the firmware showed its screen on, or the
 one `VEDA_RENDERNODE` names.
 
 What touches no hardware is unit-tested on the host: `hv`, `iommu`,
-`drivervm-core`, and the guest programs' logic (touchpads, sound cards'
-devices, display modes, the stick's logs, network interfaces and their
-links, retries).
+`driver-virtual-machine-core`, and the guest programs' logic (touchpads,
+sound cards' devices, display modes, the stick's logs, network interfaces
+and their links, retries).
 The renderer's decoder is tested through `gl`'s tests, on softpipe and on
 Mesa's virgl over virglrenderer's test server
 ([Developing](DEVELOPING.md)).

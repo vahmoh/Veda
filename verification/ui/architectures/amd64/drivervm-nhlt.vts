@@ -9,10 +9,10 @@
 # firmware does, after the FADT, and Linux finds it there.
 acpi-table nhlt
 sound hda
-boot-cmdline "drivervm.poweroff"
+boot-cmdline "driver-virtual-machine.poweroff"
 fail-on "PANIC"
-fail-on "drivervm: processor"
+fail-on "driver-virtual-machine: processor"
 wait-serial "comes with the firmware's NHLT (37 bytes)" 60
 wait-serial "000025 (v00 VEDA   TESTNHLT 00000001 VEDA 00000001)" 60
-wait-serial "drivervm: Linux powered the machine off" 60
+wait-serial "driver-virtual-machine: Linux powered the machine off" 60
 reject-serial "is not a whole table"

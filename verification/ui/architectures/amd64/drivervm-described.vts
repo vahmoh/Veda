@@ -13,7 +13,7 @@
 # (and is skipped where QEMU has none).
 gpu on
 acpi-table touchpad
-boot-cmdline "drivervm.run=pcitest drivervm.poweroff"
+boot-cmdline "driver-virtual-machine.run=pcitest driver-virtual-machine.poweroff"
 fail-on "PANIC"
 fail-on "pcitest: FAIL"
 wait-serial "acpi: 00:10.0 is \_SB.PCI0.S80, with \_SB.PCI0.S80.TPD0 (VTST0001)" 60
@@ -21,7 +21,7 @@ wait-serial "the guest has \_SB.PCI0.S80.TPD0 (VTST0001) below it, its HID descr
 expect-serial "\_SB.PCI0.S80.TPD0: interrupt 0 on GSI 10 (level, active high)"
 wait-serial "is \_SB_.PCI0.S80_, with \_SB_.PCI0.S80_.TPD0 (VTST0001)" 60
 wait-serial "pcitest: PASS" 60
-wait-serial "drivervm: Linux powered the machine off" 30
+wait-serial "driver-virtual-machine: Linux powered the machine off" 30
 reject-serial "ACPI Error"
 reject-serial "ACPI BIOS Error"
 reject-serial "ACPI Exception"

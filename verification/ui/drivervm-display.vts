@@ -12,7 +12,7 @@
 gpu off
 boot-cmdline "run=editor"
 fail-on "PANIC"
-fail-on "drivervm: processor"
+fail-on "driver-virtual-machine: processor"
 wait-serial "goes to the driver VM" 60
 wait-serial "kms: bochs-drm (Linux): attached to the compositor" 90
 expect-serial "the compositor's pictures shown as they are"

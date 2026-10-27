@@ -12,11 +12,11 @@ use alloc::vec::Vec;
 use abi::irq_flags;
 use rt::object::{Handle, Interrupt, IoPorts, Resource};
 
-use proto::startup::drivervm::{I8042_COMMAND, I8042_DATA, I8042_KEYBOARD, I8042_MOUSE};
+use proto::startup::driver_virtual_machine::{I8042_COMMAND, I8042_DATA, I8042_KEYBOARD, I8042_MOUSE};
 
 /// Roles of the keyboard controller's data port, its command port, and its
 /// keyboard's and mouse's interrupts, which the driver VM gets.
-const DRIVERVM_I8042_ROLES: [u32; 4] = [I8042_DATA, I8042_COMMAND, I8042_KEYBOARD, I8042_MOUSE];
+const DRIVER_VM_I8042_ROLES: [u32; 4] = [I8042_DATA, I8042_COMMAND, I8042_KEYBOARD, I8042_MOUSE];
 
 struct I8042 {
     data: IoPorts,
@@ -43,7 +43,7 @@ impl I8042 {
             self.keyboard.0.duplicate(None),
             self.mouse.0.duplicate(None),
         ];
-        DRIVERVM_I8042_ROLES.into_iter().zip(handles).map(|(role, h)| Some((role, h.ok()?))).collect()
+        DRIVER_VM_I8042_ROLES.into_iter().zip(handles).map(|(role, h)| Some((role, h.ok()?))).collect()
     }
 }
 

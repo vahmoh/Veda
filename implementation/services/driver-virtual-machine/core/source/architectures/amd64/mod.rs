@@ -3,7 +3,7 @@
 
 //! What the monitor decides on AMD64 that reaches no object of Veda's
 //! (the program's own part is
-//! `implementation/services/drivervm/source/architectures/amd64`).
+//! `implementation/services/driver-virtual-machine/source/architectures/amd64`).
 //!
 //! * [`i8042`]: the PC's keyboard controller, as the guest may drive it.
 //! * How many MSIs the guest's functions may have at once ([`MAX_MSIS`]).

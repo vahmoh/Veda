@@ -7,9 +7,10 @@
 //! channels that carry messages and handles, events, memory objects
 //! (VMOs) it maps, waits on their signals. The objects live in Veda; the
 //! guest holds them through handles of its own, numbers that only the
-//! monitor (`drivervm`) gives meaning to. So a guest reaches exactly the
-//! objects it was given or created, and the protocols of Veda's drivers
-//! (`audiodev`, `displaydev`, ...) work across the boundary unchanged.
+//! monitor (`driver-virtual-machine`) gives meaning to. So a guest reaches
+//! exactly the objects it was given or created, and the protocols of Veda's
+//! drivers (`audiodev`, `displaydev`, ...) work across the boundary
+//! unchanged.
 //!
 //! Each operation stands for the system call of its name. A program asks
 //! Linux's bridge driver for it (an `ioctl` on `/dev/veda`, with the

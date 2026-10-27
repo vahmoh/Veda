@@ -164,7 +164,8 @@ type(scope): description
 
 - **type**: one of the table below.
 - **scope**: what changed, as one lowercase word: a component (`kernel`,
-  `firewall`, `shell`, `drivervm`), or `repo` for the whole repository.
+  `firewall`, `shell`, `driver-virtual-machine`), or `repo` for the whole
+  repository.
 - **description**: imperative and lowercase ("add", not "added" or
   "adds"), without a full stop, the whole line 72 characters at most.
 - **Nothing else**: no body or footer. The pull request explains.

@@ -66,7 +66,7 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("gl", &[]),
     ("egl", &[]),
     ("hv", &[]),
-    ("drivervm-core", &[]),
+    ("driver-virtual-machine-core", &[]),
     ("iommu", &[]),
     ("packages", &["std"]),
     ("interceptor-game", &[]),

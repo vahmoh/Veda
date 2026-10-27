@@ -13,7 +13,7 @@ net ethernet
 nic e1000
 nettest local
 fail-on "PANIC"
-fail-on "drivervm: processor"
+fail-on "driver-virtual-machine: processor"
 fail-on "nettest: FAIL"
 wait-serial "goes to the driver VM" 60
 wait-serial "INTA# on GSI" 30

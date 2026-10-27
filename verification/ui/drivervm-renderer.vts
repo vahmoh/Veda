@@ -10,8 +10,8 @@
 # has by default: the guest gets 1 GiB, and the machine 2.
 gpu off
 memory 2048
-boot-cmdline "drivervm.memory=1024"
-boot-cmdline "drivervm.renderer=softpipe"
+boot-cmdline "driver-virtual-machine.memory=1024"
+boot-cmdline "driver-virtual-machine.renderer=softpipe"
 boot-cmdline "run=interceptor"
 fail-on "PANIC"
 fail-on "renderer: commands refused"

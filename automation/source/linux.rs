@@ -20,7 +20,7 @@
 //!   architecture's in
 //!   `implementation/ports/linux/architectures/<architecture>/`). Both go
 //!   into the system image (`linux/kernel`, `linux/initramfs.cpio`), where
-//!   `drivervm` finds them.
+//!   `driver-virtual-machine` finds them.
 //!
 //! The renderer's Rust half goes to Mesa's build through a place of the
 //! Linux build's own (`build/librenderer.a`), where every build copies the

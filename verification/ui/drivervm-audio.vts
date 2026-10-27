@@ -12,7 +12,7 @@ sound hda
 boot-cmdline "startup-sound=off"
 boot-cmdline "run=music"
 fail-on "PANIC"
-fail-on "drivervm: processor"
+fail-on "driver-virtual-machine: processor"
 wait-serial "alsa: attached to the audio service" 90
 wait-serial "music: library: 7 track(s)" 90
 wait-serial "music: covers: 7 ready" 60

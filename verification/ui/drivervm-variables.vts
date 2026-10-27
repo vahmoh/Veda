@@ -10,12 +10,12 @@
 # change them.
 firmware-variable VedaTest 4c9c67e7-ba9b-4464-baa5-3e0538e7a82d 7 617320746865205043206b65657073206974
 firmware-variable VedaBootOnly 4c9c67e7-ba9b-4464-baa5-3e0538e7a82d 3 01
-boot-cmdline "drivervm.run=efivartest drivervm.poweroff"
+boot-cmdline "driver-virtual-machine.run=efivartest driver-virtual-machine.poweroff"
 fail-on "PANIC"
 fail-on "efivartest: FAIL"
-wait-serial "drivervm: the PC's firmware variables:" 60
+wait-serial "driver-virtual-machine: the PC's firmware variables:" 60
 wait-serial "veda: the PC's firmware variables, read-only" 60
-wait-serial "drivervm: the guest read the firmware variable VedaTest-4c9c67e7-ba9b-4464-baa5-3e0538e7a82d (18 bytes)" 60
+wait-serial "driver-virtual-machine: the guest read the firmware variable VedaTest-4c9c67e7-ba9b-4464-baa5-3e0538e7a82d (18 bytes)" 60
 wait-serial "efivartest: PASS" 30
-wait-serial "drivervm: Linux powered the machine off" 30
+wait-serial "driver-virtual-machine: Linux powered the machine off" 30
 reject-serial "VedaBootOnly"

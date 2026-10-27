@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `drivervm` — the driver VM.
+//! `driver-virtual-machine` — the driver VM.
 //!
 //! Runs Linux in a virtual machine, for the drivers Veda takes from it
 //! (see `documentation/DRIVERVM.md`). The machine is Veda's paravirtual
@@ -12,7 +12,7 @@
 //! processors, one thread each, and serves the hypercalls. What is
 //! particular to the architecture (booting Linux, the PC's own devices,
 //! the guest's memory map below 4 GiB) is in `architecture`
-//! (`implementation/services/drivervm/source/architectures/<architecture>/`).
+//! (`implementation/services/driver-virtual-machine/source/architectures/<architecture>/`).
 //!
 //! Programs in the guest reach Veda's objects through the bridge
 //! (`hv::bridge`): this program keeps the guest's handles and carries out
@@ -22,8 +22,8 @@
 //!
 //! What the monitor decides that reaches no object of Veda's (the bridge's
 //! books, where the guest's functions and their BARs go, the keyboard
-//! controller's commands) is its library (`drivervm`, `source/lib.rs`),
-//! tested on the host.
+//! controller's commands) is its library (`driver-virtual-machine-core`,
+//! `core/`), tested on the host.
 //!
 //! It gives the guest the PCI functions the device manager hands over
 //! (`pci`): their DMA into the guest's memory only, their BARs, their
@@ -65,7 +65,7 @@ mod variables;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use proto::startup::drivervm as roles;
+use proto::startup::driver_virtual_machine as roles;
 use rt::object::{Channel, Resource, Vmo};
 use rt::println;
 

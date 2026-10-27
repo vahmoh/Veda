@@ -12,8 +12,8 @@ web-server
 gpu off
 memory 2048
 agent-asleep
-boot-cmdline "drivervm.renderer=softpipe"
-boot-cmdline "drivervm.cmdline=veda.stop=renderer:120"
+boot-cmdline "driver-virtual-machine.renderer=softpipe"
+boot-cmdline "driver-virtual-machine.cmdline=veda.stop=renderer:120"
 fail-on "PANIC"
 wait-serial "desktop ready" 90
 wait-serial "service 'gpu' registered" 60

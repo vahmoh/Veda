@@ -99,7 +99,7 @@ pub const PROGRAMS: &[Program] = &[
     Program::std("stdcrates"),
     Program::dynamic("plugins"),
     Program::native("device-manager"),
-    Program::native("drivervm"),
+    Program::native("driver-virtual-machine"),
     Program::native("nvme"),
     Program::native("network"),
     Program::native("wland").named("wlan"),

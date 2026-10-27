@@ -35,7 +35,7 @@ const SAMPLE_NS: u64 = 1_000_000_000;
 /// True for device drivers (shown with a chip icon), the driver VM's
 /// monitor among them.
 fn is_driver(name: &str) -> bool {
-    name.starts_with("virtio-") || name == "drivervm"
+    name.starts_with("virtio-") || name == "driver-virtual-machine"
 }
 
 /// One row of the process table.

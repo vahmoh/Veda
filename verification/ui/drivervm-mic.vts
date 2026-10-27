@@ -10,7 +10,7 @@ sound hda
 audio silent
 boot-cmdline "run=audiotest:record,3"
 fail-on "PANIC"
-fail-on "drivervm: processor"
+fail-on "driver-virtual-machine: processor"
 fail-on "audiotest: FAIL"
 wait-serial "alsa: attached to the audio service (with recording)" 90
 wait-serial "audiotest: input device HDA Intel (Linux)" 60

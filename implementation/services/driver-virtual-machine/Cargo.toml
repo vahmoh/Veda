@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "drivervm"
+name = "driver-virtual-machine"
 description = "The driver VM: Linux in a virtual machine, for the drivers Veda takes from it"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "drivervm"
+name = "driver-virtual-machine"
 path = "source/main.rs"
 test = false
 bench = false
@@ -19,7 +19,7 @@ bootinfo = { workspace = true }
 rt = { workspace = true }
 abi = { workspace = true }
 hv = { workspace = true }
-drivervm-core = { path = "core" }
+driver-virtual-machine-core = { path = "core" }
 ipc = { workspace = true }
 proto = { workspace = true }
 initrd = { workspace = true }

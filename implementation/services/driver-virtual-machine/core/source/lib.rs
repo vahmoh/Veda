@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! What the driver VM's monitor decides that reaches no object of Veda's,
-//! apart from the program (`implementation/services/drivervm`) so that its
-//! unit tests run on the host. The program keeps the objects and makes the system calls; these
-//! keep the books and say what may be done:
+//! apart from the program
+//! (`implementation/services/driver-virtual-machine`) so that its unit
+//! tests run on the host. The program keeps the objects and makes the
+//! system calls; these keep the books and say what may be done:
 //!
 //! * [`waits`]: the guest's waits that go on, within what the kernel waits
 //!   on at once, and what becomes of each at the end of a round.

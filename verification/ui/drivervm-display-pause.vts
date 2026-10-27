@@ -8,7 +8,7 @@
 # compositor draws into all of the driver's pictures meanwhile, in place,
 # and flips again once the driver carries out the flip it was given up at.
 gpu off
-boot-cmdline "drivervm.run=kmspause"
+boot-cmdline "driver-virtual-machine.run=kmspause"
 fail-on "PANIC"
 wait-serial "kms: bochs-drm (Linux): showing the compositor's frames, 1280x800" 120
 wait-serial "kmspause: kms paused" 60

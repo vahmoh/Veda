@@ -12,7 +12,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use abi::{VcpuExit, vcpu_exit};
-use proto::startup::drivervm as roles;
+use proto::startup::driver_virtual_machine as roles;
 use rt::object::{Interrupt, IoPorts, Vcpu};
 use rt::println;
 use rt::sync::Mutex;

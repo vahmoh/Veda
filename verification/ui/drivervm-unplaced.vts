@@ -15,9 +15,9 @@
 sound hda
 net none
 usb net
-boot-cmdline "device-manager.unplaced=8086:293e,1b36:000d drivervm.run=pcitest"
+boot-cmdline "device-manager.unplaced=8086:293e,1b36:000d driver-virtual-machine.run=pcitest"
 fail-on "PANIC"
-fail-on "drivervm: processor"
+fail-on "driver-virtual-machine: processor"
 fail-on "pcitest: FAIL"
 wait-serial "pci 00:02.0: BAR 0 (16 KiB) unplaced by the firmware: placed at" 60
 wait-serial "pci 00:07.0: BAR 0 (16 KiB) unplaced by the firmware: placed at" 10

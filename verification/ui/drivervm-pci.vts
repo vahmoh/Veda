@@ -7,15 +7,15 @@
 # snd-hda-intel finds it on the platform's PCI, and its codec answers,
 # which takes DMA both ways and interrupts.
 sound hda
-boot-cmdline "drivervm.run=pcitest drivervm.poweroff"
+boot-cmdline "driver-virtual-machine.run=pcitest driver-virtual-machine.poweroff"
 fail-on "PANIC"
-fail-on "drivervm: processor"
+fail-on "driver-virtual-machine: processor"
 fail-on "pcitest: FAIL"
 wait-serial "goes to the driver VM" 60
 wait-serial "is the guest's 00:06.0" 30
 wait-serial "iommu: 00:06.0 is in domain" 30
 wait-serial "pcitest: PASS" 60
-wait-serial "drivervm: Linux powered the machine off" 30
+wait-serial "driver-virtual-machine: Linux powered the machine off" 30
 wait-serial "left domain" 10
 reject-serial "iommu: unit at"
 reject-serial "Linux touched I/O port"

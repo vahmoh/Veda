@@ -13,19 +13,19 @@
 # network service gets its interface back.
 net none
 usb net
-boot-cmdline "drivervm.crash=30"
+boot-cmdline "driver-virtual-machine.crash=30"
 nettest local
 fail-on "PANIC"
-fail-on "drivervm: processor"
+fail-on "driver-virtual-machine: processor"
 fail-on "nettest: FAIL"
 wait-serial "1b36:000d at 00:" 60
 wait-serial "net: usb0 (cdc_ether" 90
 wait-serial "attached as" 30
 wait-serial "nettest: PASS" 300
 reject-serial "iommu: unit at"
-wait-serial "drivervm: Linux crashed" 60
+wait-serial "driver-virtual-machine: Linux crashed" 60
 wait-serial "device-manager: the driver VM ended: Linux crashed; its devices: " 30
-wait-serial "device-manager: started drivervm again" 30
+wait-serial "device-manager: started driver-virtual-machine again" 30
 # The next driver VM's.
 checkpoint
 wait-serial "net: usb0: attached as eth0" 60

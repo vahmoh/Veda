@@ -11,9 +11,9 @@
 # desktop shows the same from either. softpipe is slow under emulation
 # (seconds for a frame of the whole screen), so the script waits long.
 gpu off
-boot-cmdline "drivervm.renderer=softpipe"
+boot-cmdline "driver-virtual-machine.renderer=softpipe"
 fail-on "PANIC"
-fail-on "drivervm: processor"
+fail-on "driver-virtual-machine: processor"
 fail-on "frames stay with the processor"
 fail-on "frames are drawn by the processor from now on"
 fail-on "memory to render into refused"

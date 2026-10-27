@@ -7,10 +7,10 @@
 # narrowed to the services drivers attach to, sends a VMO and an event over
 # a channel, maps the VMO, and waits on events and channels (with
 # deadlines, and woken by another thread).
-boot-cmdline "drivervm.run=bridgetest drivervm.poweroff"
+boot-cmdline "driver-virtual-machine.run=bridgetest driver-virtual-machine.poweroff"
 fail-on "PANIC"
 fail-on "bridgetest: FAIL"
-fail-on "drivervm: processor"
-wait-serial "drivervm: starting Linux" 60
+fail-on "driver-virtual-machine: processor"
+wait-serial "driver-virtual-machine: starting Linux" 60
 wait-serial "bridgetest: PASS" 60
-wait-serial "drivervm: Linux powered the machine off" 30
+wait-serial "driver-virtual-machine: Linux powered the machine off" 30

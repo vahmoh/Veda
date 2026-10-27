@@ -23,13 +23,13 @@
 //! that lets it give them to its guest. It starts when the machine can
 //! give it devices: its processors run virtual machines, an IOMMU confines
 //! the devices to the guest's memory, and the system image has its Linux.
-//! `drivervm.devices=VID:DID,...` gives it devices Veda has drivers for
-//! (a sound card), `drivervm` starts it even without devices (tests), and
-//! `drivervm=off` keeps it off. When it ends without Linux having powered
-//! it off (Linux crashed, or the monitor did), the device manager resets
-//! its devices and starts it again, waiting longer each time it fails soon
-//! after starting (or does not start at all), and giving up after a few
-//! such failures.
+//! `driver-virtual-machine.devices=VID:DID,...` gives it devices Veda has
+//! drivers for (a sound card), `driver-virtual-machine` starts it even
+//! without devices (tests), and `driver-virtual-machine=off` keeps it off.
+//! When it ends without Linux having powered it off (Linux crashed, or the
+//! monitor did), the device manager resets its devices and starts it again,
+//! waiting longer each time it fails soon after starting (or does not start
+//! at all), and giving up after a few such failures.
 //!
 //! At the system's start the window system and the audio service wait for
 //! what the driver VM brings: the display the firmware's framebuffer is on
@@ -71,7 +71,7 @@ use proto::pci::{
     AcpiDevice, AcpiResource, DeviceInfo, HostBridge, InterruptLine, IntxLine, MsiAddress, OpRegion, PciError,
     ReservedMemory, pcidev,
 };
-use proto::startup::{self, device_manager as roles, drivervm::exit_code};
+use proto::startup::{self, device_manager as roles, driver_virtual_machine::exit_code};
 use rt::object::{Channel, Interrupt, Process, Resource, Vmo};
 use rt::println;
 
@@ -642,8 +642,8 @@ fn boot_image() -> Option<(initrd::Archive<'static>, Vmo)> {
 /// A run of the driver VM that ends sooner than this after it started is
 /// a failure; the next start waits longer after each in a row, and stops
 /// after a few.
-const DRIVERVM_STABLE_NS: u64 = 60_000_000_000;
-const DRIVERVM_MAX_FAILURES: u32 = 5;
+const DRIVER_VM_STABLE_NS: u64 = 60_000_000_000;
+const DRIVER_VM_MAX_FAILURES: u32 = 5;
 
 /// How long telling the window system or the audio service what is coming
 /// may take: they answer at once, but may not have started yet (what they
@@ -844,8 +844,9 @@ fn vm_memory(guest: &[GuestDevice], acpi: Option<&Acpi>) -> Option<u64> {
 /// The driver VM: the devices it gets, and its process, which is started
 /// again when it ends without Linux having powered the machine off.
 struct DriverVm {
-    /// Its options: `drivervm.NAME=VALUE` (`drivervm.memory=512`) but
-    /// `devices`, which is the device manager's.
+    /// Its options: `driver-virtual-machine.NAME=VALUE`
+    /// (`driver-virtual-machine.memory=512`) but `devices`, which is the
+    /// device manager's.
     args: Vec<String>,
     devices: Vec<GuestDevice>,
     /// The PC's own devices it gets (`architecture::platform`).
@@ -875,7 +876,7 @@ impl DriverVm {
     ) -> DriverVm {
         let mut args: Vec<String> = options
             .iter()
-            .filter_map(|a| a.strip_prefix("drivervm."))
+            .filter_map(|a| a.strip_prefix("driver-virtual-machine."))
             .filter(|a| !a.starts_with("devices="))
             .map(Into::into)
             .collect();
@@ -912,20 +913,22 @@ impl DriverVm {
     ) {
         self.next_start_ns = None;
         let (Ok(h), Ok(i)) = (self.hypervisor.duplicate(), image.0.duplicate(None)) else {
-            println!("cannot start drivervm: no handles for it");
+            println!("cannot start driver-virtual-machine: no handles for it");
             self.failures += 1;
             self.again();
             return;
         };
-        let mut handles =
-            alloc::vec![(startup::drivervm::HYPERVISOR_RESOURCE, h.into_handle()), (abi::startup::role::INITRD, i)];
+        let mut handles = alloc::vec![
+            (startup::driver_virtual_machine::HYPERVISOR_RESOURCE, h.into_handle()),
+            (abi::startup::role::INITRD, i)
+        ];
         handles.extend(self.platform.handles());
         if let Some(variables) = self.variables.as_ref().and_then(|v| v.0.duplicate(None).ok()) {
-            handles.push((startup::drivervm::VARIABLES, variables));
+            handles.push((startup::driver_virtual_machine::VARIABLES, variables));
         }
         for d in &self.devices {
             let Ok((ours, theirs)) = Channel::create() else { continue };
-            handles.push((startup::drivervm::DEVICE, theirs.into_handle()));
+            handles.push((startup::driver_virtual_machine::DEVICE, theirs.into_handle()));
             let device = Bound {
                 address: d.address,
                 info: d.info.clone(),
@@ -939,11 +942,11 @@ impl DriverVm {
             bound.insert(*next, device);
             *next += 1;
         }
-        // A crash the tests ask for (`drivervm.crash=SECONDS`) is the first
-        // run's.
+        // A crash the tests ask for
+        // (`driver-virtual-machine.crash=SECONDS`) is the first run's.
         let args: Vec<String> =
             self.args.iter().filter(|a| self.starts == 0 || !a.starts_with("crash=")).cloned().collect();
-        self.process = start_program(boot, image, "drivervm", &args, handles);
+        self.process = start_program(boot, image, "driver-virtual-machine", &args, handles);
         if self.process.is_none() {
             // Its devices' channels went with the handles it did not get.
             self.failures += 1;
@@ -952,7 +955,10 @@ impl DriverVm {
         }
         self.starts += 1;
         self.started_ns = rt::time::now_ns();
-        let mut what = String::from(if self.starts > 1 { "started drivervm again" } else { "started drivervm" });
+        let mut what = String::from("started driver-virtual-machine");
+        if self.starts > 1 {
+            what.push_str(" again");
+        }
         for a in &args {
             what.push(' ');
             what.push_str(a);
@@ -966,7 +972,7 @@ impl DriverVm {
     /// Has it start again later, the later the more of its runs in a row
     /// failed, or not at all once too many have.
     fn again(&mut self) {
-        if self.failures > DRIVERVM_MAX_FAILURES {
+        if self.failures > DRIVER_VM_MAX_FAILURES {
             println!("the driver VM keeps failing: its devices stay off");
             return;
         }
@@ -1023,7 +1029,7 @@ impl DriverVm {
             _ => String::from("the monitor crashed"),
         };
         let ran_ns = rt::time::now_ns().saturating_sub(self.started_ns);
-        self.failures = if ran_ns < DRIVERVM_STABLE_NS { self.failures + 1 } else { 0 };
+        self.failures = if ran_ns < DRIVER_VM_STABLE_NS { self.failures + 1 } else { 0 };
         let mut resets = Vec::new();
         for d in &self.devices {
             let how = config.reset(d.address).unwrap_or("no reset");
@@ -1038,8 +1044,8 @@ impl DriverVm {
     }
 }
 
-/// The devices an option lists (`option` as `drivervm.devices=`, then
-/// `VID:DID,...`).
+/// The devices an option lists (`option` as
+/// `driver-virtual-machine.devices=`, then `VID:DID,...`).
 fn listed_devices(options: &[String], option: &str) -> Vec<(u16, u16)> {
     let id = |s: &str| u16::from_str_radix(s, 16).ok();
     options
@@ -1092,16 +1098,21 @@ fn main() -> i32 {
     };
     let args = rt::env::args();
     let live = args.iter().any(|a| a == "live");
-    // The driver VM's options: `drivervm`, `drivervm=off`, and its own as
-    // `drivervm.NAME=VALUE`.
-    let drivervm: Vec<String> = args
+    // The driver VM's options: `driver-virtual-machine`,
+    // `driver-virtual-machine=off`, and its own as
+    // `driver-virtual-machine.NAME=VALUE`.
+    let vm_options: Vec<String> = args
         .iter()
-        .filter(|a| *a == "drivervm" || a.starts_with("drivervm.") || a.starts_with("drivervm="))
+        .filter(|a| {
+            *a == "driver-virtual-machine"
+                || a.starts_with("driver-virtual-machine.")
+                || a.starts_with("driver-virtual-machine=")
+        })
         .cloned()
         .collect();
     let linux = boot.find("linux/kernel").is_some() && boot.find("linux/initramfs.cpio").is_some();
-    let runs = if drivervm.iter().any(|a| a == "drivervm=off") {
-        Err("drivervm=off")
+    let runs = if vm_options.iter().any(|a| a == "driver-virtual-machine=off") {
+        Err("driver-virtual-machine=off")
     } else if platform & abi::platform::VIRTUALIZATION == 0 {
         Err("the processors cannot run virtual machines")
     } else if !linux {
@@ -1116,7 +1127,7 @@ fn main() -> i32 {
         Ok(()) if !gives => println!("no IOMMU: no device can go to the driver VM"),
         Ok(()) => {}
     }
-    let listed = listed_devices(&drivervm, "drivervm.devices=");
+    let listed = listed_devices(&vm_options, "driver-virtual-machine.devices=");
     let mut guest = Vec::new();
 
     let functions = mgr.config.scan();
@@ -1213,12 +1224,13 @@ fn main() -> i32 {
     let platform = if runs.is_ok() { Platform::claim(&mgr.io, &mgr.irq) } else { Platform::none() };
     // It starts for its devices, or because the boot options ask for it.
     let mut vm = None;
-    if runs.is_ok() && (!guest.is_empty() || !platform.is_empty() || drivervm.iter().any(|a| a == "drivervm")) {
+    let asked = vm_options.iter().any(|a| a == "driver-virtual-machine");
+    if runs.is_ok() && (!guest.is_empty() || !platform.is_empty() || asked) {
         match take(roles::HYPERVISOR_RESOURCE) {
             Some(hypervisor) => {
                 let variables = rt::env::take_handle(abi::startup::role::FIRMWARE_VARIABLES).map(Vmo::from_handle);
                 let memory = vm_memory(&guest, mgr.acpi.as_ref());
-                vm = Some(DriverVm::new(&drivervm, memory, guest, platform, variables, hypervisor));
+                vm = Some(DriverVm::new(&vm_options, memory, guest, platform, variables, hypervisor));
             }
             None => println!("no hypervisor resource for the driver VM"),
         }
@@ -1230,7 +1242,7 @@ fn main() -> i32 {
     told.say(&coming(&vm));
 
     /// The driver VM's process, among the channels.
-    const DRIVERVM: u64 = u64::MAX;
+    const DRIVER_VM: u64 = u64::MAX;
     loop {
         if let Some(v) = vm.as_mut()
             && v.next_start_ns.is_some_and(|at| rt::time::now_ns() >= at)
@@ -1252,7 +1264,7 @@ fn main() -> i32 {
         let mut deadline = told.again_at.unwrap_or(abi::DEADLINE_INFINITE);
         if let Some(vm) = &vm {
             if let Some(p) = &vm.process {
-                ws.add(p.raw(), signals::TERMINATED, DRIVERVM);
+                ws.add(p.raw(), signals::TERMINATED, DRIVER_VM);
             }
             if let Some(at) = vm.next_start_ns {
                 deadline = deadline.min(at);
@@ -1273,7 +1285,7 @@ fn main() -> i32 {
                 told.closed(k);
                 continue;
             }
-            if k == DRIVERVM {
+            if k == DRIVER_VM {
                 if let Some(vm) = vm.as_mut() {
                     vm.ended(&mgr.config);
                 }

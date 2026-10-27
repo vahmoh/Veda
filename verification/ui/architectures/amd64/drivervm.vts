@@ -7,16 +7,16 @@
 # powers the machine off when asked to; no I/O port, MSR or warning on the
 # way. Its timers end on time, in high-resolution mode on the processors'
 # local APIC timers (implementation/guests/linux/timertest).
-boot-cmdline "drivervm.run=timertest drivervm.poweroff"
+boot-cmdline "driver-virtual-machine.run=timertest driver-virtual-machine.poweroff"
 fail-on "PANIC"
-fail-on "drivervm: processor"
+fail-on "driver-virtual-machine: processor"
 fail-on "timertest: FAIL"
-wait-serial "drivervm: starting Linux" 60
+wait-serial "driver-virtual-machine: starting Linux" 60
 wait-serial "linux: [    0.000000] Hypervisor detected: Veda" 30
 wait-serial "smp: Brought up 1 node, 2 CPUs" 30
 wait-serial "is up, processors 0-1" 30
 wait-serial "timertest: PASS" 60
-wait-serial "drivervm: Linux powered the machine off" 30
+wait-serial "driver-virtual-machine: Linux powered the machine off" 30
 reject-serial "Linux touched I/O port"
 reject-serial "unchecked MSR access"
 reject-serial "WARNING:"

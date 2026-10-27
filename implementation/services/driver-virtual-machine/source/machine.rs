@@ -75,7 +75,7 @@ const CMDLINE: &str = "earlycon=veda console=hvc0 panic=-1 rdinit=/init log_buf_
 const PCI_HIGH: core::ops::Range<u64> = (128 << 30)..(256 << 30);
 
 /// How the process ends, for the device manager, which started it.
-pub use proto::startup::drivervm::exit_code;
+pub use proto::startup::driver_virtual_machine::exit_code;
 
 /// What the guest has of the PC.
 pub struct Pc {

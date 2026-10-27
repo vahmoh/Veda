@@ -11,9 +11,9 @@
 # guest gets 1 GiB, and the machine 2).
 gpu off
 memory 2048
-boot-cmdline "drivervm.memory=1024"
-boot-cmdline "drivervm.renderer=softpipe"
-boot-cmdline "drivervm.cmdline=veda.kill=renderer:12"
+boot-cmdline "driver-virtual-machine.memory=1024"
+boot-cmdline "driver-virtual-machine.renderer=softpipe"
+boot-cmdline "driver-virtual-machine.cmdline=veda.kill=renderer:12"
 fail-on "PANIC"
 fail-on "cannot provide the gpu service"
 fail-on "link: "

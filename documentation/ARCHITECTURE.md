@@ -378,12 +378,12 @@ gives every other device to Linux in [the driver VM](DRIVERVM.md).
   resource naming the PCI function, which `device-manager` holds). Devices
   reach memory untranslated until one is given to a guest; one whose
   reserved memory (an RMRR) is not whole pages stays the host's.
-- **The driver VM.** `drivervm` gives its Linux guest every device but the
-  disks and the platform's own functions, whole, their DMA confined by the
-  IOMMU. It starts when the processors run virtual machines, an IOMMU
-  confines devices and the system image has its Linux. When it ends without
-  Linux powering it off, `device-manager` resets its devices and starts it
-  again, later after each failure in a row, and not after a few.
+- **The driver VM.** `driver-virtual-machine` gives its Linux guest every
+  device but the disks and the platform's own functions, whole, their DMA
+  confined by the IOMMU. It starts when the processors run virtual machines,
+  an IOMMU confines devices and the system image has its Linux. When it ends
+  without Linux powering it off, `device-manager` resets its devices and
+  starts it again, later after each failure in a row, and not after a few.
 - **USB** is Linux's: input devices reach the window system through `input`
   (`implementation/guests/linux/input`), network adapters reach `network`
   through `net`. Veda has no driver for USB disks yet.
@@ -906,9 +906,9 @@ cannot (`NoGpu`: no service, its limits reached, no answer).
 **The renderer** (`implementation/guests/linux/renderer`) serves the `gpu`
 protocol from the driver VM on Mesa's Gallium drivers: iris on i915 or xe
 (Intel's GPUs), virgl on virtio-gpu (QEMU's), or softpipe for tests
-(`drivervm.renderer=softpipe`). It is Mesa's build of a decoder
-(`decoder/`, C) around a Rust half that serves the protocol, built by
-`cargo automation linux`.
+(`driver-virtual-machine.renderer=softpipe`). It is Mesa's build of a
+decoder (`decoder/`, C) around a Rust half that serves the protocol, built
+by `cargo automation linux`.
 
 - **Sessions.** Each connection gets a context and a block of shared memory
   (commands, staging, query results, the fence word), laid out as
@@ -1155,7 +1155,7 @@ crate's in its `source/`), reached through its `architecture` module
 | `implementation/libraries/elf` | the executables' machine type and relative relocation (on every host, for the tools) |
 | `implementation/libraries/build` | the user programs' target |
 | `implementation/libraries/{hv,iommu}` | the guests' local APIC, CPUID, memory map, platform discovery and Linux's boot protocol; Intel VT-d's tables (on every host, for the tests) |
-| `implementation/services/{device-manager,drivervm,init}` | the PC's own devices (keyboard controller, DMAR), the guest's memory map and boot, the I/O ports and IRQs `init` hands out |
+| `implementation/services/{device-manager,driver-virtual-machine,init}` | the PC's own devices (keyboard controller, DMAR), the guest's memory map and boot, the I/O ports and IRQs `init` hands out |
 | `verification/{systest,c,ui}` | what the tests expect of the architecture, and the GUI scripts that hold only on QEMU's PC |
 | `automation/` | the Rust and C targets, the loader's boot path, QEMU's PC (q35, OVMF), its ACPI test tables |
 | `.cargo/`, `implementation/ports/` | Cargo's settings of the targets; the ports' settings, patches (binutils, GCC, musl, Linux) and the driver VM kernel's options |

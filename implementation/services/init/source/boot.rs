@@ -107,8 +107,9 @@ pub fn start_service(init: &mut Init, name: &str, at_boot: bool) {
     // kernel command line. A live system (`live`, booted from a USB stick)
     // tells the file system and the device manager to leave the computer's
     // disks alone; tests ask the device manager for the driver VM
-    // (`drivervm`, with its options as `drivervm.NAME=VALUE`) or for none
-    // (`drivervm=off`), and give it options of its own
+    // (`driver-virtual-machine`, with its options as
+    // `driver-virtual-machine.NAME=VALUE`) or for none
+    // (`driver-virtual-machine=off`), and give it options of its own
     // (`device-manager.NAME=VALUE`). At system start the window system
     // plays the startup sequence (`splash`) and the shell the startup sound
     // (`startup`, unless `startup-sound=off`); started again, they do
@@ -123,9 +124,9 @@ pub fn start_service(init: &mut Init, name: &str, at_boot: bool) {
             .split_whitespace()
             .filter(|a| {
                 *a == "live"
-                    || *a == "drivervm"
-                    || a.starts_with("drivervm.")
-                    || a.starts_with("drivervm=")
+                    || *a == "driver-virtual-machine"
+                    || a.starts_with("driver-virtual-machine.")
+                    || a.starts_with("driver-virtual-machine=")
                     || a.starts_with("device-manager.")
             })
             .map(Into::into)

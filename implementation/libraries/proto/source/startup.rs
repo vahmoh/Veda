@@ -33,9 +33,9 @@ pub mod driver {
     pub const PCIDEV: u32 = super::USER + 10;
 }
 
-/// What the device manager hands the driver VM's monitor (`drivervm`), and
-/// what the monitor's exit code tells it.
-pub mod drivervm {
+/// What the device manager hands the driver VM's monitor
+/// (`driver-virtual-machine`), and what the monitor's exit code tells it.
+pub mod driver_virtual_machine {
     use super::USER;
 
     /// Virtual machines.

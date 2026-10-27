@@ -26,7 +26,8 @@
 //! the guest's, nor the guest anything of it: it is said so and let go of,
 //! its channel closes, which tells the device manager it stays the host's.
 //!
-//! Where a function is, and its BARs: `drivervm_core::functions`.
+//! Where a function is, and its BARs:
+//! `driver_virtual_machine_core::functions`.
 //!
 //! An Intel integrated GPU's driver reads more of the PC's firmware: its
 //! OpRegion (the display's description), which the guest has a copy of
@@ -55,8 +56,8 @@ use alloc::vec::Vec;
 use core::ops::Range;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-pub use drivervm_core::functions::Windows;
-use drivervm_core::functions::places;
+pub use driver_virtual_machine_core::functions::Windows;
+use driver_virtual_machine_core::functions::places;
 use hv::acpi::{self, Function, GpioController};
 use hv::pci::{ConfigSpace, HostBridge, Write};
 use hv::platform::{error, gpio};

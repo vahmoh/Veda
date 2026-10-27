@@ -12,7 +12,7 @@
 gpu on
 boot-cmdline "run=interceptor"
 fail-on "PANIC"
-fail-on "drivervm: processor"
+fail-on "driver-virtual-machine: processor"
 fail-on "renderer: commands refused"
 fail-on "renderer: a resource refused"
 fail-on "renderer: no file to wait for a fence on"

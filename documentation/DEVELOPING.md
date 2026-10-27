@@ -91,7 +91,7 @@ million pixels the rate drops (56 Hz at 3840x2160).
   after the system services, the quickest way to try an application
   (`run=NAME:ARG1,ARG2` passes arguments). `run=nettest` checks the
   Internet from inside Veda (`run=nettest:wifi,SSID,PASSWORD` joins a
-  Wi-Fi network first); `drivervm=off` starts no
+  Wi-Fi network first); `driver-virtual-machine=off` starts no
   [driver VM](DRIVERVM.md); `startup-sound=off` (also in an image's
   `BOOT.CFG`) leaves out the startup sound, as the scripts that record the
   sound output or feed it to the microphone do.
@@ -163,14 +163,15 @@ the run, with its number.
   at `{web}`, which the command line, typed text and the agent's calls
   name.
 * **Continuous integration.** GitHub's runners build Veda and run
-  `cargo automation test --net none --cmdline drivervm=off` for every
-  push and every pull request from a fork (`.github/workflows/ci.yml`).
-  They have KVM but cannot run the driver VM, which needs VT-x nested in
-  KVM: Veda boots without it and without a network, so `systest` leaves
-  out its checks of the network, as on any machine without one, and the
-  GUI and agent scripts are left to `test --ui`. The heavy builds (the
-  toolchain, the driver VM's Linux and Mesa) are made there once for
-  their ports, which takes hours, and kept in the workflow's cache.
+  `cargo automation test --net none --cmdline driver-virtual-machine=off`
+  for every push and every pull request from a fork
+  (`.github/workflows/ci.yml`). They have KVM but cannot run the driver VM,
+  which needs VT-x nested in KVM: Veda boots without it and without a
+  network, so `systest` leaves out its checks of the network, as on any
+  machine without one, and the GUI and agent scripts are left to
+  `test --ui`. The heavy builds (the toolchain, the driver VM's Linux and
+  Mesa) are made there once for their ports, which takes hours, and kept in
+  the workflow's cache.
 
 ```bash
 cargo automation script documentation/screenshots.vts                         # the README's screenshots
@@ -209,7 +210,7 @@ Interceptor's game tests save pictures and sounds to the directory
 
 In Veda's Terminal, `dmesg TEXT` shows the log's lines that contain TEXT.
 Displays, GPUs, input, USB, networks and a PC's sound are Linux's, in the
-driver VM; its log comes in Veda's (`drivervm: linux:`).
+driver VM; its log comes in Veda's (`driver-virtual-machine: linux:`).
 
 | Startup line | Says |
 |--------------|------|
@@ -232,7 +233,7 @@ Linux's first commit kept the firmware's setup if it logs
 
 | `dmesg` | Shows |
 |---------|-------|
-| `drivervm` | Linux and Veda's drivers for Linux (the display `kms` drives, its mode, whether it copies or scales the compositor's pictures; the GPU `gpu` serves; what `input` and `net` attach), and what the monitor gives the guest: GPIO pins, the firmware's variables and tables (`... comes with the firmware's NHLT`), an Intel GPU's OpRegion and host bridge |
+| `driver-virtual-machine` | Linux and Veda's drivers for Linux (the display `kms` drives, its mode, whether it copies or scales the compositor's pictures; the GPU `gpu` serves; what `input` and `net` attach), and what the monitor gives the guest: GPIO pins, the firmware's variables and tables (`... comes with the firmware's NHLT`), an Intel GPU's OpRegion and host bridge |
 | `compositor` | The display attaching |
 | `snd_hda`, `cs35l41`, `alsa` | Linux's sound controllers and codecs; a laptop's speaker amplifiers; Veda's sound driver for Linux (the card, underruns, the device it records) |
 | `device-manager` | The ACPI tables (`device-manager: acpi: N tables, ...`, and the conditional definitions left out), each driver's device's devices in them (`acpi: 00:1e.3 is \_SB.PC00.SPI1, ...`), and `gpio:` a controller's register windows, the pads set up for drivers and the pins that interrupt |

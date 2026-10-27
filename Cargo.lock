@@ -758,13 +758,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "drivervm"
+name = "driver-virtual-machine"
 version = "0.1.0"
 dependencies = [
  "abi",
  "bootinfo",
  "build",
- "drivervm-core",
+ "driver-virtual-machine-core",
  "hv",
  "initrd",
  "ipc",
@@ -773,7 +773,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "drivervm-core"
+name = "driver-virtual-machine-core"
 version = "0.1.0"
 dependencies = [
  "abi",

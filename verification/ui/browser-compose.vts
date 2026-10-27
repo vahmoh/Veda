@@ -13,7 +13,7 @@
 # pixel for pixel. softpipe is slow under emulation (seconds for a frame of
 # the whole screen), so the script waits long.
 gpu off
-boot-cmdline "drivervm.renderer=softpipe"
+boot-cmdline "driver-virtual-machine.renderer=softpipe"
 boot-cmdline "run=browser:http://{web}/motion"
 web-server
 memory 2048

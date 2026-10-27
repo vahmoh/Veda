@@ -4,10 +4,11 @@
 # Builds Veda and runs its tests on GitHub's runners, for every push and
 # every pull request from a fork (one from a branch of this repository is
 # tested by its push). The runners have KVM but cannot run the driver VM,
-# which needs VT-x nested in KVM: Veda boots without it (`drivervm=off`),
-# so systest leaves out its checks of the network (`--net none`), and the
-# GUI and agent scripts are left to `cargo automation test --ui`
-# (documentation/DEVELOPING.md, "Scripts and tests").
+# which needs VT-x nested in KVM: Veda boots without it
+# (`driver-virtual-machine=off`), so systest leaves out its checks of the
+# network (`--net none`), and the GUI and agent scripts are left to
+# `cargo automation test --ui` (documentation/DEVELOPING.md, "Scripts and
+# tests").
 
 name: CI
 
@@ -146,7 +147,7 @@ jobs:
       # On Intel's processors KVM may let Veda's hypervisor try the driver VM,
       # three machines deep: it is off on every runner alike.
       - name: Build Veda and run the tests
-        run: cargo automation test --net none --cmdline drivervm=off
+        run: cargo automation test --net none --cmdline driver-virtual-machine=off
       # The serial console (the kernel's log and every program's output) and
       # the screen, as an issue's report has them.
       - name: Keep the logs
