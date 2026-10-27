@@ -838,7 +838,9 @@ pub fn yield_now() {
     schedule();
 }
 
-/// Terminates the current thread. Never returns.
+/// Terminates the current thread. Never returns, and its callers' frames
+/// are never unwound: what they hold is never dropped, so they let go of
+/// it first (a process held there would be kept, and listed, for good).
 pub fn exit_current() -> ! {
     let cur = current();
     {

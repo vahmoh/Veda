@@ -3,12 +3,13 @@
 
 //! Tests of what C programs stand on: sockets, memory protection, private
 //! memory, the thread exit futex and futexes in shared memory, the VFS's
-//! open-file connections and shared memory objects, ending a job, signals
-//! between processes and the interruptions they come with, and the C
-//! programs themselves (`/system/tests/c`, built by the cross
-//! toolchain), and the Rust programs on its standard library, which stand
-//! on the C library too (`/system/tests/rust`, built by Rust's), as Python
-//! does (`/system/tests/python`).
+//! open-file connections and shared memory objects, ending a job, processes
+//! going once they have ended, signals between processes and the
+//! interruptions they come with, and the C programs themselves
+//! (`/system/tests/c`, built by the cross toolchain), and the Rust programs
+//! on its standard library, which stand on the C library too
+//! (`/system/tests/rust`, built by Rust's), as Python does
+//! (`/system/tests/python`).
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -557,6 +558,64 @@ pub fn job() -> i32 {
     }
 }
 
+/// Processes that ended go once nothing holds them: none is listed of the
+/// POSIX programs started and waited for here, a few of each linking
+/// (static, at a fixed address and position-independent, and dynamic),
+/// nor of the copies of this program that end themselves, by returning
+/// from `main`, killing themselves and with a signal of their own, once
+/// their handles are closed. Until then, each is listed as ended.
+pub fn test_ended_processes_go() -> TestResult {
+    const SIGTERM: usize = 15;
+    let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(60));
+    let mut ended = Vec::new();
+    // Waits for `process`, `what` it is, to end with `expected`, listed as
+    // ended while held, and notes it.
+    let mut wait_for = |process: Process, what: &str, expected: i64| -> TestResult {
+        let code = process.join(deadline).map_err(s)?;
+        check(code == expected, &format!("{what} ended with {code}"))?;
+        let koid = process.0.koid();
+        let listed = processes().iter().any(|p| p.koid == koid && p.state != abi::process_state::RUNNING);
+        check(listed, &format!("{what} is not listed as ended while held"))?;
+        ended.push(koid);
+        Ok(())
+    };
+    if vfs_client()?.stat("/system/tests/c/hello".into()).map_err(s)?.is_ok() {
+        for _ in 0..3 {
+            for variant in ["", "-pie", "-dynamic"] {
+                let path = format!("/system/tests/c/hello{variant}");
+                // What it writes stays on the socket, unread.
+                let (process, _output) = start_c(&path, &[], "/tmp")?;
+                wait_for(process, &path, 42)?;
+            }
+        }
+    } else {
+        rt::println!("ended processes: no c programs in this image (no cross toolchain was built)");
+    }
+    let signalled = abi::EXIT_CODE_SIGNALED - SIGTERM as i64;
+    for (how, expected) in [("exit", 0), ("kill", abi::EXIT_CODE_KILLED), ("signal", signalled)] {
+        wait_for(start_copy_with(&["end", how])?, &format!("the copy that ends by {how}"), expected)?;
+    }
+    let left: Vec<String> =
+        processes().iter().filter(|p| ended.contains(&p.koid)).map(|p| format!("{} ({})", p.name(), p.koid)).collect();
+    check(left.is_empty(), &format!("processes that ended are listed still: {}", left.join(", ")))
+}
+
+/// `systest end HOW`: ends itself by its own call, as HOW says: `exit`
+/// returns from `main`, `kill` kills itself and `signal` sends itself
+/// `SIGTERM`, which ends a process that takes no signals.
+pub fn end(how: Option<&String>) -> i32 {
+    const SIGTERM: usize = 15;
+    let how = how.map_or("", String::as_str);
+    let ended = match how {
+        "exit" => return 0,
+        "kill" => Process::current().and_then(|p| p.kill()),
+        "signal" => Process::current().and_then(|p| p.signal(SIGTERM, 0)),
+        _ => return 2,
+    };
+    rt::println!("end: running still after {how} ({ended:?})");
+    1
+}
+
 /// A process that gave up abilities (`process_restrict`, as the media
 /// decoder does before reading a file) is refused them, and keeps the rest.
 pub fn test_process_restrict() -> TestResult {
@@ -802,6 +861,29 @@ pub(crate) fn run_c(path: &str, args: &[&str], cwd: &str) -> Result<(i64, String
 
 /// [`run_c`], giving the program `seconds` to finish.
 pub(crate) fn run_c_for(path: &str, args: &[&str], cwd: &str, seconds: u64) -> Result<(i64, String), String> {
+    let (process, ours) = start_c(path, args, cwd)?;
+    let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(seconds));
+    let mut out = Vec::new();
+    let mut buf = [0u8; 4096];
+    loop {
+        match ours.read(&mut buf) {
+            Ok(n) => out.extend_from_slice(&buf[..n]),
+            Err(Error::ShouldWait) => {
+                if ours.wait(READABLE | PEER_CLOSED, deadline) == Err(Error::TimedOut) {
+                    let _ = process.kill();
+                    return Err(format!("{path} did not finish: {}", String::from_utf8_lossy(&out)));
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let code = process.join(deadline).map_err(s)?;
+    Ok((code, String::from_utf8_lossy(&out).into_owned()))
+}
+
+/// Starts a program of the C library's, its output on the socket that
+/// comes with it.
+fn start_c(path: &str, args: &[&str], cwd: &str) -> Result<(Process, Socket), String> {
     let fs = vfs_client()?;
     let (vmo, size) = fs.read_file(path.into()).map_err(s)?.map_err(|e| format!("{path}: {e}"))?;
     let image = vm::Mapping::new(vmo, size as usize, map_flags::READ).map_err(s)?;
@@ -829,23 +911,7 @@ pub(crate) fn run_c_for(path: &str, args: &[&str], cwd: &str, seconds: u64) -> R
     }
     // SAFETY: a read-only mapping of the VFS's copy of the file.
     let process: Process = spawn.start(unsafe { image.as_slice() }).map_err(|e| format!("{path}: {e}"))?;
-    let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(seconds));
-    let mut out = Vec::new();
-    let mut buf = [0u8; 4096];
-    loop {
-        match ours.read(&mut buf) {
-            Ok(n) => out.extend_from_slice(&buf[..n]),
-            Err(Error::ShouldWait) => {
-                if ours.wait(READABLE | PEER_CLOSED, deadline) == Err(Error::TimedOut) {
-                    let _ = process.kill();
-                    return Err(format!("{path} did not finish: {}", String::from_utf8_lossy(&out)));
-                }
-            }
-            Err(_) => break,
-        }
-    }
-    let code = process.join(deadline).map_err(s)?;
-    Ok((code, String::from_utf8_lossy(&out).into_owned()))
+    Ok((process, ours))
 }
 
 /// The host machine's servers, when the kernel command line named them

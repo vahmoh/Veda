@@ -818,6 +818,7 @@ fn main() -> i32 {
         Some("fill") => return memory::fill(),
         Some("limits") => return policy::limits(rt::env::args().get(2)),
         Some("job") => return posix::job(),
+        Some("end") => return posix::end(rt::env::args().get(2)),
         Some("restricted") => return posix::restricted(),
         Some("unmapped") => return posix::unmapped(),
         Some("wait") => {
@@ -827,7 +828,7 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 49] = [
+    let tests: [Test; 50] = [
         ("starved threads run", test_starved_threads_run),
         ("ipc primitives", test_ipc_primitives),
         ("short sleeps", test_short_sleeps),
@@ -867,6 +868,7 @@ fn main() -> i32 {
         ("media decoder", media::test_decoder),
         ("killing a job", posix::test_kill_job),
         ("signalling a job", posix::test_signal_job),
+        ("ended processes go", posix::test_ended_processes_go),
         ("interruptions", posix::test_interruptions),
         ("giving abilities up", posix::test_process_restrict),
         ("launcher", test_launcher),

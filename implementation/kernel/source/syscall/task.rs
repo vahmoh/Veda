@@ -111,15 +111,20 @@ pub fn process_start(
     ok(0)
 }
 
+/// Ends the calling process with `code`: the calling thread at once, the
+/// others as they next leave the kernel.
 pub fn process_exit(code: i64) -> SysResult {
-    let p = current_process()?;
-    p.kill(code);
+    // The process is let go of first: nothing the thread's stack holds as
+    // it ends is ever dropped (`scheduler::exit_current`).
+    current_process()?.kill(code);
     scheduler::exit_current()
 }
 
 /// Ends the process; with `kill_flags::DESCENDANTS`, the processes it
 /// started (and so on) as well: its handle manages its whole job. They
 /// end as POSIX signal `signal` ends a program (1 to 64), or killed (0).
+/// Their threads end as they next leave the kernel, the calling thread too
+/// if it is one of them: as it returns, holding nothing of the call's.
 pub fn process_kill(raw: RawHandle, flags: usize, signal: usize) -> SysResult {
     if flags & !abi::kill_flags::DESCENDANTS != 0 || signal > 64 {
         return Err(Error::InvalidArgs);
@@ -130,12 +135,8 @@ pub fn process_kill(raw: RawHandle, flags: usize, signal: usize) -> SysResult {
     if flags & abi::kill_flags::DESCENDANTS != 0 {
         victims.extend(process::descendants(p.koid));
     }
-    let me = current_process()?.koid;
     for v in &victims {
         v.kill(code);
-    }
-    if victims.iter().any(|v| v.koid == me) {
-        scheduler::exit_current();
     }
     ok(0)
 }
@@ -153,7 +154,8 @@ pub fn signal_entry_set(entry: usize) -> SysResult {
 
 /// Sends a process POSIX signal `signal`, and with
 /// `kill_flags::DESCENDANTS` the processes it started, and so on
-/// (`nr::PROCESS_SIGNAL`).
+/// (`nr::PROCESS_SIGNAL`). Those it ends go as [`process_kill`]'s do: the
+/// caller, ended by its own signal, as it returns.
 pub fn process_signal(raw: RawHandle, signal: usize, flags: usize) -> SysResult {
     if signal == 0 || signal > abi::posix_signal::MAX || flags & !abi::kill_flags::DESCENDANTS != 0 {
         return Err(Error::InvalidArgs);
@@ -165,13 +167,9 @@ pub fn process_signal(raw: RawHandle, signal: usize, flags: usize) -> SysResult 
     if job {
         targets.extend(process::descendants(p.koid));
     }
-    let me = current_process()?;
+    let me = current_process()?.koid;
     for t in &targets {
-        t.signal(signal, me.koid);
-    }
-    // Ended by its own signal: it goes now, as with `process_kill`.
-    if me.ending_with().is_some() && targets.iter().any(|t| t.koid == me.koid) {
-        scheduler::exit_current();
+        t.signal(signal, me);
     }
     ok(0)
 }
