@@ -341,8 +341,8 @@ each is:
   application's id, or the name of a program of the system image, by which
   services know a program), runs no program outside `/home/packages` and
   `/system`, and stays out of the start menu's pinned grid and off the
-  taskbar. `init-core` (`implementation/services/init/core`) holds these
-  rules, tested on the host.
+  taskbar. `init`'s library (`implementation/services/init/source/lib.rs`)
+  holds these rules, tested on the host.
 
 ## Devices
 
@@ -417,14 +417,14 @@ gives every other device to Linux in [the driver VM](DRIVERVM.md).
   header last, so an interrupted save never damages the previous one; boot
   restores the newest snapshot that reads back whole. Unchanged sample
   files are stored as references to the system image. The file systems,
-  snapshots and access rules are `filesystem-core`
-  (`implementation/services/filesystem/core`), tested on the host.
+  snapshots and access rules are the VFS's library
+  (`implementation/services/filesystem/source/lib.rs`), tested on the host.
 - **Private directories.** `/home/.private/<service>` belongs to the system
   service of that name: only it sees and changes what is inside. The VFS
   makes `/home/.private` at every start, before any service, and moves the
   directories of services renamed since the home was made (`netd`,
   `packages`) to their new names, where nothing would be lost
-  (`filesystem_core::renamed`). A connection can give up that access for
+  (`filesystem::renamed`). A connection can give up that access for
   good (`renounce_private`), as the agent's worker does. The root, `/home`,
   `/home/user`, `/tmp`, `/home/.private` and `/home/packages` cannot be
   removed, moved or replaced.
@@ -438,13 +438,13 @@ gives every other device to Linux in [the driver VM](DRIVERVM.md).
   (`vfs::confine`, as OpenBSD's `unveil`): it then reaches what is inside
   them, and the directories on the way to them, whose listings show only
   what leads on to a place; nothing else is there for it, nor are
-  abstract socket names (`filesystem_core::view`), and its `sync` returns at
+  abstract socket names (`filesystem::view`), and its `sync` returns at
   once, what it changed being saved as anything is. A sandboxed program
   confines its connection and leaves the VFS out of its registry
   channel's services, so that it opens no other. The VFS logs the first
   paths each such connection was refused where there is something.
 - **Loans.** A connection that is not confined can lend a confined one a
-  place to read (`vfs::lend`, `vfs::borrow`, `filesystem_core::loans`;
+  place to read (`vfs::lend`, `vfs::borrow`, `filesystem::loans`;
   `veda_lend_files` and `veda_borrow_files` in `<veda/sandbox.h>`), as a
   sandbox extension does on Apple's systems, and take it back
   (`vfs::take_back`, `veda_take_back_files`): the browser lends its
@@ -495,7 +495,7 @@ gives every other device to Linux in [the driver VM](DRIVERVM.md).
   and datagrams through an inbox channel; a connection's bytes then go
   between the two programs, past the VFS.
 - **Locks.** The VFS arbitrates advisory locks between processes, as
-  Linux keeps them (`file::lock`, `filesystem_core::locks`): `flock`'s, held
+  Linux keeps them (`file::lock`, `filesystem::locks`): `flock`'s, held
   by an open file description, and locks on bytes, held by a process
   (POSIX's record locks) or by an open file description (OFD locks). A
   process owns its locks by a secret that the VFS drew for its connection
@@ -593,7 +593,7 @@ tested on the host.
 The compositor (`implementation/services/compositor`) owns the screen and
 serves `display` to applications, `input` to input drivers and
 `displaydev` to a display driver. What it decides (windows, stacking,
-focus, input, who may do what, limits) is `compositor-core` (`core/`),
+focus, input, who may do what, limits) is its library (`source/lib.rs`),
 tested on the host.
 
 - **Surfaces.** A client draws into the back one of two buffers in a
@@ -661,7 +661,7 @@ tested on the host.
   `device-manager`) report input or attach a display. A process has at most
   64 windows and 16 screens' worth of buffers, and 256 subsurfaces and 64
   screens' worth of theirs.
-- **The lock** (`compositor-core`'s `lock`). While the screen is locked,
+- **The lock** (`compositor::lock`). While the screen is locked,
   the compositor draws only the lock service's windows (`WindowKind::Lock`,
   above every other layer), over a backdrop of its own until one has drawn
   itself; only they take the focus and the pointer, and the window keys do
@@ -671,7 +671,7 @@ tested on the host.
   it. With the lock screen installed, `init` starts it locked (`locked`),
   after a crash too. System services watch the lock (`display::watch_lock`):
   each hears how it is, then every change.
-- **The idle lock** (`compositor-core`'s `idle`). The compositor also locks
+- **The idle lock** (`compositor::idle`). The compositor also locks
   once no input has come for the time the lock service sets
   (`display::set_idle_timeout`, 0 for never, as until it is set). The time
   counts from the last input from a driver, the last unlock, or the moment
@@ -1077,7 +1077,7 @@ the actions every `ui` application offers over the `agentapp` protocol
 - **The lock.** While the screen is locked, the agent neither listens for
   its name nor holds a conversation ([The lock screen](#the-lock-screen)).
   While it is unlocked, the agent tells the window system that the user is
-  there as they talk with it (`agent_core::presence`), which counts as
+  there as they talk with it (`agent::presence`), which counts as
   input for the idle lock: in a conversation they asked for (a click,
   Super+Space, its name), when Deepgram hears them start to speak and
   gives their words, and while its voice answers. Nothing it hears while
@@ -1090,10 +1090,10 @@ the actions every `ui` application offers over the `agentapp` protocol
   live in `/home/.private/agent`. The worker reaches the user's files
   through a connection of its own, which has given up private access, and
   checks every path.
-- **`agent-core`** (`implementation/services/agent/core`) holds the
-  decisions that need no I/O (the protocol, the tools and their risks, the
-  paths file actions may reach, the prompt, memory, the approval policy,
-  the wake word), tested on the host.
+- **The agent's library** (`implementation/services/agent/source/lib.rs`)
+  holds the decisions that need no I/O (the protocol, the tools and their
+  risks, the paths file actions may reach, the prompt, memory, the approval
+  policy, the wake word), tested on the host.
 
 ## Testing
 

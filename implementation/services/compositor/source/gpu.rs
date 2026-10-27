@@ -43,7 +43,7 @@ use ::gl::backend::External;
 use ::gl::veda::{FenceWatch, GpuTransport};
 use ::gl::virgl::VirglBackend;
 use ::gl::{Config, Context, gl};
-use compositor_core::buffers::Buffers;
+use compositor::buffers::Buffers;
 use gfx::{Bitmap, Rect};
 use num_traits::Float;
 use proto::gpu::gpu;

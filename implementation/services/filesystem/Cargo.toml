@@ -8,6 +8,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+# The VFS's file systems apart from the service, tested on the host: the
+# in-memory tree, the home directory's snapshots, who may reach what, and
+# /dev/shm's shared memory objects.
+[lib]
+path = "source/lib.rs"
+
 [[bin]]
 name = "filesystem"
 path = "source/main.rs"
@@ -15,13 +21,17 @@ test = false
 bench = false
 
 [dependencies]
-rt = { workspace = true }
 abi = { workspace = true }
 ipc = { workspace = true }
 proto = { workspace = true }
 initrd = { workspace = true }
 crc32fast = { workspace = true }
-filesystem-core = { path = "core" }
+
+# rt on Veda's targets alone: its runtime (the program's entry point,
+# allocator and panic handler) would clash with std's in the library's
+# tests on the host ("Library crates" in documentation/CODING.md).
+[target.'cfg(any(target_os = "veda", target_env = "musl"))'.dependencies]
+rt = { workspace = true }
 
 [build-dependencies]
 build = { workspace = true }

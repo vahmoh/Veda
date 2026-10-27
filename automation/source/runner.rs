@@ -57,7 +57,7 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("netstack", &[]),
     ("tls", &[]),
     ("web", &[]),
-    ("agent-core", &[]),
+    ("agent", &[]),
     ("wlan", &[]),
     ("acpi", &[]),
     ("gpio", &[]),
@@ -66,7 +66,7 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("gl", &[]),
     ("egl", &[]),
     ("hv", &[]),
-    ("driver-virtual-machine-core", &[]),
+    ("driver-virtual-machine", &[]),
     ("iommu", &[]),
     ("packages", &["std"]),
     ("interceptor-game", &[]),
@@ -77,11 +77,11 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("calculator-core", &[]),
     ("paint-core", &[]),
     ("browser-core", &[]),
-    ("compositor-core", &[]),
+    ("compositor", &[]),
     ("lock-core", &[]),
     ("shell-common", &[]),
-    ("filesystem-core", &[]),
-    ("init-core", &[]),
+    ("filesystem", &[]),
+    ("init", &[]),
     ("gencommon", &[]),
     ("assetgen", &[]),
     ("musicgen", &[]),
@@ -107,21 +107,21 @@ const NOT_TESTED: &[(&str, &str)] = &[];
 
 /// The command that runs the host's unit tests.
 fn host_tests() -> std::process::Command {
-    host_crates(&["test", "--quiet"])
+    host_crates(&["test", "--quiet"], |_| true)
 }
 
 /// Cargo's `args` for the crates with host unit tests together (but
-/// [`HOST_TESTED_ALONE`]), with the features their tests need.
-pub fn host_crates(args: &[&str]) -> std::process::Command {
+/// [`HOST_TESTED_ALONE`]) that `which` keeps, with the features their tests
+/// need.
+pub fn host_crates(args: &[&str], which: impl Fn(&str) -> bool) -> std::process::Command {
     let mut cmd = util::cargo();
     cmd.args(args);
-    for (package, _) in HOST_TESTED {
+    let crates: Vec<&(&str, &[&str])> = HOST_TESTED.iter().filter(|(package, _)| which(package)).collect();
+    for (package, _) in &crates {
         cmd.args(["--package", package]);
     }
-    let features: Vec<String> = HOST_TESTED
-        .iter()
-        .flat_map(|(package, features)| features.iter().map(move |f| format!("{package}/{f}")))
-        .collect();
+    let features: Vec<String> =
+        crates.iter().flat_map(|(package, features)| features.iter().map(move |f| format!("{package}/{f}"))).collect();
     if !features.is_empty() {
         cmd.args(["--features", &features.join(",")]);
     }

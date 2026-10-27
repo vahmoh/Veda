@@ -132,6 +132,19 @@ On AMD64 (`automation/source/architectures/amd64` names them for the build):
   `#[cfg(target_os = "veda")]`, with `extern crate std;`
   (`apps_common::store`). Tests use `#[cfg(test)] extern crate std;`,
   never `cfg_attr(not(test), no_std)`.
+* **A service's library.** What a system service decides without its
+  objects (`init`'s manifests, the compositor's window manager, the VFS's
+  file systems) is its package's library, `source/lib.rs` beside the
+  program's `source/main.rs`, unit-tested on the host
+  (`cargo test -p <service>`). The package depends on `rt` for Veda's
+  targets alone, the user target and Veda's own
+  (`[target.'cfg(any(target_os = "veda", target_env = "musl"))'.dependencies]`):
+  on the host, `rt`'s runtime (the program's entry point, allocator and
+  panic handler) would clash with `std`'s in the library's tests. What
+  else only the program needs on Veda goes there too, such as the
+  compositor's `gl` with its `veda` feature. The program builds for its
+  target alone: `cargo automation clippy` checks the library on the host,
+  and the program for its target.
 * **Floating point.** `sqrt`, `sin`, `floor`, `powf` and the like are
   **not** in `core` on stable: use `libm` (`libm::sinf(x)`) or num-traits'
   `Float`, whose methods are libm's (`use num_traits::Float;` gives

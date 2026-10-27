@@ -6,13 +6,13 @@
 //! The paths come from the language model, and the places items are
 //! restored to from the Trash's records, which any program can write: each
 //! one an action acts on — its source, its destination, where a restored
-//! item goes — is resolved by [`agent_core::files`] first, so that nothing
+//! item goes — is resolved by [`agent::files`] first, so that nothing
 //! reaches a private directory, and what is created goes in the home folder
 //! or `/tmp`. Copies, moves and renames never replace what is there: the
 //! destination is worked out as it is used, and one that exists is refused
 //! before anything is done.
 
-use agent_core::files::{self as paths, HOME};
+use agent::files::{self as paths, HOME};
 use files::path::{file_name, parent};
 use files::trash;
 use serde_json::{Value, json};

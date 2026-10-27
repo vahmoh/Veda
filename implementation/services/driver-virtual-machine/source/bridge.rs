@@ -9,14 +9,14 @@
 //! Operations are the system calls of their names, carried out on those
 //! handles; handles that messages carry move between the table and Veda's
 //! channels. What the guest makes Veda keep is bounded: its handles, and
-//! its budget (`driver_virtual_machine_core::ledger`) of Veda's memory (the
+//! its budget (`driver_virtual_machine::ledger`) of Veda's memory (the
 //! VMOs it makes, which commit their pages as they are used, the messages
 //! it sends itself) and of mappings in its window
-//! (`driver_virtual_machine_core::window`).
+//! (`driver_virtual_machine::window`).
 //!
 //! A wait that cannot finish at once goes on in the waiter thread
 //! (`run_waits`), which waits on all of them at once
-//! (`driver_virtual_machine_core::waits`), and when one finishes writes
+//! (`driver_virtual_machine::waits`), and when one finishes writes
 //! what it observed into the guest's request, reports it in the
 //! notification ring and raises the guest's interrupt. Pending waits name
 //! the guest's handles as the guest does, and are resolved against the
@@ -30,9 +30,9 @@ use alloc::vec::Vec;
 use core::mem::ManuallyDrop;
 
 use abi::{Error, RawHandle, Rights, WaitItem, map_flags, signals, vmo_flags};
-use driver_virtual_machine_core::ledger::Ledger;
-use driver_virtual_machine_core::waits::{self, Pending, Round, Wait};
-use driver_virtual_machine_core::window::Window;
+use driver_virtual_machine::ledger::Ledger;
+use driver_virtual_machine::waits::{self, Pending, Round, Wait};
+use driver_virtual_machine::window::Window;
 use hv::bridge::{self as b, op};
 use rt::object::{Channel, Event, Guest, Handle, Vcpu, Vmo};
 use rt::println;

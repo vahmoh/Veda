@@ -8,6 +8,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+# What the monitor decides that reaches no object of Veda's, tested on the
+# host: the bridge's waits and window, the guest's budget, where its PCI
+# functions go, the keyboard controller's commands.
+[lib]
+path = "source/lib.rs"
+
 [[bin]]
 name = "driver-virtual-machine"
 path = "source/main.rs"
@@ -16,13 +22,17 @@ bench = false
 
 [dependencies]
 bootinfo = { workspace = true }
-rt = { workspace = true }
 abi = { workspace = true }
 hv = { workspace = true }
-driver-virtual-machine-core = { path = "core" }
 ipc = { workspace = true }
 proto = { workspace = true }
 initrd = { workspace = true }
+
+# rt on Veda's targets alone: its runtime (the program's entry point,
+# allocator and panic handler) would clash with std's in the library's
+# tests on the host ("Library crates" in documentation/CODING.md).
+[target.'cfg(any(target_os = "veda", target_env = "musl"))'.dependencies]
+rt = { workspace = true }
 
 [build-dependencies]
 build = { workspace = true }

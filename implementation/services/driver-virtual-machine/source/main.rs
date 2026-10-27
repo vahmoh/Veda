@@ -22,8 +22,7 @@
 //!
 //! What the monitor decides that reaches no object of Veda's (the bridge's
 //! books, where the guest's functions and their BARs go, the keyboard
-//! controller's commands) is its library (`driver-virtual-machine-core`,
-//! `core/`), tested on the host.
+//! controller's commands) is its library (`lib.rs`), tested on the host.
 //!
 //! It gives the guest the PCI functions the device manager hands over
 //! (`pci`): their DMA into the guest's memory only, their BARs, their

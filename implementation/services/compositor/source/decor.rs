@@ -16,9 +16,9 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use compositor_core::switcher::Switcher;
-use compositor_core::window::{BUTTON_WIDTH, CORNER_RADIUS, Part, TITLE_HEIGHT};
-use compositor_core::wm::DecorState;
+use compositor::switcher::Switcher;
+use compositor::window::{BUTTON_WIDTH, CORNER_RADIUS, Part, TITLE_HEIGHT};
+use compositor::wm::DecorState;
 use gfx::color::{over, scale};
 use gfx::{Bitmap, Canvas, Color, FillRule, Path, Rect, ShadowTemplate, StrokeStyle, Text};
 use num_traits::Float;
@@ -29,7 +29,7 @@ use crate::gpu::{Gpu, Slot, Texture, rgba};
 use crate::pixels::{self, Pixels};
 
 /// A window, its client's buffers mapped here.
-pub type Window = compositor_core::window::Window<Mapping>;
+pub type Window = compositor::window::Window<Mapping>;
 
 /// Decorated windows' shadows: blurred this far around their frame, which
 /// they are below by this much.

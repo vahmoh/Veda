@@ -8,7 +8,7 @@
 //! timer and keep the agent waking up by itself (see
 //! [`crate::conversation`]).
 
-use agent_core::notice::Notice;
+use agent::notice::Notice;
 use proto::shell::shell;
 use rt::println;
 

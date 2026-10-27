@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `compositor-core` — what the window system decides, apart from how it
-//! draws and whom it talks to, so that it can be tested on the host.
+//! What the window system decides, apart from how it draws and whom it
+//! talks to (the program, `main.rs`), so that it can be tested on the host.
 //!
 //! * [`wm`]: the window manager ([`Wm`]): windows, stacking and focus,
 //!   window states and snapping, popups, who may do what, clients that do

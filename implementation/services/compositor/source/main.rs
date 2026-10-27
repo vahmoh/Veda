@@ -13,8 +13,8 @@
 //! * `displaydev` — a display driver hands over pictures it flips between
 //!   at the vertical blank (see `screen`).
 //!
-//! What it decides (windows, focus, input, who may do what) is
-//! `compositor_core`'s, tested on the host; this program serves the
+//! What it decides (windows, focus, input, who may do what) is its
+//! library's (`lib.rs`), tested on the host; this program serves the
 //! protocols, maps clients' memory and draws.
 //!
 //! Rendering is damage driven: only regions that changed are recomposited,
@@ -48,8 +48,8 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use abi::signals;
-use compositor_core::Wm;
-use compositor_core::clients::Identity;
+use compositor::Wm;
+use compositor::clients::Identity;
 use gfx::{Rect, Text};
 use ipc::WaitSet;
 use proto::display::{Cursor, display};

@@ -18,7 +18,7 @@ image holds, and why it is so. The code is `implementation/libraries/packages`
 `implementation/services/package-manager` (the service) and
 `implementation/applications/pkg` (the command); the launcher in `init`
 lists and starts the applications packages install
-(`implementation/services/init`, its rules in `init-core`).
+(`implementation/services/init`, its rules in `init::manifests`).
 
 **Contents:** [Using packages](#using-packages) · [How it fits together](#how-it-fits-together) · [Packages](#packages-1) · [Repositories](#repositories) · [The system image's repository](#the-system-images-repository) · [Working out a change](#working-out-a-change) · [Making a change, and recovering](#making-a-change-and-recovering) · [Security](#security) · [Limits](#limits) · [Decisions](#decisions) · [Testing](#testing) · [What comes next](#what-comes-next)
 
@@ -78,9 +78,9 @@ applications in the start menu beside the system's
 | `packages` (`implementation/libraries/packages`) | Everything decided: names and versions, the package and index formats, keys and signatures, the repositories' configuration, the database of what is installed, the resolver, plans, and the transactions that make changes and recover them; `no_std`, tested on the host, with a file system of the standard library's (`std` feature) |
 | The package manager (`implementation/services/package-manager`, program `package-manager`) | A system service on the standard library, which `init` starts last and restarts if it ends: serves `proto::packages`, keeps its state in `/home/.private/package-manager`, fetches indexes and packages, alone writes `/home/packages`, and tells the launcher when what is installed changed |
 | `pkg` (`implementation/applications/pkg`) | The command: asks the service, shows plans and progress; and makes keys, packages and repositories without it, in Veda or on the build machine |
-| The VFS (`filesystem-core`'s `access`) | Lets none but the package manager change `/home/packages`, which it makes at every start and nothing removes or moves |
+| The VFS (`filesystem::access`) | Lets none but the package manager change `/home/packages`, which it makes at every start and nothing removes or moves |
 | `init` (`boot.rs`) | Starts the service after the desktop shell, and again if it ends |
-| The launcher in `init` (`apps.rs`; `init-core`'s `apps`) | Lists the installed packages' applications beside the system's, reading them through the VFS when the service says what is installed changed, and starts them |
+| The launcher in `init` (`apps.rs`; `init::manifests`) | Lists the installed packages' applications beside the system's, reading them through the VFS when the service says what is installed changed, and starts them |
 | The desktop shell | Shows them in the start menu, taking the list again when the launcher says it changed |
 | The Terminal | Has `/home/packages/bin` on its `PATH`, and completes its commands |
 | `automation` (`automation/source/packages.rs`) | Puts the system's repository, its configuration and the tests' repositories into the image |
@@ -527,9 +527,9 @@ packages install takes memory, and room on the disk.
 | Versions, requirements, manifests, the package and index formats (damaged, false and endless input), keys, the configuration, the database, the resolver, plans | Unit tests in `implementation/libraries/packages` (`cargo test -p packages --features std`) |
 | Changes: install, upgrade, removal, conflicts, no room, checks of the files; every change cut short at every step, and every recovery at every step of its own | `packages`' `tests.rs`, on a file system in memory that loses its power on cue, and on the build machine's |
 | The image's repositories: valid, the same from build to build | `automation`'s tests (`packages.rs`) |
-| Applications' manifests: what they say, the ids and programs left out, the values cut short, the list of every application fitting a message | `init-core`'s unit tests (`cargo test -p init-core`) |
+| Applications' manifests: what they say, the ids and programs left out, the values cut short, the list of every application fitting a message | `init`'s unit tests (`cargo test -p init`) |
 | The protocol's messages, and that the largest answers fit one | `proto`'s tests |
-| Only the package manager changes `/home/packages` | `filesystem-core`'s tests |
+| Only the package manager changes `/home/packages` | `filesystem`'s tests |
 | In Veda: the system's repository at start; a repository added, a package installed with its dependency and run, the VFS refusing others' writes there, a conflict and a newer system refused, the files checked, the packages removed | `systest`'s `packages` (`verification/systest/source/packages.rs`), which `cargo automation test` runs, in the continuous integration too |
 | In Veda: a package's application listed once installed, started from `/home/packages` as an application of its own, gone with its package; another package's applications that take the Terminal's id or run programs from elsewhere left out | `systest`'s `packages' applications`, from the image's repository `apps` |
 | `pkg` in the Terminal, through a restart and an upgrade | `verification/ui/packages.vts` |

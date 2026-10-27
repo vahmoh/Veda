@@ -7,14 +7,14 @@
 //! * `/system` — the read-only system image (the initrd),
 //! * `/dev` — the devices (`null`, `zero`, `full`, `random`, `urandom`;
 //!   see [`dev`]),
-//! * `/dev/shm` — the shared memory objects (`filesystem_core::shm`,
+//! * `/dev/shm` — the shared memory objects (`filesystem::shared_memory`,
 //!   [`shm`]), and
 //! * everything else — a writable in-memory file system holding the user's
 //!   home directory and `/tmp`.
 //!
 //! The file systems themselves, their snapshots and the rules of who may
-//! reach what are `filesystem-core`'s (`core/`), where the host tests them;
-//! this program serves them.
+//! reach what are its library's (`lib.rs`), where the host tests them; this
+//! program serves them.
 //!
 //! The home directory starts with the sample files of the system image. If
 //! a home disk is attached, `/home` is restored from it at boot and saved
@@ -50,13 +50,13 @@
 //! personal data there (the agent its Deepgram key and what it remembers
 //! about the user), on the home disk like everything in `/home`. A renamed
 //! service's directory follows the service: it moves from the old name to
-//! the new as the file system starts (`filesystem_core::renamed`). A
+//! the new as the file system starts (`filesystem::renamed`). A
 //! connection can give that access up (`vfs::renounce_private`). The root,
 //! `/home`, `/home/user`, `/tmp` and `/home/.private` cannot be removed,
-//! moved or replaced (see `filesystem_core::access`).
+//! moved or replaced (see `filesystem::access`).
 //!
 //! **Confined connections.** A connection can give up, for good, all but a
-//! few places of the namespace (`vfs::confine`, `filesystem_core::view`):
+//! few places of the namespace (`vfs::confine`, `filesystem::view`):
 //! it then reaches what is inside them, each to read or to change too, and
 //! the directories on the way to them, whose listings show it what leads on
 //! to a place; nothing else is there for it. A program that handles what it
@@ -67,7 +67,7 @@
 //! connection was refused where there is something.
 //!
 //! **Loans.** A connection that is not confined can lend a confined one a
-//! place to read (`vfs::lend`, `vfs::borrow`, `filesystem_core::loans`):
+//! place to read (`vfs::lend`, `vfs::borrow`, `filesystem::loans`):
 //! the browser lends its network process the folder of a page the user
 //! opens. The loan is a secret of random bytes, which the lender hands on
 //! over a channel of its own and which is taken once, for the place it was
@@ -79,7 +79,7 @@
 //! place so lent, and so taken back.
 //!
 //! **Locks.** The VFS arbitrates advisory locks between processes, as
-//! Linux does (`file::lock`, `filesystem_core::locks`): `flock`'s, held by
+//! Linux does (`file::lock`, `filesystem::locks`): `flock`'s, held by
 //! open file descriptions, and locks on bytes, held by processes (POSIX's
 //! record locks) or by open file descriptions (OFD locks). An open file's
 //! go as its last connection closes; a process owns its locks by a secret
@@ -91,7 +91,7 @@
 //!
 //! **Limits.** No path is longer than `proto::fs::MAX_PATH`. A program
 //! holds a bounded number of connections, and all of them together stay
-//! within what the kernel waits on at once (`filesystem_core::access`).
+//! within what the kernel waits on at once (`filesystem::access`).
 //! Files grow only while memory is left for the rest of the system, and in
 //! `/home` while they fit on the home disk.
 
@@ -123,15 +123,15 @@ use rt::object::{Channel, Handle, Vmo};
 use rt::println;
 
 use dev::Dev;
-use filesystem_core::access::{self, Connections, PACKAGES, PRIVATE};
-use filesystem_core::loans::{Loans, TakenBack};
-use filesystem_core::locks::{self, FileId, Locks, Outcome, Owner, Owners};
-use filesystem_core::renamed;
-use filesystem_core::shm::Shm;
-use filesystem_core::snapshot::{self, Samples};
-use filesystem_core::tree::{self, Data, Kind, Node, NodeId, Tree};
-use filesystem_core::view::{Reach, View};
-use filesystem_core::{HOME, USER};
+use filesystem::access::{self, Connections, PACKAGES, PRIVATE};
+use filesystem::loans::{Loans, TakenBack};
+use filesystem::locks::{self, FileId, Locks, Outcome, Owner, Owners};
+use filesystem::renamed;
+use filesystem::shared_memory::Shm;
+use filesystem::snapshot::{self, Samples};
+use filesystem::tree::{self, Data, Kind, Node, NodeId, Tree};
+use filesystem::view::{Reach, View};
+use filesystem::{HOME, USER};
 use persist::Store;
 use sockets::Sockets;
 
@@ -199,7 +199,7 @@ enum Target {
     Node(Mount, NodeId),
     Dev(Dev),
     /// A shared memory object.
-    Memory(filesystem_core::shm::Id),
+    Memory(filesystem::shared_memory::Id),
 }
 
 impl Target {
@@ -368,7 +368,7 @@ impl Fs {
 
     /// Copies `len` bytes of shared memory object `id` into a VMO of their
     /// own.
-    fn copy_of_memory(&self, id: filesystem_core::shm::Id, len: u64) -> Result<Vmo, FsError> {
+    fn copy_of_memory(&self, id: filesystem::shared_memory::Id, len: u64) -> Result<Vmo, FsError> {
         self.memory_for(len as usize)?;
         let vmo = Vmo::create((len as usize).max(1)).map_err(|_| FsError::NoSpace)?;
         let mut at = 0;
@@ -1818,7 +1818,7 @@ impl file::Server for FileSession<'_> {
 /// A writable tree with `/tmp` and an empty `/home`.
 fn fresh_ram() -> Tree {
     let mut ram = Tree::new(false, device::RAM, rt::time::unix_time_ns);
-    let _ = ram.mkdir_all(&[filesystem_core::TMP]);
+    let _ = ram.mkdir_all(&[filesystem::TMP]);
     let _ = ram.mkdir_all(&[HOME, USER]);
     ram
 }

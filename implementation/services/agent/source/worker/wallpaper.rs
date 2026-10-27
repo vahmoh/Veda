@@ -28,7 +28,7 @@ impl Ctx {
                     let w = want.to_lowercase();
                     match list.iter().find(|p| name_of(p).to_lowercase().contains(&w)) {
                         Some(p) => p.clone(),
-                        None => agent_core::files::resolve(want)?,
+                        None => agent::files::resolve(want)?,
                     }
                 };
                 match s.set_wallpaper(path.clone()) {

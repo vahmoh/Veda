@@ -38,7 +38,7 @@ use ipc::{Bytes, IpcError};
 use proto::fs::{FsError, SocketConnection, SocketDatagram, SocketPeer, socket_event, socket_kind};
 use rt::object::{Channel, Handle};
 
-use filesystem_core::tree::NodeId;
+use filesystem::tree::NodeId;
 
 /// Sockets one program may have bound and open at once: each holds a
 /// handle of the VFS's.

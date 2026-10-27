@@ -18,9 +18,9 @@
 //! and without `.` or `..`, so that no path names a place it is not in.
 //!
 //! `/dev/shm`, where programs keep the memory they share
-//! ([`crate::shm`]), is reached by places at or inside it alone: one that
-//! holds it (`/dev`, as a program is given the devices to read, or `/`)
-//! reaches the rest, so that no confined program reaches the memory of
+//! ([`crate::shared_memory`]), is reached by places at or inside it alone:
+//! one that holds it (`/dev`, as a program is given the devices to read, or
+//! `/`) reaches the rest, so that no confined program reaches the memory of
 //! others by being given what holds it.
 
 use alloc::string::{String, ToString};

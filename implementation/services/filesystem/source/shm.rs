@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The memory of `/dev/shm`'s shared memory objects
-//! (`filesystem_core::shm`): a VMO each, which the VFS reads and writes for
-//! the files that have the object open, and hands out to map
+//! (`filesystem::shared_memory`): a VMO each, which the VFS reads and
+//! writes for the files that have the object open, and hands out to map
 //! ([`Memory::handle`]): every process that maps it shares the memory, and
 //! keeps it while its mapping lasts, whatever becomes of the object.
 
@@ -29,7 +29,7 @@ impl Memory {
     }
 }
 
-impl filesystem_core::shm::Memory for Memory {
+impl filesystem::shared_memory::Memory for Memory {
     fn reserve(&mut self, len: u64) -> Result<(), FsError> {
         let held = self.0.size().map_err(|_| FsError::Io)? as u64;
         if len > held {

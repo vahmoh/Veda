@@ -22,7 +22,7 @@
 //! stream may ask for more channels beside the cleaned microphone: what
 //! was playing when it was recorded (the echo's source), and the
 //! microphone as recorded — so a voice assistant can tell its own echo
-//! from the user (see `agent_core::gate`).
+//! from the user (see `agent::gate`).
 //!
 //! **Power.** The device records only while some stream is open: the
 //! service sets the ring's CAPTURE flag and signals `wake_event` when the

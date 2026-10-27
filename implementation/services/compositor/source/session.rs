@@ -3,13 +3,13 @@
 
 //! The `display` protocol: one [`Session`] per request, for the client on
 //! one connection. What a request may do and what it changes, the window
-//! manager decides (`compositor_core::Wm`); this makes the channels and maps
+//! manager decides (`compositor::Wm`); this makes the channels and maps
 //! the memory that go with it.
 
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use compositor_core::buffers::Buffers;
+use compositor::buffers::Buffers;
 use proto::display::{
     self as dp, Cursor, DisplayError, Placement, ScreenInfo, WindowInfo, WindowSpec, WindowState, display,
 };

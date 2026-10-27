@@ -81,7 +81,7 @@ memory and their devices.
 | `iommu` | `implementation/libraries/iommu` | The DMAR table; the units' registers and structures |
 | Device manager | `implementation/services/device-manager` | Picks the driver VM's devices, serves their `pcidev` channels, resets them, restarts the driver VM |
 | Monitor | `implementation/services/driver-virtual-machine` | The machine, its hypercalls and PCI functions, the bridge, the narrowed registry |
-| `driver-virtual-machine-core` | `implementation/services/driver-virtual-machine/core` | The monitor's decisions that touch no object: the bridge's books, the guest's budget and window, where functions and BARs go, the keyboard controller's commands |
+| The monitor's library | `implementation/services/driver-virtual-machine/source/lib.rs` | The monitor's decisions that touch no object: the bridge's books, the guest's budget and window, where functions and BARs go, the keyboard controller's commands |
 | Guest kernel | `implementation/ports/linux` | Linux with `veda.patch` (`hvc_veda.c`, `drivers/virt/veda/bridge.c` and `efi.c`, `gpio-veda.c`, an i915 change) and `architectures/amd64/veda.patch` (`arch/x86/kernel/cpu/veda.c`, `arch/x86/pci/veda.c`) |
 | Guest runtime | `implementation/libraries/rt/source/guest.rs` | `rt`'s system calls through `/dev/veda`; watches |
 | Guest programs | `implementation/guests/linux` | `init`; the drivers `input`, `alsa`, `net`, `wifi`, `kms` and `renderer`; `logkeeper`; the tests `bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `timertest`, `kmspause`; shared code (`sys`, `netlink`) |
@@ -293,7 +293,7 @@ the processor's reset line and the A20 gate, so the monitor, which carries
 out every access to the two ports, passes only the commands Linux's
 driver gives (none touches the output port) and drops the rest: a data
 byte is a command's parameter or the keyboard's, never the output port's
-(`driver_virtual_machine_core::architecture::i8042`). The guest does not
+(`driver_virtual_machine::architecture::i8042_commands`). The guest does not
 reach the ports around them, such as 0x61 with the NMI switches.
 
 ## Veda's drivers for Linux
@@ -427,8 +427,8 @@ beyond a bound is refused (`LimitReached`):
 |------|-------|
 | Handles | 16384, those in messages it sent itself included |
 | Waits that go on | Their items fit one kernel wait (`abi::WAIT_MANY_MAX`, less the waiter's event); with the finished waits not yet in the ring, at most what the ring holds |
-| Veda's memory | A quarter of the PC's, 512 MiB at least: the VMOs it made (by size, while it or a message on its way to it holds them; pages are committed as used), the messages it sent itself until it reads them, and its window mappings (`driver_virtual_machine_core::ledger`) |
-| Window mappings | 4096 (`driver_virtual_machine_core::window`) |
+| Veda's memory | A quarter of the PC's, 512 MiB at least: the VMOs it made (by size, while it or a message on its way to it holds them; pages are committed as used), the messages it sent itself until it reads them, and its window mappings (`driver_virtual_machine::ledger`) |
+| Window mappings | 4096 (`driver_virtual_machine::window`) |
 
 Closing a handle a wait names ends the wait, so a closed channel's peer
 sees it closed.
@@ -570,8 +570,8 @@ PS/2 and the virtio tablet (`input usb`), and virtio-gpu (`gpu on`),
 which renders on the host's GPU the firmware showed its screen on, or the
 one `VEDA_RENDERNODE` names.
 
-What touches no hardware is unit-tested on the host: `hv`, `iommu`,
-`driver-virtual-machine-core`, and the guest programs' logic (touchpads,
+What touches no hardware is unit-tested on the host: `hv`, `iommu`, the
+monitor's library, and the guest programs' logic (touchpads,
 sound cards' devices, display modes, the stick's logs, network interfaces
 and their links, retries).
 The renderer's decoder is tested through `gl`'s tests, on softpipe and on

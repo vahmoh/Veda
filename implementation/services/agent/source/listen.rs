@@ -10,7 +10,7 @@
 //! as a key term), until they have been quiet for a few seconds, or nothing
 //! was said in words for a while. Each piece of transcript, and what was
 //! said since the last pause, is checked for the agent's name
-//! ([`agent_core::wake::call`]). A call wakes it once the sentence is over
+//! ([`agent::wake::call`]). A call wakes it once the sentence is over
 //! (the recogniser may finish "Hey Veda," before the rest of it), and with
 //! the rest of the sentence becomes the first thing the user said in the
 //! conversation.
@@ -18,7 +18,7 @@
 //! Nothing it hears, the agent's name included, tells the window system
 //! that the user is there: it hears whatever is said near the computer,
 //! which would otherwise keep an unattended one from locking (see
-//! `agent_core::presence`).
+//! `agent::presence`).
 //!
 //! The detector is [`audio::vad::Vad`]; music or a television can seem
 //! like speech to it. What the computer plays itself (music, a video)
@@ -26,13 +26,13 @@
 //! it, but what is left still sounds like speech, and gets louder with the
 //! music. So while something plays, recognition starts only for a sound
 //! louder than that sound's echo can be, as the conversation's echo gate
-//! decides ([`agent_core::gate`]): in the microphone as recorded too, since
+//! decides ([`agent::gate`]): in the microphone as recorded too, since
 //! someone calling over the music adds sound to the room, and what the
 //! canceller lets through does not.
 //!
 //! Other sound — a television, music from elsewhere — reaches the
 //! recogniser. When it heard no words for a while, the sound it was given
-//! is taken for such a background ([`agent_core::wake::Background`]): until
+//! is taken for such a background ([`agent::wake::Background`]): until
 //! it stops, recognition starts again only for a sound that stands out
 //! from it (louder than its usual peaks), so the television does not keep
 //! the recogniser busy, while someone calling over it still does. It
@@ -50,9 +50,9 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 
 use abi::{RawHandle, signals};
-use agent_core::deepgram;
-use agent_core::gate::{EchoGate, Verdict};
-use agent_core::wake::{self, Background, Budget};
+use agent::deepgram;
+use agent::gate::{EchoGate, Verdict};
+use agent::wake::{self, Background, Budget};
 use audio::vad::Vad;
 use serde_json::json;
 use web::ws::{Message, WebSocket};

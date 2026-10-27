@@ -3,9 +3,9 @@
 
 //! `memory`: what the agent remembers about the user. A request to forget
 //! arrives naming its facts by id (made definite before it was classified:
-//! `agent_core::memory::Memory::pin_forget`), and removes exactly those.
+//! `agent::memory::Memory::pin_forget`), and removes exactly those.
 
-use agent_core::tools;
+use agent::tools;
 use serde_json::{Value, json};
 
 use super::Ctx;

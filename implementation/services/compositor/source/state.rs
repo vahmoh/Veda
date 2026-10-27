@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The compositor's state: the window manager (`compositor_core::Wm`), and
+//! The compositor's state: the window manager (`compositor::Wm`), and
 //! what goes with it in this process: the clients' channels, the screen,
 //! how windows are drawn, and the GPU.
 //!
@@ -16,8 +16,8 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use abi::signals;
-use compositor_core::Wm;
-use compositor_core::outbox::Write;
+use compositor::Wm;
+use compositor::outbox::Write;
 use gfx::{Bitmap, Rect};
 use proto::display::{self as dp, Cursor, DisplayError, LockNotice, SubsurfaceEvent, WindowEvent};
 use rt::object::Channel;

@@ -1,9 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `filesystem-core` — the file systems of the VFS
-//! (`implementation/services/filesystem`) apart from the service around
-//! them, so that they can be tested on the host.
+//! The file systems of the VFS apart from the service around them (the
+//! program, `main.rs`), so that they can be tested on the host.
 //!
 //! * [`tree`]: an in-memory file system, as the read-only system image and
 //!   the writable file system (`/home` and `/tmp`) both are, and the pages
@@ -20,7 +19,8 @@
 //! * [`locks`]: the advisory locks on files that the VFS arbitrates
 //!   between processes (`file::lock`), and the processes that own them
 //!   (`vfs::lock_owner`).
-//! * [`shm`]: `/dev/shm`, the shared memory objects, named and sized.
+//! * [`shared_memory`]: `/dev/shm`, the shared memory objects, named and
+//!   sized.
 
 #![no_std]
 
@@ -32,7 +32,7 @@ pub mod access;
 pub mod loans;
 pub mod locks;
 pub mod renamed;
-pub mod shm;
+pub mod shared_memory;
 pub mod snapshot;
 pub mod tree;
 pub mod view;

@@ -4,7 +4,7 @@
 //! Persistence of the user's home directory on the home disk.
 //!
 //! The disk with serial number [`HOME_DISK_SERIAL`] holds snapshots of
-//! `/home` ([`filesystem_core::snapshot`]) in two slots, each a header
+//! `/home` ([`filesystem::snapshot`]) in two slots, each a header
 //! sector followed by the snapshot. A save writes the slot not holding the
 //! newest snapshot, its data first and its header last, each made durable
 //! before the next; loading takes the newest slot whose snapshot reads back
@@ -25,8 +25,8 @@ use proto::block::{self as blk, block};
 use proto::fs::FsError;
 use rt::println;
 
-use filesystem_core::snapshot::{self, Samples, Sink, Source};
-use filesystem_core::tree::Tree;
+use filesystem::snapshot::{self, Samples, Sink, Source};
+use filesystem::tree::Tree;
 
 /// Serial number of the disk that holds the home directory.
 pub const HOME_DISK_SERIAL: &str = "veda-home";

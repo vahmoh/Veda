@@ -14,7 +14,7 @@
 //! `/dev/fd/N`) differ from process to process; the POSIX layer provides
 //! them. `/dev/shm`, which [`Dev::list`]'s caller lists with the devices,
 //! is a file system of its own: the shared memory objects
-//! (`filesystem_core::shm`).
+//! (`filesystem::shared_memory`).
 
 use alloc::vec::Vec;
 

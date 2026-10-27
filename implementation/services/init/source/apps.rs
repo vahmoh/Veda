@@ -3,7 +3,7 @@
 
 //! The applications the launcher lists and starts: the system image's
 //! (`apps/<id>.app`), read at start, and the installed packages'
-//! (`/home/packages/apps/<id>.app`). `init_core::apps` describes their
+//! (`/home/packages/apps/<id>.app`). `init::manifests` describes their
 //! manifests, and which of the packages' applications are listed and
 //! started, and how.
 //!
@@ -29,7 +29,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use abi::signals;
-use init_core::apps::{
+use init::manifests::{
     MAX_MANIFEST, MAX_PACKAGED, PACKAGES, PACKAGES_APPS, Program, manifest_id, merge, packaged, program,
 };
 use ipc::{Decode, Decoder, Encode};
@@ -118,7 +118,7 @@ pub fn load(archive: &initrd::Archive) -> Vec<AppInfo> {
         .files()
         .filter_map(|f| {
             let id = f.path.strip_prefix("apps/").and_then(manifest_id)?;
-            Some(init_core::apps::system(id, core::str::from_utf8(f.data).ok()?))
+            Some(init::manifests::system(id, core::str::from_utf8(f.data).ok()?))
         })
         .collect();
     apps.sort_by(|a, b| a.name.cmp(&b.name));

@@ -8,6 +8,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+# What the launcher decides, tested on the host: the applications'
+# manifests, and which of the installed packages' applications it lists and
+# starts.
+[lib]
+path = "source/lib.rs"
+
 [[bin]]
 name = "init"
 path = "source/main.rs"
@@ -15,12 +21,16 @@ test = false
 bench = false
 
 [dependencies]
-rt = { workspace = true }
 abi = { workspace = true }
 initrd = { workspace = true }
 ipc = { workspace = true }
 proto = { workspace = true }
-init-core = { path = "core" }
+
+# rt on Veda's targets alone: its runtime (the program's entry point,
+# allocator and panic handler) would clash with std's in the library's
+# tests on the host ("Library crates" in documentation/CODING.md).
+[target.'cfg(any(target_os = "veda", target_env = "musl"))'.dependencies]
+rt = { workspace = true }
 
 [build-dependencies]
 build = { workspace = true }

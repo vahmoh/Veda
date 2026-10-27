@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! What the monitor decides on AMD64 that reaches no object of Veda's
-//! (the program's own part is
-//! `implementation/services/driver-virtual-machine/source/architectures/amd64`).
+//! What the monitor decides on AMD64 that reaches no object of Veda's (the
+//! program's own part is `mod.rs`, beside this).
 //!
-//! * [`i8042`]: the PC's keyboard controller, as the guest may drive it.
+//! * [`i8042_commands`]: the PC's keyboard controller, as the guest may
+//!   drive it.
 //! * How many MSIs the guest's functions may have at once ([`MAX_MSIS`]).
 
-pub mod i8042;
+pub mod i8042_commands;
 
 /// The most MSIs the guest's functions have at once: two thirds of the
 /// interrupt vectors Veda's kernel gives devices on AMD64 (0x30 to 0xEF,

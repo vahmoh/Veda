@@ -8,6 +8,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+# What the window system decides, tested on the host: windows, focus and
+# input, who may do what, and the limits clients are held to.
+[lib]
+path = "source/lib.rs"
+
 [[bin]]
 name = "compositor"
 path = "source/main.rs"
@@ -15,14 +20,20 @@ test = false
 bench = false
 
 [dependencies]
-compositor-core = { path = "core" }
-rt = { workspace = true }
 abi = { workspace = true }
 ipc = { workspace = true }
 proto = { workspace = true }
 gfx = { workspace = true }
 num-traits = { workspace = true }
 splash = { workspace = true }
+
+# On Veda's targets alone: rt, whose runtime (the program's entry point,
+# allocator and panic handler) would clash with std's in the library's
+# tests on the host ("Library crates" in documentation/CODING.md), and gl
+# as it runs in Veda, whose `veda` feature the host tests would otherwise
+# turn on in gl's own.
+[target.'cfg(any(target_os = "veda", target_env = "musl"))'.dependencies]
+rt = { workspace = true }
 gl = { workspace = true, features = ["veda"] }
 
 [build-dependencies]

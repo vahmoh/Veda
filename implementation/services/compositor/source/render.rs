@@ -11,8 +11,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use compositor_core::Wm;
-use compositor_core::window::AnimKind;
+use compositor::Wm;
+use compositor::window::AnimKind;
 use gfx::{Canvas, Damage, Rect};
 use proto::display::WindowEvent;
 use rt::println;

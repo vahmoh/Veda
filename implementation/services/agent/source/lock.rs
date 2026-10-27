@@ -89,7 +89,7 @@ impl Agent {
     }
 
     /// Tells the window system that the user is there, as input would (see
-    /// `agent_core::presence` for when): while it watches the lock, which
+    /// `agent::presence` for when): while it watches the lock, which
     /// it does whenever the window system runs.
     pub(crate) fn user_active(&mut self) {
         let Some(d) = &self.lock_watch.display else { return };

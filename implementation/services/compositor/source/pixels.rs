@@ -16,8 +16,8 @@
 
 use alloc::vec::Vec;
 
-use compositor_core::buffers::{Buffers, Layout, Surface};
-use compositor_core::switcher;
+use compositor::buffers::{Buffers, Layout, Surface};
+use compositor::switcher;
 use gfx::Bitmap;
 use rt::vm::Mapping;
 

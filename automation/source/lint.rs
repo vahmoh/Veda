@@ -4,7 +4,9 @@
 //! `cargo automation clippy`: Clippy over every crate, each built as Veda
 //! builds it, its warnings errors:
 //!
-//! * the crates with host unit tests, for the host, their tests too;
+//! * the crates with host unit tests, for the host, their tests too (of a
+//!   service's package, the library alone: the program builds for its
+//!   target, below);
 //! * the loader, the kernel and the POSIX layer, for their freestanding
 //!   targets;
 //! * the programs on `rt` alone, for the user target;
@@ -34,7 +36,12 @@ pub fn command(args: &[String]) -> Result {
         return Err(format!("clippy takes no arguments ({arg})"));
     }
     util::status("Checking", "the crates with host tests, and their tests");
-    util::run(runner::host_crates(&["clippy", "--quiet", "--all-targets"]).args(DENY_WARNINGS))?;
+    // A program's package among them (a service's, with its library) has
+    // `rt` on Veda's targets alone: its library and tests are checked here,
+    // its program below.
+    let program = |package: &str| PROGRAMS.iter().any(|p| p.package == package);
+    util::run(runner::host_crates(&["clippy", "--quiet", "--all-targets"], |p| !program(p)).args(DENY_WARNINGS))?;
+    util::run(runner::host_crates(&["clippy", "--quiet", "--lib", "--tests"], program).args(DENY_WARNINGS))?;
     for package in runner::HOST_TESTED_ALONE {
         util::run(
             util::cargo().args(["clippy", "--quiet", "--all-targets", "--package", package]).args(DENY_WARNINGS),

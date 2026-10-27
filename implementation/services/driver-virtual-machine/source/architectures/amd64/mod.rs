@@ -9,10 +9,9 @@
 //! * Where the guest has things below 4 GiB, as a PC has them, and how
 //!   its processors' interrupts and MSIs look, and how many it may have.
 //!
-//! What of it reaches no object of Veda's is
-//! `driver_virtual_machine_core::architecture`
-//! (`implementation/services/driver-virtual-machine/core/source/architectures/amd64`),
-//! tested on the host.
+//! What of it reaches no object of Veda's is the library's
+//! (`driver_virtual_machine::architecture`, `lib.rs` beside this), tested
+//! on the host.
 
 pub mod boot;
 mod i8042;
@@ -20,7 +19,7 @@ pub mod platform;
 
 use core::ops::Range;
 
-pub use driver_virtual_machine_core::architecture::MAX_MSIS;
+pub use driver_virtual_machine::architecture::MAX_MSIS;
 pub use hv::amd64::memory::{ACPI_AT, ACPI_ROOM, OPREGION_AT};
 pub use hv::amd64::platform::msi_result;
 

@@ -1,12 +1,11 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `agent-core` — the logic of the voice agent that lives in Veda.
+//! The logic of the voice agent that lives in Veda.
 //!
-//! The agent service (`implementation/services/agent`) does the I/O —
-//! audio, the network, talking to applications — and uses this crate for
-//! everything that can be decided without it, so that it can be tested on
-//! the host:
+//! The agent's program (`main.rs`) does the I/O — audio, the network,
+//! talking to applications — and uses this library for everything that can
+//! be decided without it, so that it can be tested on the host:
 //!
 //! * [`deepgram`]: the Deepgram Voice Agent protocol (the `Settings`
 //!   message, server messages, client messages), streaming speech-to-text

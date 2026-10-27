@@ -5,13 +5,13 @@
 //! it the guest: Linux's driver of it reaches its two ports through the
 //! monitor, which carries the reads and writes out on the controller, the
 //! commands only if they are those Linux's drivers give
-//! (`driver_virtual_machine_core::architecture::i8042`): the controller
+//! (`driver_virtual_machine::architecture::i8042_commands`): the controller
 //! also drives the processor's reset line, which none of them touches. Its
 //! interrupts are the guest's lines 1 and 12 (the keyboard's and the
 //! mouse's, edges: see `crate::lines`). The ports around them (0x61's NMI
 //! controls among them) the guest does not reach.
 
-use driver_virtual_machine_core::architecture::i8042::Controller;
+use driver_virtual_machine::architecture::i8042_commands::Controller;
 use rt::object::IoPorts;
 use rt::println;
 use rt::sync::Mutex;

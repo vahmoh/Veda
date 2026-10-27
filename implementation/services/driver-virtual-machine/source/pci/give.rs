@@ -15,7 +15,7 @@ use alloc::vec::Vec;
 use core::ops::Range;
 
 use abi::map_flags;
-use driver_virtual_machine_core::functions::{Windows, messages};
+use driver_virtual_machine::functions::{Windows, messages};
 use hv::pci::{Bar, HostBridge};
 use proto::pci::{DeviceInfo, cap, find_capability, pcidev};
 use rt::object::Guest;
