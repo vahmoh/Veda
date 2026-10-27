@@ -828,7 +828,7 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 51] = [
+    let tests: [Test; 52] = [
         ("starved threads run", test_starved_threads_run),
         ("ipc primitives", test_ipc_primitives),
         ("short sleeps", test_short_sleeps),
@@ -877,6 +877,7 @@ fn main() -> i32 {
         ("packages' applications", packages::test_applications),
         ("what applications may do", policy::test_application_limits),
         ("the lock", policy::test_the_lock),
+        ("private directories", policy::test_private_directories),
         ("crash report", test_crash_report),
         ("service restart", test_service_restart),
         // Last: it fills the memory, which the others need not see.

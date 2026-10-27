@@ -4,8 +4,9 @@
 //! The rules that keep one process from harming others: what the kernel
 //! does with handles that travel on channels, how a server answers a request
 //! it cannot serve, what the launcher, the registry and the scheduler let an
-//! application do, who may change how the network is set up, and who may
-//! lock and unlock the screen.
+//! application do, who may change how the network is set up, who may lock
+//! and unlock the screen, and who reaches the system services' private
+//! directories.
 
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -13,11 +14,12 @@ use alloc::vec::Vec;
 
 use abi::{Error, Rights};
 use ipc::{Bytes, Encoder, FLAG_REQUEST, IpcError, Refusal};
+use proto::fs::{FsError, open_flags};
 use proto::launcher;
-use rt::object::{Channel, Event, Handle};
+use rt::object::{Channel, Event, Handle, Vmo};
 use rt::println;
 
-use crate::{TestResult, check};
+use crate::{TestResult, check, vfs_client};
 
 /// Whether `raw` names nothing in this process's handle table any more.
 fn closed(raw: abi::RawHandle) -> bool {
@@ -386,4 +388,77 @@ pub fn test_the_lock() -> TestResult {
         }
         rt::time::sleep(rt::time::Duration::from_millis(100));
     }
+}
+
+/// Where the system services' private directories are.
+const PRIVATE: &str = "/home/.private";
+
+/// Files in them: the Wi-Fi service's saved networks (passphrases among
+/// them), the firewall's settings, the lock screen's password and the
+/// agent's Deepgram key.
+const PRIVATE_FILES: [&str; 4] = [
+    "/home/.private/wlan/networks",
+    "/home/.private/network/firewall",
+    "/home/.private/lock/password",
+    "/home/.private/agent/deepgram-key",
+];
+
+/// A file of systest's own, which it tries to put among them, and where it
+/// tries to take theirs.
+const OWN: &str = "/tmp/systest-own";
+const TAKEN: &str = "/tmp/systest-taken";
+
+/// Whether the file system refused a request with `Denied`.
+fn denied<T>(r: Result<Result<T, FsError>, IpcError>) -> bool {
+    matches!(r, Ok(Err(FsError::Denied)))
+}
+
+/// The system services' private directories (`/home/.private/<service>`)
+/// are theirs alone. An application (as init starts systest) may not look
+/// at, read, open, copy, write, replace, move or remove a file in one, nor
+/// create a file there or move one in, nor list one: the file system
+/// refuses before it looks the path up, whether the file is there or not,
+/// and by whatever path. Nor may it list `/home/.private`, make a directory
+/// there, or move it or `/home` (which would take the private directories
+/// out from under the guard); a listing of `/home` neither shows it nor
+/// counts it.
+pub fn test_private_directories() -> TestResult {
+    let fs = vfs_client()?;
+    let s = |e: IpcError| e.to_string();
+    let f = |e: FsError| e.to_string();
+    let contents = || Vmo::create(4).map_err(|e| e.to_string());
+    let refused = |what: &str, at: &str, r: bool| check(r, &alloc::format!("an application may not {what} {at}"));
+    let home = fs.read_dir("/home".into()).map_err(s)?.map_err(f)?;
+    check(home.iter().any(|e| e.name == "user"), "a listing of /home shows the user's home")?;
+    check(!home.iter().any(|e| e.name == ".private"), "a listing of /home does not show .private")?;
+    let size = fs.stat("/home".into()).map_err(s)?.map_err(f)?.size;
+    check(size == home.len() as u64, "the size of /home is what a listing of it shows")?;
+    refused("stat", PRIVATE, denied(fs.stat(PRIVATE.into())))?;
+    refused("list", PRIVATE, denied(fs.read_dir(PRIVATE.into())))?;
+    refused("make a directory in", PRIVATE, denied(fs.mkdir("/home/.private/systest".into())))?;
+    refused("rename", PRIVATE, denied(fs.rename(PRIVATE.into(), TAKEN.into())))?;
+    refused("remove", PRIVATE, denied(fs.remove(PRIVATE.into())))?;
+    refused("rename", "/home", denied(fs.rename("/home".into(), TAKEN.into())))?;
+
+    fs.write_file(OWN.into(), contents()?, 4).map_err(s)?.map_err(f)?;
+    for path in PRIVATE_FILES {
+        refused("stat", path, denied(fs.stat(path.into())))?;
+        refused("read", path, denied(fs.read_file(path.into())))?;
+        refused("open", path, denied(fs.open(path.into(), open_flags::READ)))?;
+        refused("open a file connection to", path, denied(fs.open_file(path.into(), open_flags::READ)))?;
+        refused("copy", path, denied(fs.copy_file(path.into(), TAKEN.into())))?;
+        refused("write", path, denied(fs.write_file(path.into(), contents()?, 4)))?;
+        refused("replace", path, denied(fs.replace(OWN.into(), path.into())))?;
+        refused("rename", path, denied(fs.rename(path.into(), TAKEN.into())))?;
+        refused("remove", path, denied(fs.remove(path.into())))?;
+        let dir = path.rsplit_once('/').map_or(PRIVATE, |(dir, _)| dir);
+        let planted = alloc::format!("{dir}/planted");
+        refused("create a file in", dir, denied(fs.open(planted.clone(), open_flags::WRITE | open_flags::CREATE)))?;
+        refused("move a file into", dir, denied(fs.rename(OWN.into(), planted)))?;
+        refused("list", dir, denied(fs.read_dir(dir.into())))?;
+    }
+    // Nor by a path that goes round.
+    let round = "/home/user/../.private/wlan/networks";
+    refused("read", round, denied(fs.read_file(round.into())))?;
+    fs.remove(OWN.into()).map_err(s)?.map_err(f)
 }
