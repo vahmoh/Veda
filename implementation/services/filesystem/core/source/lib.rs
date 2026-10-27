@@ -12,6 +12,8 @@
 //! * [`access`]: who may reach the system services' private directories,
 //!   which places of the namespace stay where they are, and how many
 //!   connections a program may hold.
+//! * [`renamed`]: the private directories of services that were renamed,
+//!   moved to their new names as the file system starts.
 //! * [`view`]: what a confined connection reaches (`vfs::confine`).
 //! * [`loans`]: places to read that a connection lends a confined one
 //!   (`vfs::lend`, `vfs::borrow`), and takes back (`vfs::take_back`).
@@ -29,6 +31,7 @@ extern crate std;
 pub mod access;
 pub mod loans;
 pub mod locks;
+pub mod renamed;
 pub mod shm;
 pub mod snapshot;
 pub mod tree;

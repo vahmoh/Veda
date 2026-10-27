@@ -48,7 +48,9 @@
 //! only it can see and change what is inside, and `.private` does not
 //! appear in listings of `/home` for anyone else. Services keep secrets and
 //! personal data there (the agent its Deepgram key and what it remembers
-//! about the user), on the home disk like everything in `/home`. A
+//! about the user), on the home disk like everything in `/home`. A renamed
+//! service's directory follows the service: it moves from the old name to
+//! the new as the file system starts (`filesystem_core::renamed`). A
 //! connection can give that access up (`vfs::renounce_private`). The root,
 //! `/home`, `/home/user`, `/tmp` and `/home/.private` cannot be removed,
 //! moved or replaced (see `filesystem_core::access`).
@@ -124,6 +126,7 @@ use dev::Dev;
 use filesystem_core::access::{self, Connections, PACKAGES, PRIVATE};
 use filesystem_core::loans::{Loans, TakenBack};
 use filesystem_core::locks::{self, FileId, Locks, Outcome, Owner, Owners};
+use filesystem_core::renamed;
 use filesystem_core::shm::Shm;
 use filesystem_core::snapshot::{self, Samples};
 use filesystem_core::tree::{self, Data, Kind, Node, NodeId, Tree};
@@ -1858,7 +1861,16 @@ fn build(archive: &initrd::Archive<'static>, image: SystemImage, live: bool) -> 
         (Some(_), false) => "new, on the home disk",
     };
     println!("home directory {}", home);
-    Fs {
+    // A service renamed since the home was made finds its private directory
+    // under its new name, before any service is there to look.
+    let moved = renamed::move_private(&mut ram);
+    for m in &moved {
+        match m.result {
+            Ok(()) => println!("moved /home/.private/{} to /home/.private/{}, its service's new name", m.from, m.to),
+            Err(e) => println!("cannot move /home/.private/{} to /home/.private/{}: {}", m.from, m.to, e),
+        }
+    }
+    let mut fs = Fs {
         system,
         system_bytes,
         image,
@@ -1878,7 +1890,12 @@ fn build(archive: &initrd::Archive<'static>, image: SystemImage, live: bool) -> 
         owners: Owners::new(),
         lock_waits: BTreeMap::new(),
         next_open: 0,
+    };
+    // The home disk keeps the new names from its next save on.
+    if moved.iter().any(|m| m.result.is_ok()) {
+        fs.changed();
     }
+    fs
 }
 
 fn main() -> i32 {

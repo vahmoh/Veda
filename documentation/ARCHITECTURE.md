@@ -421,11 +421,13 @@ gives every other device to Linux in [the driver VM](DRIVERVM.md).
   (`implementation/services/filesystem/core`), tested on the host.
 - **Private directories.** `/home/.private/<service>` belongs to the system
   service of that name: only it sees and changes what is inside. The VFS
-  makes `/home/.private` at every start, before any service. A
-  connection can give up that access for good (`renounce_private`), as the
-  agent's worker does. The root, `/home`, `/home/user`, `/tmp`,
-  `/home/.private` and `/home/packages` cannot be removed, moved or
-  replaced.
+  makes `/home/.private` at every start, before any service, and moves the
+  directories of services renamed since the home was made (`netd`,
+  `packages`) to their new names, where nothing would be lost
+  (`filesystem_core::renamed`). A connection can give up that access for
+  good (`renounce_private`), as the agent's worker does. The root, `/home`,
+  `/home/user`, `/tmp`, `/home/.private` and `/home/packages` cannot be
+  removed, moved or replaced.
 - **Installed packages.** `/home/packages` holds the files of the packages
   installed: every program reads them and runs the programs among them,
   and only the package manager (`package-manager`, a system service that has
