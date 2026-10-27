@@ -802,6 +802,7 @@ fn main() -> i32 {
         return 1;
     };
     let fs = Fs::connect();
+    store::move_old(&fs);
     let profiles = store::load(&fs);
     println!("Wi-Fi service started ({} saved networks)", profiles.len());
     let mut w = Wlan {

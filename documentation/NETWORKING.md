@@ -252,7 +252,7 @@ are read (they may answer it), nor about system services.
 
 ### Staying connected
 
-* **Saved networks** (`/home/user/.config/wlan/networks`) are joined
+* **Saved networks** (`/home/.private/wlan/networks`) are joined
   automatically: the most recently used first, then the strongest access
   point (5 GHz gets a small bonus).
 * **A lost connection** (the access point stops answering, disconnects the
@@ -308,10 +308,18 @@ are read (they may answer it), nor about system services.
   the handshake's copies of what it installed), and so is the decrypted
   key data of the handshake's messages; a new pairwise key keeps the group
   keys.
-
-> [!IMPORTANT]
-> The saved-networks file holds the passphrases, which rejoining needs, and
-> the file system has no access control yet: any program can read it.
+* **Where saved networks are kept**: `/home/.private/wlan/networks`, in
+  `wlan`'s private directory, which the file system opens to no other
+  program, so no application can read the passphrases, which rejoining
+  needs, or change the list but through `wlan`. They are not encrypted on
+  the disk. A new list is written beside the old and takes its place.
+  Earlier systems kept it in `/home/user/.config/wlan/networks`, where
+  every program reaches it: as `wlan` starts, that file moves to the
+  private directory if that has no list yet (one there is newer, and the
+  old file then stays), and goes, with its directory if nothing else is
+  in it, only once the new one reads back whole. With nothing to move,
+  `wlan` saves an empty list, so that no program can slip one in through
+  the old place later.
 
 ### Radios
 
