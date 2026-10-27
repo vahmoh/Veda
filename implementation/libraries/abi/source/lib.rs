@@ -221,6 +221,15 @@ pub mod nr {
     /// `[addr, addr+len)`, which `vm_allocate` memory must cover completely;
     /// they read as zeros from then on. The mappings stay.
     pub const VM_DECOMMIT: usize = 54;
+    /// `vm_barrier()`: every processor running a thread of the calling
+    /// process goes through a full memory barrier before the call returns,
+    /// as Linux's `membarrier` has them (`MEMBARRIER_CMD_PRIVATE_EXPEDITED`):
+    /// the memory accesses of each of those threads are in program order
+    /// on either side of the call, so that a thread that publishes data
+    /// needs no barrier of its own in the threads that read it (C
+    /// libraries' dynamic linkers giving every thread a library's
+    /// thread-local storage, garbage collectors, read-copy-update).
+    pub const VM_BARRIER: usize = 55;
 
     // --- processes and threads ----------------------------------------
     /// `process_create(name, name_len, max_priority) -> h`: a process whose

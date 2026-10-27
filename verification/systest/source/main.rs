@@ -827,7 +827,7 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 47] = [
+    let tests: [Test; 49] = [
         ("starved threads run", test_starved_threads_run),
         ("ipc primitives", test_ipc_primitives),
         ("short sleeps", test_short_sleeps),
@@ -847,6 +847,7 @@ fn main() -> i32 {
         ("memory protection", posix::test_memory_protection),
         ("private memory", posix::test_private_memory),
         ("unmapped memory on every processor", posix::test_unmapped_on_every_processor),
+        ("memory barriers on every processor", posix::test_barrier_on_every_processor),
         ("clocks read in programs", posix::test_clocks),
         ("thread exit futex", posix::test_exit_futex),
         ("futexes in shared memory", posix::test_shared_futex),
@@ -860,6 +861,7 @@ fn main() -> i32 {
         ("c programs", posix::test_c_programs),
         ("rust programs", posix::test_rust_programs),
         ("crates on the standard library", posix::test_std_crates),
+        ("libraries loaded at run time", posix::test_plugins),
         ("python", posix::test_python),
         ("media checkasm", media::test_checkasm),
         ("media decoder", media::test_decoder),

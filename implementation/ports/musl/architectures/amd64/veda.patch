@@ -1,15 +1,21 @@
 --- a/arch/x86_64/crt_arch.h
 +++ b/arch/x86_64/crt_arch.h
-@@ -1,9 +1,12 @@
+@@ -1,9 +1,18 @@
 +/* Veda: the kernel passes the process's bootstrap channel (which carries
-+   its startup message) in rdi; the POSIX layer reads it in __init_libc. */
++   its startup message) in rdi; the POSIX layer reads it as the program
++   starts, from a symbol of the C library's own. In a dynamically linked
++   program the dynamic linker's _dlstart stores it, and the program's
++   _start (Scrt1.o) does not. */
  __asm__(
  ".text \n"
  ".global " START " \n"
  ".type " START ",%function \n"
  START ": \n"
  "	xor %rbp,%rbp \n"
++#ifndef VEDA_DYNAMIC_START
++".hidden __veda_bootstrap \n"
 +"	mov %edi,__veda_bootstrap(%rip) \n"
++#endif
  "	mov %rsp,%rdi \n"
  ".weak _DYNAMIC \n"
  ".hidden _DYNAMIC \n"

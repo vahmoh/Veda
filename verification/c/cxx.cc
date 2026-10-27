@@ -3,7 +3,10 @@
 //
 // cxx — checks of the C++ library (libstdc++) on Veda, which programs in
 // C++ build on: exceptions, run-time types, static constructors, containers
-// and strings, streams, threads.
+// and strings, streams, threads; and, linked dynamically, exceptions
+// between it and a C++ library it loads (verification/c/shared/thrower.cc),
+// which share the C++ library and the unwinder (libstdc++.so.6,
+// libgcc_s.so.1).
 //
 // Each check prints "ok - NAME" or "not ok - NAME"; the program exits with
 // the number of failed checks (0: all passed). `systest` runs it inside
@@ -13,6 +16,8 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <cstring>
+#include <dlfcn.h>
 #include <exception>
 #include <fstream>
 #include <iostream>
@@ -148,12 +153,85 @@ static void check_threads()
 	check("clocks and sleeping", ms.count() >= 20 && ms.count() < 5000);
 }
 
+// What the program gives libthrower to call: it throws.
+static void program_throws()
+{
+	throw std::logic_error("thrown in the program");
+}
+
+// Exceptions between the program and a C++ library it loads, which share
+// the C++ library and the unwinder: thrown in the library and caught in
+// the program, thrown in the program and caught in the library, and thrown
+// in the program through the library's frames back to it, the C++
+// library counting each once. Linked statically, the program loads
+// nothing.
+static void check_shared_library()
+{
+	void *h = dlopen("/system/tests/c/lib/libthrower.so", RTLD_NOW);
+	if (!h) {
+		const char *e = dlerror();
+		check("loading libthrower (only linked dynamically)", e && std::strstr(e, "linked statically"));
+		return;
+	}
+	auto name = reinterpret_cast<const char *(*)()>(dlsym(h, "thrower_name"));
+	auto throws = reinterpret_cast<void (*)(int)>(dlsym(h, "thrower_throw"));
+	auto catches = reinterpret_cast<int (*)(void (*)())>(dlsym(h, "thrower_catch"));
+	auto passes = reinterpret_cast<void (*)(void (*)())>(dlsym(h, "thrower_pass"));
+	auto uncaught = reinterpret_cast<int (*)()>(dlsym(h, "thrower_uncaught"));
+	auto uncaught_passing = reinterpret_cast<int (*)()>(dlsym(h, "thrower_uncaught_passing"));
+	if (!name || !throws || !catches || !passes || !uncaught || !uncaught_passing) {
+		check("libthrower's functions", false);
+		return;
+	}
+	// The program's C++ library is the system's shared one.
+	Dl_info info{};
+	int (*counts)() noexcept = std::uncaught_exceptions;
+	check("the C++ library, shared",
+	      dladdr(reinterpret_cast<void *>(counts), &info) && info.dli_fname &&
+		      std::strcmp(info.dli_fname, "/system/lib/libstdc++.so.6") == 0);
+	check("a library's static objects", std::string(name()) == "thrower");
+	std::string message;
+	try {
+		throws(42);
+	} catch (const std::runtime_error &e) {
+		message = e.what();
+	}
+	check("an exception from a library", message == "thrown in the library: 42");
+	check("an exception from a library, caught and counted once", std::uncaught_exceptions() == 0 && uncaught() == 0);
+	check("an exception caught in a library", catches(program_throws) == int(std::strlen("thrown in the program")));
+	bool through = false;
+	try {
+		passes(program_throws);
+	} catch (const std::logic_error &) {
+		through = true;
+	}
+	check("an exception through a library's frames", through);
+	check("an exception in flight through a library's frames, counted there", uncaught_passing() == 1);
+	// Its thread-local exception state is each thread's.
+	int in_threads = 0;
+	std::vector<std::thread> threads;
+	std::mutex mu;
+	for (int i = 1; i <= 4; i++)
+		threads.emplace_back([&, i] {
+			try {
+				throws(i);
+			} catch (const std::exception &) {
+				std::lock_guard<std::mutex> lock(mu);
+				in_threads++;
+			}
+		});
+	for (auto &t : threads)
+		t.join();
+	check("exceptions from a library in threads", in_threads == 4);
+}
+
 int main()
 {
 	check_exceptions();
 	check_types_and_containers();
 	check_streams();
 	check_threads();
+	check_shared_library();
 	std::cout << (failures ? "FAIL" : "PASS") << ": " << failures << " failed" << std::endl;
 	return failures;
 }

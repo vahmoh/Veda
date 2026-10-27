@@ -40,6 +40,9 @@ pub(in crate::architecture) struct Local {
     /// Set by another CPU that wants this one to forget the guests'
     /// physical address translations it caches (EPT).
     pub ept_flush_pending: AtomicBool,
+    /// Set by another CPU that wants this one to go through a memory
+    /// barrier (`tlb::barrier_space`), which acknowledging it is.
+    pub barrier_pending: AtomicBool,
     /// This CPU is in VMX operation (it can run virtual processors).
     pub vmx_on: AtomicBool,
     /// The page tables this CPU has loaded (`paging::activate`): the only
@@ -70,6 +73,7 @@ const fn new_local(id: u32) -> Local {
         tlb_flush_pending: AtomicBool::new(false),
         tlb_flush_done: AtomicU64::new(0),
         ept_flush_pending: AtomicBool::new(false),
+        barrier_pending: AtomicBool::new(false),
         vmx_on: AtomicBool::new(false),
         loaded_root: AtomicU64::new(0),
     }

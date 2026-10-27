@@ -49,7 +49,7 @@ In Veda's terms:
 | Numbers | `libm`, `num-traits`, `num-rational`, `num-integer`, `glam`, `rand`, `rand_pcg`, `rand_distr`, `fastnoise-lite` | Float functions; the Calculator's exact fractions; 3D maths; seeded random numbers, the same everywhere; noise |
 | Images | `zune-jpeg` (a port), `zune-png`, `zune-bmp`, `zune-inflate`, `qoi`, `fast_image_resize`, `bytemuck`, `jpeg-encoder`, `miniz_oxide` | Decoding and scaling pictures; encoding them (JPEG, and PNG's deflate); packages' and indexes' deflate |
 | Linux | `linux-raw-sys`; `rustix`, `libc` | The Linux ABI the POSIX layer gives musl; the driver VM's programs' system calls |
-| Under `std` in Veda | `libc`, `getrandom`, `rustix`, `errno`, `tokio`, `mio`, `socket2` (ports that know Veda's target), `tempfile` | The C library, random bytes, system calls, temporary files and tokio (on epoll, eventfd and sockets) for crates on `std`; `verification/stdcrates` checks them |
+| Under `std` in Veda | `libc`, `getrandom`, `rustix`, `errno`, `tokio`, `mio`, `socket2`, `libloading` (ports that know Veda's target), `tempfile` | The C library, random bytes, system calls, temporary files, tokio (on epoll, eventfd and sockets) and loading libraries at run time, for crates on `std`; `verification/stdcrates` and `verification/plugins` check them |
 | Build machine only | `png`, `rav1e`, `md-5`, `tungstenite` | Test output, and a second decoder for the PNGs Veda writes; sample videos; the stand-in for Deepgram's Voice Agent API |
 
 C and C++ come as ports too: GCC, binutils and musl (the toolchain),
@@ -94,8 +94,8 @@ the largest case:
 **Python** is CPython, the reference interpreter, whose standard library
 and behaviour Python's programs expect (RustPython, in Rust, runs a part
 of them); its modules stand on the libraries python.org's builds use
-(zlib, bzip2, XZ Utils, Zstandard, mpdecimal, Expat, SQLite and OpenSSL),
-each a port ([Python on Veda](PYTHON.md)).
+(zlib, bzip2, XZ Utils, Zstandard, mpdecimal, Expat, SQLite, OpenSSL and
+libffi, for `ctypes`), each a port ([Python on Veda](PYTHON.md)).
 
 ## Veda's own, and why
 

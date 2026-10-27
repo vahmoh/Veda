@@ -251,6 +251,13 @@ impl Init {
         if origin != Origin::Service {
             spawn = spawn.memory_class(abi::memory_class::APPLICATION);
         }
+        // A program linked dynamically (a package's, say) starts with the
+        // system's dynamic linker, from the system image's pages.
+        let linker = |path: &str| {
+            let (file, _) = self.program(path)?;
+            Some((self.initrd_vmo.slice(file.offset as usize, file.data.len()).ok()?, file.data.len()))
+        };
+        spawn = spawn.dynamic_linker(&linker);
         let started = match image {
             // It runs from the image's pages, which every process running
             // it shares (from a copy of them if they cannot be had).
@@ -267,7 +274,9 @@ impl Init {
             match e {
                 rt::process::SpawnError::NotExecutable
                 | rt::process::SpawnError::BadElf(_)
-                | rt::process::SpawnError::Incompatible => LaunchError::BadImage,
+                | rt::process::SpawnError::Incompatible
+                | rt::process::SpawnError::OtherDynamicLinker
+                | rt::process::SpawnError::NoDynamicLinker => LaunchError::BadImage,
                 rt::process::SpawnError::Kernel(abi::Error::NoMemory) => LaunchError::NoMemory,
                 _ => LaunchError::Failed,
             }
@@ -504,8 +513,17 @@ impl Init {
             }
 
             fn tasks(&mut self) -> Vec<TaskInfo> {
+                // Every process the kernel lists, however many there are
+                // (the ones that ended among them): with room for more than
+                // were there, if they were more than the room it had.
                 let mut infos = alloc::vec![abi::ProcessInfo::default(); 256];
-                let n = rt::object::process_list(&mut infos).unwrap_or(0).min(infos.len());
+                let n = loop {
+                    let n = rt::object::process_list(&mut infos).unwrap_or(0);
+                    if n <= infos.len() {
+                        break n;
+                    }
+                    infos = alloc::vec![abi::ProcessInfo::default(); n + 32];
+                };
                 infos[..n]
                     .iter()
                     .filter(|p| p.state == abi::process_state::RUNNING)

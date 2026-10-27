@@ -56,8 +56,8 @@ const PARTS: &[(&str, &str, &str)] = &[
         "gcc",
         "GCC",
         "The C compiler of the system's C toolchain, and GCC's runtime libraries (libgcc, libstdc++, libatomic) in \
-         every C program and every program on Rust's standard library, which its Runtime Library Exception leaves \
-         under their own licences",
+         every C program and every program on Rust's standard library, or beside them in /system/lib, which its \
+         Runtime Library Exception leaves under their own licences",
     ),
     ("binutils", "GNU Binutils", "The C toolchain's assembler, linker and tools for object files"),
     ("gmp", "GMP", "Arithmetic in any precision, in the C compiler"),

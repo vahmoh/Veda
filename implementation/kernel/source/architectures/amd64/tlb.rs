@@ -21,6 +21,11 @@
 //! Guests' physical memory (EPT) is shot down the same way: a CPU that
 //! runs a guest leaves it for the IPI, and forgets every guest's
 //! translations (`invept`).
+//!
+//! A memory barrier for a user address space (`vm_barrier`) goes the same
+//! way, flushing nothing: taking the IPI is serialising, and acknowledging
+//! it a locked instruction, so each CPU that runs the address space's
+//! threads has gone through a full barrier once it has acknowledged.
 
 use core::sync::atomic::Ordering;
 
@@ -28,18 +33,19 @@ use super::{apic, cpu, idt::TLB_VECTOR, percpu};
 use crate::scheduler::percpu::MAX_CPUS;
 
 /// Flushes the local TLB, or the guests' translations, if another CPU
-/// requested it.
+/// requested it, and acknowledges that and any barrier requested.
 pub fn service_pending() {
     let me = percpu::current();
     let tlb = me.tlb_flush_pending.swap(false, Ordering::AcqRel);
     let ept = me.ept_flush_pending.swap(false, Ordering::AcqRel);
+    let barrier = me.barrier_pending.swap(false, Ordering::AcqRel);
     if tlb {
         cpu::flush_tlb();
     }
     if ept && me.vmx_on.load(Ordering::Relaxed) {
         super::virtualization::vmx::invept_all();
     }
-    if tlb || ept {
+    if tlb || ept || barrier {
         me.tlb_flush_done.fetch_add(1, Ordering::AcqRel);
     }
 }
@@ -76,6 +82,13 @@ pub fn shootdown_space(root: u64, addr: u64, len: u64) {
         flush_local(addr, len);
     }
     request(|p| p.loaded_root.load(Ordering::Acquire) == root, |p| &p.tlb_flush_pending);
+}
+
+/// Has every other CPU that has the user address space whose page tables
+/// are `root` loaded go through a full memory barrier, and waits until each
+/// has. With the BKL held.
+pub fn barrier_space(root: u64) {
+    request(|p| p.loaded_root.load(Ordering::Acquire) == root, |p| &p.barrier_pending);
 }
 
 /// Makes every CPU forget the translations of guests' physical memory it

@@ -106,6 +106,7 @@ fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
         nr::VM_PROTECT => vm::vm_protect(a[0] as RawHandle, a[1], a[2], a[3]),
         nr::VM_ALLOCATE => vm::vm_allocate(a[0] as RawHandle, a[1], a[2], a[3]),
         nr::VM_DECOMMIT => vm::vm_decommit(a[0] as RawHandle, a[1], a[2]),
+        nr::VM_BARRIER => vm::vm_barrier(),
 
         nr::PROCESS_CREATE => task::process_create(a[0], a[1], a[2]),
         nr::PROCESS_START => {

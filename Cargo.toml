@@ -94,6 +94,7 @@ members = [
     "verification/audiotest",
     "verification/fakedec",
     "verification/stdcrates",
+    "verification/plugins",
     "implementation/guests/linux/init",
     "implementation/guests/linux/bridgetest",
     "implementation/guests/linux/pcitest",
@@ -246,6 +247,11 @@ tempfile = { version = "3.27.0", default-features = false, features = ["getrando
 # sockets (implementation/ports/tokio, and mio and socket2 under it): what
 # verification/stdcrates checks of them, and what crates built on it need.
 tokio = { version = "=1.53.3", default-features = false, features = ["rt", "rt-multi-thread", "net", "time", "macros", "io-util", "sync", "process"] }
+# Loading shared libraries at run time, as Rust's crates load plug-ins and
+# drivers: the C library's dynamic linker behind a safer interface, in
+# dynamically linked programs on the standard library (implementation/
+# ports/libloading). What verification/plugins checks of it.
+libloading = { version = "=0.9.0", default-features = false, features = ["std"] }
 # HTTP/1.x message parsing (no_std).
 httparse = { version = "1.10", default-features = false }
 # Percent-encoding of URL components: the `url` crate's own, without its

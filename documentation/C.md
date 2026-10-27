@@ -30,11 +30,17 @@ them across restarts when Veda has its home disk.
 - **`gcc`** (also `cc`) makes static ELF64 executables for the System V
   ABI, as on Linux: they need nothing else to run. `-static-pie`, with the
   code compiled `-fPIE`, makes one position-independent, loaded at a
-  random address.
+  random address. `-pie`, with the code compiled `-fPIE`, makes one linked
+  dynamically, with the C library's shared object, which can load shared
+  libraries at run time (`dlopen`); `-shared`, with `-fPIC`, makes a shared
+  library ([Linking and loading](LINKING.md)).
 - **Binutils**: `as`, `ld`, `ar`, `nm`, `objdump`, `objcopy`, `strip`,
   `readelf`, `size`, `strings`, `addr2line` and `c++filt`.
-- **Files**: headers in `/system/include`, the C library (`libc.a`,
-  `libm.a`, ...) and its start files in `/system/lib`.
+- **Files**: headers in `/system/include`; the C library (`libc.a`,
+  `libm.a`, ...), its shared object (`libc.so`, which is the dynamic
+  linker too) and its start files in `/system/lib`; GCC's runtime in
+  `/system/lib/gcc` (`libgcc.a`, and its unwinder `libgcc_eh.a`), and the
+  unwinder's shared object, `/system/lib/libgcc_s.so.1`.
 - **Macros**: `__veda__` and `__unix__` are defined, `__linux__` is not.
   The C library's interface is musl's, which is Linux's: code that builds
   on Linux with musl generally builds here, unless it relies on what
@@ -104,7 +110,9 @@ which calls into it.
 | `fsync`, `fdatasync`, `sync`, `syncfs`, `O_SYNC`, `RWF_SYNC` | The VFS saves changes to the home disk at once, not a few seconds after the last one |
 | Threads, futexes, clocks | The kernel's: a futex is the word in its memory, one for every process that maps the memory. Thread ids are the process's own, the main thread's its process id; `pthread_join` waits on the thread's exit futex; a detached thread frees its own stack; `pthread_getattr_np` knows the main thread's stack from the startup message; a thread's CPU time is its own (`CLOCK_THREAD_CPUTIME_ID`, `pthread_getcpuclockid`) and, as the process's, counts up to the moment it is read (the turn a thread is running on a processor too), and a thread names itself (`prctl`, `pthread_setname_np`), which the layer keeps |
 | Nice values, processors | One nice value for the process (POSIX's; Linux keeps one per thread), which the programs it starts inherit: its threads run at a kernel priority of it, 0 the normal one, 19 `LOW` and -20 `HIGH`, strictly above one another (the kernel gives a thread that waited long a turn). Below 0 only as far as the process may run above normal (`EACCES` for applications). Threads run on every processor, which `sched_getaffinity` names; an affinity that leaves some out cannot be set (`EOPNOTSUPP`) |
-| `dladdr`, `dl_iterate_phdr` | The program alone, statically linked: its segments, and its path as the loader gives it (`AT_EXECFN`); `dladdr` names no symbol |
+| `dlopen`, `dlsym`, `dlclose`, `dlerror` | In a dynamically linked program, musl's dynamic linker, in the C library's shared object: libraries by path, or by name from `LD_LIBRARY_PATH`, their `RUNPATH`, `/system/lib` and `/home/packages/lib`, the system image's pages where they are its ([Linking and loading](LINKING.md)). A statically linked one loads nothing, and `dlerror` says why |
+| `dladdr`, `dl_iterate_phdr` | Linked statically, the program alone: its segments, and its path as the loader gives it (`AT_EXECFN`); `dladdr` names no symbol. Linked dynamically, every object loaded: the program, the C library and the libraries, with the symbols they export |
+| `membarrier` | `MEMBARRIER_CMD_PRIVATE_EXPEDITED` (which needs no registration) and the query of what is had: the kernel's barrier on the processors running the process's threads (`vm_barrier`), as the dynamic linker has it give every thread a library's thread-local storage |
 | Local time | Without `TZ`, the system's offset from UTC (the `tz=` boot option, or the firmware's), as a POSIX `TZ` string (`<+0530>-5:30`): `localtime`, `mktime` and `tzname` follow it; `TZ` overrides it with a POSIX string (there is no tz database yet) |
 | `posix_spawn`, `waitpid` | Processes started from the program image. A process id is the kernel object id cut to 30 bits, never that of another child not yet waited for (`EAGAIN` in the rare case none can be had) |
 | Signals | The layer keeps what Linux's kernel keeps of them (dispositions, masks, pending signals and what each says, `siginfo_t`). Another process's come by way of the kernel, which interrupts the thread that takes them: its wait ends, or it is sent to run the handler, wherever it is in the program's code |
@@ -169,12 +177,12 @@ program the Terminal runs.
 | Links | No symbolic links, and no hard links but between the shared memory objects of `/dev/shm`, as `sem_open` makes them: elsewhere `link` fails with `EPERM` (`EXDEV` from `/dev/shm` to elsewhere), as `symlink` does, and `readlink` finds none (`EINVAL`) |
 | Permissions | No owners or permission bits: a program file (ELF or `#!`) is executable, nothing else is; `chmod` changes nothing, and `chown` to another user or group is refused (`EPERM`, as for Linux's unprivileged users). Programs run as user 1000 |
 | File locks | Advisory, as Linux has them, which the VFS arbitrates between processes: `flock`'s, held by the open file description; record locks (`F_SETLK`, `F_SETLKW`, `F_GETLK`, and `lockf`), held by the process, which go as it ends or closes any descriptor of the file; and OFD locks (`F_OFD_SETLK`, `F_OFD_SETLKW`, `F_OFD_GETLK`). `F_SETLKW` reports `EDEADLK` where Linux does, and a signal ends its wait as it ends other blocking calls ([Processes and signals](#processes-and-signals)). Only files take locks: on a directory, a pipe, a socket or a memory file a lock fails with `ENOLCK` (unlocking succeeds), as it does past 4096 locks on a file or 65536 in all. SQLite, in the web engine and in Python, locks its databases with them, as on Linux, without a write-ahead log (Shared file mappings, below) |
-| Shared libraries | Static linking only, no `dlopen` |
+| Shared libraries | For dynamically linked programs (`-pie`) alone, which a statically linked program cannot load; one loaded stays until the program ends ([Linking and loading](LINKING.md#limits)) |
 | Timers | A timer of processor time (`ITIMER_VIRTUAL`, `ITIMER_PROF`, a POSIX timer on a CPU-time clock) counts user and system time as one, and expires within 10 ms of its time |
 | Shared file mappings | Read-only, as changes would never reach the file: `PROT_WRITE` fails with `ENODEV`, and `mprotect` cannot add it (`EACCES`). Memory files and shared memory objects are memory: their shared mappings are it |
 | Network sockets | TCP and UDP only. No raw or ICMP sockets (`EPROTONOSUPPORT`; `ping` is the network service's), multicast (`ENOPROTOOPT`), out-of-band data (`MSG_OOB`: `EOPNOTSUPP` to send, `EINVAL` to receive), ancillary data such as `IP_PKTINFO` (`sendmsg` with control messages: `EOPNOTSUPP`) or list of the interfaces (`getifaddrs` fails: there is no netlink) |
 | `/etc/resolv.conf` | None: the C library asks the network service, and programs that read it themselves find no DNS servers |
-| C++ | No compiler for it in the image; the cross toolchain compiles C++, with libstdc++ and libatomic |
+| C++ | No compiler for it in the image; the cross toolchain compiles C++, with libstdc++ and libatomic, static or shared (`/system/lib/libstdc++.so.6` and `libatomic.so.1`, which the image has) |
 | OpenGL ES and EGL | For C code linked into a program on Rust's standard library with the `egl` crate, as WebKit is in the browser ([The web browser](BROWSER.md#drawing-pages)); no library for a C program alone yet |
 | Full-screen programs | The Terminal shows colours, carriage returns and line erasing, but has no cursor positioning: editors do not display correctly yet |
 
@@ -321,9 +329,9 @@ sudo apt install build-essential m4 bison flex curl libgmp-dev libmpfr-dev libmp
 | Port | Version | What changes for Veda |
 |------|---------|-----------------------|
 | `binutils` | 2.47 | Veda in `config.sub`; the `x86_64-veda` target (ELF, `elf_x86_64`, separate code pages) |
-| `gcc` | 16.2.0 | Veda's target (`gcc/config/veda.h`: musl, static linking, `/system`), libgcc's configuration, libstdc++'s checks of the C library, libatomic; `x86_64-veda` (the System V x86-64 ABI) |
+| `gcc` | 16.2.0 | Veda's target (`gcc/config/veda.h`: musl, `/system`, static linking by default, dynamic with `-pie`, shared libraries), libgcc's configuration, its runtime shared too (libgcc_s, and libstdc++ and libatomic through libtool, which `libtool.m4` teaches Veda), its unwinder on `dl_iterate_phdr`, libstdc++'s checks of the C library, libatomic; `x86_64-veda` (the System V x86-64 ABI) |
 | `gmp`, `mpfr`, `mpc` | 6.3.0, 4.2.2, 1.4.1 | `config.sub` knows Veda |
-| `musl` | 1.2.6 | Its hooks into the POSIX layer (system calls, `_start`, thread entry points, `__init_libc`, `posix_spawn`, the main thread's stack, the time zone), name lookups, its databases in `/system/etc`, the program in `dl_iterate_phdr` and `dladdr` |
+| `musl` | 1.2.6 | Its hooks into the POSIX layer (system calls, `_start`, thread entry points, `__init_libc`, `posix_spawn`, the main thread's stack, the time zone), name lookups, its databases in `/system/etc`, the program in `dl_iterate_phdr` and `dladdr`; its dynamic linker in `libc.so` with the layer (the startup message, where libraries are found, how they are mapped) |
 | `rust` | 1.99.0 | Veda's target in the compiler, the standard library on the C library |
 | `dav1d` | 1.5.4 | None: built as released (meson) |
 | `ffmpeg` | 9.0.2 | `veda` as a target operating system in `configure`; only the demuxers, decoders and parsers the media decoder uses |
@@ -351,12 +359,16 @@ licences ([Licensing](LICENSING.md)), whose texts the image carries in
   domain sockets, and sockets shared with child processes.
 - **`verification/c/cxx.cc`** checks the C++ library: exceptions (across
   threads too), run-time types, static constructors, containers, streams,
-  threads.
+  threads, and, linked dynamically, exceptions between it and a C++
+  library it loads, with the C++ library they share.
+- **`verification/c/libraries.c`** checks shared libraries and loading
+  them at run time, with the libraries of `verification/c/shared`
+  ([Linking and loading](LINKING.md#tests)).
 - **`systest`** runs them inside Veda with `verification/c/hello.c`, each
-  linked at a fixed address and position-independent, and tests the
-  kernel's sockets, memory protection, private memory, exit futexes and
-  futexes in shared memory, and the VFS's open files and shared memory
-  objects.
+  linked statically, at a fixed address and position-independent, and
+  dynamically (`<name>-dynamic`), and tests the kernel's sockets, memory
+  protection, private memory, memory barriers, exit futexes and futexes in
+  shared memory, and the VFS's open files and shared memory objects.
 - **`verification/ui/c-programs.vts`** runs programs in the Terminal
   (exit statuses, an interactive program, Ctrl+C and Ctrl+D, pipes and
   files), and **`c-compile.vts`** compiles one with GCC inside Veda.

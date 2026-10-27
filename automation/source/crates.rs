@@ -32,8 +32,19 @@ use crate::util::{self, Result};
 /// The crates Veda builds as ports, by the names of their ports: a crate's
 /// own, or, for an older release of a crate the workspace has two releases
 /// of, its name and that release's (`getrandom-0.3`).
-pub const CRATES: [&str; 10] =
-    ["smoltcp", "zune-jpeg", "libc", "getrandom", "getrandom-0.3", "rustix", "errno", "socket2", "mio", "tokio"];
+pub const CRATES: [&str; 11] = [
+    "smoltcp",
+    "zune-jpeg",
+    "libc",
+    "getrandom",
+    "getrandom-0.3",
+    "rustix",
+    "errno",
+    "socket2",
+    "mio",
+    "tokio",
+    "libloading",
+];
 
 /// The programs that preparing them takes: for the downloads, and for
 /// `implementation/ports/crates.sh`.

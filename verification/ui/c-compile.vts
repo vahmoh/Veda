@@ -4,9 +4,11 @@
 # GCC inside Veda (needs the native toolchain in the image): write a C
 # program in the Terminal, compile and run it; a program in two files,
 # compiled separately and linked; a mistake, which GCC reports with its
-# line, and a warning. Results are checked with the shell's `logger`
-# command, which writes to the serial log. (The program's string comes
-# from a macro: the typed line needs no double quotes.)
+# line, and a warning; a shared library, a program linked dynamically with
+# it, and one that loads it at run time. Results are checked with the
+# shell's `logger` command, which writes to the serial log. (The
+# programs' strings come from a macro: the typed lines need no double
+# quotes.)
 requires native-toolchain
 boot-cmdline "run=terminal"
 wait-serial "desktop ready" 90
@@ -48,3 +50,20 @@ type "echo 'int main(void) { int unused; return 0; }' > warn.c && gcc -Wall -c w
 key ret
 wait-serial "terminal: warn-0" 600
 shot target/veda/c-compile-2-messages.png
+# A shared library, and a program linked dynamically with it, which finds
+# it beside itself by its RUNPATH ($ORIGIN).
+type "gcc -O2 -fPIC -shared -o libtwice.so twice.c && gcc -O2 -fPIE -pie -o dynamic main.c -L. -ltwice -Wl,-rpath,'$ORIGIN' && logger shared"
+key ret
+wait-serial "terminal: shared" 600
+type "./dynamic; logger dynamic-$?"
+key ret
+wait-serial "terminal: dynamic-42" 60
+# A program that loads the library at run time, and calls it.
+type "echo '#include <dlfcn.h>' > load.c && echo '#define S(x) #x' >> load.c"
+key ret
+type "echo 'int main(void) { void *h = dlopen(S(/tmp/libtwice.so), RTLD_NOW); int (*f)(int) = h ? (int (*)(int))dlsym(h, S(twice)) : 0; return f ? f(21) : 1; }' >> load.c"
+key ret
+type "gcc -O2 -fPIE -pie -o load load.c && ./load; logger loaded-$?"
+key ret
+wait-serial "terminal: loaded-42" 600
+shot target/veda/c-compile-3-shared.png

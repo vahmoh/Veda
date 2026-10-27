@@ -1,0 +1,54 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -89,6 +89,7 @@
+ level = "warn"
+ priority = 0
+ check-cfg = [
++    'cfg(target_os, values("veda"))',
+     "cfg(libloading_docs)",
+     'cfg(target_os, values("cygwin"))',
+ ]
+--- a/src/os/unix/consts.rs
++++ b/src/os/unix/consts.rs
+@@ -63,6 +63,7 @@
+             pub(super) const RTLD_LAZY: c_int = 4;
+         } else if #[cfg(any(
+             target_os = "linux",
++            target_os = "veda",
+             target_os = "android",
+             target_os = "emscripten",
+ 
+@@ -102,6 +103,7 @@
+             pub(super) const RTLD_NOW: c_int = 1;
+         } else if #[cfg(any(
+             target_os = "linux",
++            target_os = "veda",
+             all(target_os = "android", target_pointer_width = "64"),
+             target_os = "emscripten",
+ 
+@@ -164,6 +166,7 @@
+             pub(super) const RTLD_GLOBAL: c_int = 8;
+         } else if #[cfg(any(
+             target_os = "linux",
++            target_os = "veda",
+             all(target_os = "android", target_pointer_width = "64"),
+             target_os = "emscripten",
+ 
+@@ -208,6 +211,7 @@
+             pub(super) const RTLD_LOCAL: c_int = 4;
+         } else if #[cfg(any(
+             target_os = "linux",
++            target_os = "veda",
+             target_os = "android",
+             target_os = "emscripten",
+ 
+--- a/src/os/unix/mod.rs
++++ b/src/os/unix/mod.rs
+@@ -279,6 +279,7 @@
+             // These targets are known to have MT-safe `dlerror`.
+             if #[cfg(any(
+                 target_os = "linux",
++                target_os = "veda",
+                 target_os = "android",
+                 target_os = "openbsd",
+                 target_os = "macos",

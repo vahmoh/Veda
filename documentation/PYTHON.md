@@ -39,12 +39,12 @@ interpreter, with the libraries they stand on.
 | `xml.etree`, `xml.parsers.expat` | Expat 2.9.0 |
 | `sqlite3`, `dbm.sqlite3` | SQLite 3.54.1, with full-text search (FTS3, FTS4, FTS5), R*Tree indexes and the mathematical functions; it locks a database between processes, without a write-ahead log ([Limits](#limits)) |
 | `ssl`, `hashlib`, `hmac` | OpenSSL 3.5.9; `ssl` trusts the certificate authorities of `/system/etc/ssl/cert.pem` (Mozilla's list) |
+| `ctypes`, `multiprocessing.sharedctypes` | libffi 3.8.0 ([Extension modules and `ctypes`](#extension-modules-and-ctypes)) |
 
 A module that cannot be had says why, in the traceback of its import:
 
 | Module | Why it is not there |
 |--------|---------------------|
-| `ctypes` | It needs dynamic loading (`dlopen`), which Veda has not yet |
 | `curses`, `readline` | The Terminal edits each line itself, and cannot move the cursor yet |
 | `dbm.gnu`, `dbm.ndbm` | `dbm.sqlite3` and `dbm.dumb` are there |
 | `pty` | There are no pseudo-terminals |
@@ -55,9 +55,34 @@ A module that cannot be had says why, in the traceback of its import:
 **Virtual environments** are copies (Veda's files have no links):
 `python3 -m venv ENV` makes one, with pip from the wheel the standard
 library carries, and `ENV/bin/pip install` installs packages of pure
-Python from PyPI. A package with C extensions installs, but cannot load
-them (see [Limits](#limits)). The image's `site-packages` is empty; a
-user's packages go in `~/.local/lib/python3.15/site-packages`.
+Python from PyPI. PyPI's wheels with C extensions are built for Linux and
+do not load on Veda (see [Limits](#limits)); pip builds a package's C
+extensions from its source instead, with Veda's GCC, which Python's
+configuration names (`sysconfig`). The image's `site-packages` is empty;
+a user's packages go in `~/.local/lib/python3.15/site-packages`.
+
+### Extension modules and `ctypes`
+
+The interpreter loads extension modules and the libraries `ctypes` calls
+([Linking and loading](LINKING.md#in-python)). An extension module is a
+shared library, `<module>.cpython-315-x86_64-veda.so` (or `.abi3.so` for
+the stable ABI), compiled with Python's C API, in
+`/system/include/python3.15`:
+
+```bash
+gcc -O2 -fPIC -shared -I/system/include/python3.15 -o spam.cpython-315-x86_64-veda.so spam.c
+python3 -c 'import spam'
+```
+
+`ctypes` finds a library as Veda's dynamic linker does
+(`ctypes.util.find_library("c")` is `/system/lib/libc.so`), and calls
+back into Python through libffi's closures, whose code is a memory file's,
+never memory both writable and executable.
+
+Python's configuration (`sysconfig`, which setuptools and the like build
+extension modules by) is Veda's: its compilers and tools by the names the
+system's toolchain has (`gcc`, `ar`), as if Python had been built on Veda,
+and no directory of the machine that did build it.
 
 **The interactive interpreter** is the basic one: the Terminal sends a
 line once it is edited, and the interpreter reads it.
@@ -83,18 +108,20 @@ again only when what it is made from changed:
    generate code and to compile the standard library).
 2. **The libraries** its modules stand on, for Veda, static and
    position-independent: zlib, bzip2, XZ Utils, Zstandard, mpdecimal,
-   Expat, SQLite (one file, the amalgamation) and OpenSSL.
+   Expat, SQLite (one file, the amalgamation), OpenSSL and libffi.
 3. **CPython**, configured for Veda (`--host=x86_64-veda`) with its
    modules built into the interpreter, and the answers of the run-time
    checks a cross build cannot make (`config.site`, beside `build.sh`).
    The build fails if a module Veda must have cannot be built
-   (`PYTHON_MODULES`).
-4. **The interpreter linked** with the C library as it is now: the POSIX
-   layer in it changes more often than Python, and when it does, an image
-   build links the interpreter again, without building the rest.
-5. **What the image has**: the interpreter, stripped; the standard library
-   but for what Veda cannot use, compiled to bytecode once; and the licence
-   texts of Python and of the libraries built into it.
+   (`PYTHON_MODULES`). The interpreter is linked dynamically, with the C
+   library's shared object, which the image has as it is now: when the
+   POSIX layer in it changes, Python needs no building again.
+4. **What the image has**: the interpreter, stripped; the standard library
+   but for what Veda cannot use, compiled to bytecode once, with Python's
+   configuration as Veda's (`sysconfig`'s: Veda's compilers, none of the
+   build machine's directories); its C API (its headers and
+   `python-3.15.pc`); and the licence texts of Python and of the libraries
+   built into it.
 
 The build needs, beside a C compiler, make, patch, tar, xz, gzip, curl,
 CMake, Ninja (for XZ Utils and Expat), Perl (for OpenSSL's configuration)
@@ -109,9 +136,13 @@ built with `--python-tests`: `python3 -m test` runs them in the Terminal
 ## How it works
 
 **The interpreter** is a C program on Veda's C library (musl and the
-POSIX layer), linked statically and position-independent (`-static-pie`),
-with its modules built in: `sys.builtin_module_names` names them, and
-`lib-dynload` is empty. Python knows itself as `sys.platform == "veda"`
+POSIX layer), linked dynamically with its shared object (`-pie`), which
+gives the extension modules it loads its C API (`-export-dynamic`), but
+none of the libraries it holds (`--exclude-libs`: a module's own zlib or
+OpenSSL stays its own). The standard library's modules are built in
+(`sys.builtin_module_names` names them); `lib-dynload` has those of
+CPython's tests, which must be shared libraries, in an image built with
+them. Python knows itself as `sys.platform == "veda"`
 (`os.name == "posix"`), its platform as `veda-x86_64` (`sysconfig`), and
 its C library as musl (`platform.libc_ver()`). It finds its standard
 library from its own path, which Veda's loader gives it (`AT_EXECFN`).
@@ -120,7 +151,8 @@ library from its own path, which Veda's loader gives it (`AT_EXECFN`).
 the default optimisation level: its bytecode is checked against no source
 (`unchecked-hash`), as the system image does not change, so importing
 compiles nothing. Its build details (PEP 739, `build-details.json`) say
-what the image has: no C API and no library to build extensions with.
+what the image has: the C API, and no library to link with (an extension
+module takes the interpreter's).
 
 | Python's | On Veda |
 |----------|---------|
@@ -139,11 +171,12 @@ what the image has: no C API and no library to build extensions with.
 Python shares the limits of C programs ([C on Veda](C.md#limits)). In
 Python's terms:
 
-- **No extension modules but those built in.** Veda links its programs
-  statically and has no `dlopen`: `ctypes` is not there (nor then are
-  `multiprocessing`'s shared values and arrays: `Value`, `Array`,
-  `sharedctypes`), and a package's C extension cannot be loaded
-  (`ImportError`).
+- **Extension modules built for Veda.** One built for Linux, as PyPI's
+  wheels are (manylinux, musllinux), is for another C library and does not
+  load (`ImportError`); pip installs no wheel built for another platform.
+  The image's compiler is GCC for C alone: an extension module in C++ is
+  built with the cross toolchain ([C on Veda](C.md)), and pip cannot build
+  one inside Veda (`g++` is not there).
 - **No `fork` or `exec`.** `os.fork`, `os.exec*` and `os.forkpty` are not
   there; `subprocess` refuses a `preexec_fn` (`OSError`, `EOPNOTSUPP`), as
   no code of the parent's runs in the child. `multiprocessing` spawns,
@@ -205,8 +238,9 @@ and `build.sh` builds it. The patch:
   `x86_64-veda`, whose modules are built in, whose C library's release
   `platform.libc_ver()` gives, and which has none of the functions musl
   has but Veda does not carry out, so that Python leaves out what would
-  fail (`fork`, `exec*`, `dlopen`, links, pseudo-terminals,
-  `if_nameindex`...). The modules that cannot be built are
+  fail (`fork`, `exec*`, links, pseudo-terminals, `if_nameindex`...). Its
+  shared libraries are linked as GNU/Linux's (`LDSHARED`, `CCSHARED`,
+  `LINKFORSHARED`). The modules that cannot be built are
   named, with the reasons their imports give (`MISSING_MODULES` in
   `build.sh`).
 - **Starts programs with `posix_spawn`** (`Modules/_posixsubprocess.c`):
@@ -222,10 +256,12 @@ and `build.sh` builds it. The patch:
   virtual environments as copies (`Lib/venv`), the asyncio shell without
   the tools that read other processes (`Lib/asyncio/__main__.py`), the
   heap of `multiprocessing`'s shared objects in `/dev/shm`, as on Linux
-  (`Lib/multiprocessing/heap.py`).
+  (`Lib/multiprocessing/heap.py`), and libraries found by `ctypes` where
+  the dynamic linker finds them (`Lib/ctypes/util.py`).
 - **Has CPython's tests skip what Veda lacks** (`Lib/test`), by what they
   need where it can be told: a shell (`support.requires_shell`), a
-  `preexec_fn` (`support.requires_preexec_fn`), permission bits
+  `preexec_fn` (`support.requires_preexec_fn`), a C++ compiler
+  (`test_cext`), permission bits
   (`os_helper.skip_unless_working_chmod`), shared writable mappings,
   symbolic links, ancillary data; and expect what Veda does as it does it
   (UTF-8 in the C locale, names that are not UTF-8 refused, musl's
@@ -234,7 +270,10 @@ and `build.sh` builds it. The patch:
 ## Tests
 
 - **`verification/python/stdlib.py`** checks the standard library inside
-  Veda: the interpreter's paths and modules, its bytecode, files,
+  Veda: the interpreter's paths and modules, `ctypes` (libraries found and
+  loaded, the C library's functions, `errno`, callbacks into Python,
+  structures, multiprocessing's shared values), an extension module that
+  Veda's GCC compiles and Python imports, its bytecode, files,
   threads, processes (`subprocess`, `os.spawn*`, `multiprocessing`: its
   locks, events and queues, `Pool`, and `concurrent.futures`'
   `ProcessPoolExecutor`), shared memory (`multiprocessing.shared_memory`),
@@ -255,14 +294,15 @@ and `build.sh` builds it. The patch:
   kernel's command line, as a script does
   (`boot-cmdline "run=python3:/system/tests/python/regrtest.py,-j4"`, then
   `wait-serial "Tests result:"`), in some four minutes on four processors.
-  They all pass: of their 560 test files, 440 run, 111 skip whole (they
+  They all pass: of their 560 test files, 443 run, 108 skip whole (they
   test other systems, Windows' above all, or what Veda has not: `fork`,
-  Tk, curses, `ctypes`...) and 9 need resources a run is not given by
-  default (`-u`: the Internet, a lot of time or disk). Of the 48,331
-  tests in the files that run, 3,680 skip, each saying what it needs:
-  another system, or what Veda has not. With every resource but the
-  Internet and what Veda has not (`-uall` less `network`, `urlfetch`,
-  `largefile`, `extralargefile`, `gui`, `audio`, `tzdata` and `curses`,
-  each taken away as `-u-network` takes the first), 441 files run and
-  pass, in some six minutes; `test_socketserver`, which asks for the
+  Tk, curses...) and 9 need resources a run is not given by default
+  (`-u`: the Internet, a lot of time or disk). Of the 48,991 tests in the
+  files that run, 3,628 skip, each saying what it needs: another system,
+  or what Veda has not. With every resource but the Internet and what
+  Veda has not (`-uall` less `network`, `urlfetch`, `largefile`,
+  `extralargefile`, `gui`, `audio`, `tzdata` and `curses`, each taken
+  away as `-u-network` takes the first), 444 files run and pass, in some
+  six and a half minutes (`test_cext` among them, which has pip build C
+  extensions with Veda's GCC); `test_socketserver`, which asks for the
   network but stays on the machine, passes with `-unetwork`.

@@ -232,6 +232,14 @@ pub mod mman {
     pub const MADV_REMOVE: u32 = linux_raw_sys::general::MADV_REMOVE;
 }
 
+/// `membarrier`'s commands.
+pub mod membarrier {
+    use linux_raw_sys::general::membarrier_cmd;
+    pub const QUERY: u32 = membarrier_cmd::MEMBARRIER_CMD_QUERY as u32;
+    pub const PRIVATE_EXPEDITED: u32 = membarrier_cmd::MEMBARRIER_CMD_PRIVATE_EXPEDITED as u32;
+    pub const REGISTER_PRIVATE_EXPEDITED: u32 = membarrier_cmd::MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED as u32;
+}
+
 /// Terminal and descriptor `ioctl` requests.
 pub mod ioctl {
     pub const TCGETS: u32 = linux_raw_sys::ioctl::TCGETS;

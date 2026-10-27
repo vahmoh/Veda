@@ -53,7 +53,7 @@
 +if test "x$ac_sys_system" = xVeda
 +then :
 +
-+  for name in fork fork1 vfork forkpty execv fexecve dlopen clock_settime \
++  for name in fork fork1 vfork forkpty execv fexecve clock_settime \
 +      link linkat symlink symlinkat mkfifo mkfifoat mknod mknodat \
 +      openpty posix_openpt grantpt unlockpt ptsname ptsname_r \
 +      chroot mremap sendfile splice copy_file_range process_vm_readv \
@@ -101,6 +101,33 @@
  case $enable_wasm_dynamic_linking in #(
    yes) :
      ac_cv_func_dlopen=yes ;; #(
+@@ -14212,7 +14253,7 @@
+ 	Emscripten*|WASI*)
+ 		LDSHARED='$(CC) -shared'
+ 		LDCXXSHARED='$(CXX) -shared';;
+-	Linux*|GNU*|QNX*|VxWorks*|Haiku*)
++	Linux*|GNU*|QNX*|VxWorks*|Haiku*|Veda*)
+ 		LDSHARED='$(CC) -shared'
+ 		LDCXXSHARED='$(CXX) -shared';;
+ 	FreeBSD*)
+@@ -14297,7 +14338,7 @@
+ 		 then CCSHARED="-fPIC";
+ 		 else CCSHARED="+z";
+ 		 fi;;
+-	Linux*|GNU*) CCSHARED="-fPIC";;
++	Linux*|GNU*|Veda*) CCSHARED="-fPIC";;
+ 	Emscripten*|WASI*)
+ 		if test "x$enable_wasm_dynamic_linking" = xyes
+ then :
+@@ -14334,7 +14375,7 @@
+ 	hp*|HP*)
+ 	    LINKFORSHARED="-Wl,-E -Wl,+s";;
+ #	    LINKFORSHARED="-Wl,-E -Wl,+s -Wl,+b\$(BINLIBDEST)/lib-dynload";;
+-	Linux-android*) LINKFORSHARED="-pie -Xlinker -export-dynamic";;
++	Linux-android*|Veda*) LINKFORSHARED="-pie -Xlinker -export-dynamic";;
+ 	Linux*|GNU*) LINKFORSHARED="-Xlinker -export-dynamic";;
+ 	# -u libsys_s pulls in all symbols in libsys
+ 	Darwin/*|iOS/*)
 @@ -32371,6 +32412,7 @@
    iOS) _PYTHREAD_NAME_MAXLEN=63;;
    FreeBSD*) _PYTHREAD_NAME_MAXLEN=19;; # gh-131268
@@ -109,7 +136,7 @@
    *) _PYTHREAD_NAME_MAXLEN=;;
  esac
  if test -n "$_PYTHREAD_NAME_MAXLEN"; then
-@@ -32426,6 +32468,31 @@
+@@ -32426,6 +32468,23 @@
  
      py_cv_module__scproxy=n/a
   ;; #(
@@ -117,31 +144,23 @@
 +
 +
 +
-+    py_cv_module__ctypes=n/a
-+    py_cv_module__ctypes_test=n/a
 +    py_cv_module__curses=n/a
 +    py_cv_module__curses_panel=n/a
 +    py_cv_module__dbm=n/a
 +    py_cv_module__gdbm=n/a
 +    py_cv_module__remote_debugging=n/a
 +    py_cv_module__scproxy=n/a
-+    py_cv_module__testimportmultiple=n/a
-+    py_cv_module__testmultiphase=n/a
-+    py_cv_module__testsinglephase=n/a
 +    py_cv_module__tkinter=n/a
 +    py_cv_module__uuid=n/a
 +    py_cv_module_readline=n/a
 +    py_cv_module_syslog=n/a
-+    py_cv_module_xxlimited=n/a
-+    py_cv_module_xxlimited_35=n/a
-+    py_cv_module_xxlimited_3_13=n/a
 +    py_cv_module_=n/a
 +
 +   ;; #(
    QNX*) :
  
  
-@@ -32515,7 +32582,13 @@
+@@ -32515,7 +32574,13 @@
    wasm32|wasm64) :
      MODULE_BUILDTYPE=static ;; #(
    *) :
@@ -175,8 +194,8 @@
 +dnl Veda's C library is musl's, which has functions Veda does not carry out:
 +dnl they would be found, and fail when called. Veda starts a program in one
 +dnl step, from its file (posix_spawn): there is no fork() to copy a process
-+dnl with, nor exec() to replace a program (_posixsubprocess spawns instead),
-+dnl and no dynamic loading. Its files have no links, hard or symbolic (but
++dnl with, nor exec() to replace a program (_posixsubprocess spawns instead).
++dnl Its files have no links, hard or symbolic (but
 +dnl for the names of shared memory objects, in /dev/shm, which sem_open
 +dnl links), and there are no named pipes or device files to make. It has no
 +dnl pseudo-terminals, and a few system calls fail with ENOSYS (setting a
@@ -186,7 +205,7 @@
 +dnl libutil.a that musl installs would find some again: they are not looked
 +dnl in.
 +AS_VAR_IF([ac_sys_system], [Veda], [
-+  for name in fork fork1 vfork forkpty execv fexecve dlopen clock_settime \
++  for name in fork fork1 vfork forkpty execv fexecve clock_settime \
 +      link linkat symlink symlinkat mkfifo mkfifoat mknod mknodat \
 +      openpty posix_openpt grantpt unlockpt ptsname ptsname_r \
 +      chroot mremap sendfile splice copy_file_range process_vm_readv \
@@ -235,6 +254,33 @@
  AS_CASE([$enable_wasm_dynamic_linking],
    [yes], [ac_cv_func_dlopen=yes],
    [no], [ac_cv_func_dlopen=no],
+@@ -3667,7 +3716,7 @@
+ 	Emscripten*|WASI*)
+ 		LDSHARED='$(CC) -shared'
+ 		LDCXXSHARED='$(CXX) -shared';;
+-	Linux*|GNU*|QNX*|VxWorks*|Haiku*)
++	Linux*|GNU*|QNX*|VxWorks*|Haiku*|Veda*)
+ 		LDSHARED='$(CC) -shared'
+ 		LDCXXSHARED='$(CXX) -shared';;
+ 	FreeBSD*)
+@@ -3748,7 +3797,7 @@
+ 		 then CCSHARED="-fPIC";
+ 		 else CCSHARED="+z";
+ 		 fi;;
+-	Linux*|GNU*) CCSHARED="-fPIC";;
++	Linux*|GNU*|Veda*) CCSHARED="-fPIC";;
+ 	Emscripten*|WASI*)
+ 		AS_VAR_IF([enable_wasm_dynamic_linking], [yes], [
+ 			CCSHARED="-fPIC"
+@@ -3780,7 +3829,7 @@
+ 	hp*|HP*)
+ 	    LINKFORSHARED="-Wl,-E -Wl,+s";;
+ #	    LINKFORSHARED="-Wl,-E -Wl,+s -Wl,+b\$(BINLIBDEST)/lib-dynload";;
+-	Linux-android*) LINKFORSHARED="-pie -Xlinker -export-dynamic";;
++	Linux-android*|Veda*) LINKFORSHARED="-pie -Xlinker -export-dynamic";;
+ 	Linux*|GNU*) LINKFORSHARED="-Xlinker -export-dynamic";;
+ 	# -u libsys_s pulls in all symbols in libsys
+ 	Darwin/*|iOS/*)
 @@ -8086,6 +8135,7 @@
    iOS) _PYTHREAD_NAME_MAXLEN=63;;
    FreeBSD*) _PYTHREAD_NAME_MAXLEN=19;; # gh-131268
@@ -243,7 +289,7 @@
    *) _PYTHREAD_NAME_MAXLEN=;;
  esac
  if test -n "$_PYTHREAD_NAME_MAXLEN"; then
-@@ -8131,6 +8181,33 @@
+@@ -8131,6 +8181,24 @@
      )
    ],
    [CYGWIN*], [PY_STDLIB_MOD_SET_NA([_scproxy])],
@@ -251,38 +297,30 @@
 +    dnl The Terminal edits lines itself and does not address the cursor
 +    dnl (readline, curses); there are no Tk, dbm or uuid libraries, no reading
 +    dnl of another process's memory, and no syslog (programs log through
-+    dnl their standard error). Modules that must be
-+    dnl shared libraries cannot be: there is no dlopen(). ctypes needs one too.
++    dnl their standard error).
 +    PY_STDLIB_MOD_SET_NA(
-+      [_ctypes],
-+      [_ctypes_test],
 +      [_curses],
 +      [_curses_panel],
 +      [_dbm],
 +      [_gdbm],
 +      [_remote_debugging],
 +      [_scproxy],
-+      [_testimportmultiple],
-+      [_testmultiphase],
-+      [_testsinglephase],
 +      [_tkinter],
 +      [_uuid],
 +      [readline],
 +      [syslog],
-+      [xxlimited],
-+      [xxlimited_35],
-+      [xxlimited_3_13],
 +    )
 +  ],
    [QNX*], [PY_STDLIB_MOD_SET_NA([_scproxy])],
    [FreeBSD*], [PY_STDLIB_MOD_SET_NA([_scproxy])],
    [Emscripten], [
-@@ -8207,9 +8284,13 @@
+@@ -8207,9 +8275,14 @@
  dnl AC_MSG_NOTICE([m4_set_list([_PY_STDLIB_MOD_SET_NA])])
  
  dnl Default value for Modules/Setup.stdlib build type
-+dnl Veda links its programs statically and has no dlopen(): the modules are
-+dnl built into the interpreter.
++dnl Veda's Python has the standard library's modules built into the
++dnl interpreter, which loads them so without a file to read; only those that
++dnl must be shared libraries (tests of loading them) are.
  AS_CASE([$host_cpu],
    [wasm32|wasm64], [MODULE_BUILDTYPE=static],
 -  [MODULE_BUILDTYPE=${MODULE_BUILDTYPE:-shared}]
@@ -340,6 +378,43 @@
              asyncio.tools.display_awaited_by_tasks_tree(args.pid, retries=args.retries)
              sys.exit(0)
          case None:
+--- a/Lib/ctypes/util.py
++++ b/Lib/ctypes/util.py
+@@ -180,6 +180,34 @@
+         fname = f"{directory}/lib{name}.so"
+         return fname if os.path.isfile(fname) else None
+ 
++elif sys.platform == "veda":
++    # Veda: a library is found in the system's directory, then the installed
++    # packages', as the dynamic linker finds it: by its file's name,
++    # lib<name>.so, or, for one named by its soname (Veda's files have no
++    # links), lib<name>.so.<version>, the highest. The libraries that musl's
++    # C library holds are its shared object.
++    _C_LIBRARY_NAMES = {"c", "crypt", "dl", "m", "pthread", "resolv", "rt", "util", "xnet"}
++
++    def find_library(name):
++        if name in _C_LIBRARY_NAMES:
++            name = "c"
++        prefix = f"lib{name}.so"
++        for directory in ("/system/lib", "/home/packages/lib"):
++            try:
++                fnames = os.listdir(directory)
++            except OSError:
++                continue
++            if prefix in fnames:
++                return f"{directory}/{prefix}"
++            versions = {}
++            for fname in fnames:
++                version = fname[len(prefix) + 1:].split(".")
++                if fname.startswith(prefix + ".") and all(map(str.isdigit, version)):
++                    versions[tuple(map(int, version))] = fname
++            if versions:
++                return f"{directory}/{versions[max(versions)]}"
++        return None
++
+ elif sys.platform == "emscripten":
+     def _is_wasm(filename):
+         # Return True if the given file is an WASM module
 --- a/Lib/multiprocessing/context.py
 +++ b/Lib/multiprocessing/context.py
 @@ -338,12 +338,17 @@
@@ -825,28 +900,40 @@
  
  
  def LocationInfo(lineno, end_lineno=None, col_offset=None, end_col_offset=None):
---- a/Lib/test/test_build_details.py
-+++ b/Lib/test/test_build_details.py
-@@ -9,7 +9,7 @@
- from pathlib import Path
- from unittest import mock
+--- a/Lib/test/test_cext/__init__.py
++++ b/Lib/test/test_cext/__init__.py
+@@ -30,6 +30,15 @@
+ MSVC = support.MS_WINDOWS
  
--from test.support import is_android, is_apple_mobile, is_wasm32
-+from test.support import is_android, is_apple_mobile, is_veda, is_wasm32
  
- BASE_PATH = Path(
-     __file__,  # Lib/test/test_build_details.py
-@@ -163,6 +163,10 @@
-         is_android or is_apple_mobile,
-         "Android and iOS run tests via a custom testbed method that doesn't ship headers"
-     )
-+    @unittest.skipIf(
-+        is_veda,
-+        "Veda's Python has no C API to build with: Veda loads no extension modules"
-+    )
-     def test_c_api(self):
-         value = self.key('c_api')
++def has_cxx_compiler():
++    # Whether the C++ compiler extensions are built with is there: a system
++    # may have a C compiler alone (Veda's has).
++    if MSVC:
++        return True
++    cxx = shlex.split(sysconfig.get_config_var('CXX') or '')
++    return bool(cxx) and shutil.which(cxx[0]) is not None
++
++
+ # With MSVC on a debug build, the linker fails with: cannot open file
+ # 'python311.lib', it should look 'python311_d.lib'.
+ @unittest.skipIf(MSVC and support.Py_DEBUG,
+@@ -134,6 +143,7 @@
+         self.check_build('_test_cext_abi3t', abi3t=True)
  
+ 
++@unittest.skipUnless(has_cxx_compiler(), 'requires a C++ compiler')
+ class TestPublicCpp(BaseTests, unittest.TestCase):
+     LANGUAGE = 'C++'
+ 
+@@ -184,6 +194,7 @@
+         self.check_build('_test_cext_internal')
+ 
+ 
++@unittest.skipUnless(has_cxx_compiler(), 'requires a C++ compiler')
+ class TestInteralCpp(BaseTests, unittest.TestCase):
+     LANGUAGE = 'C++'
+     TEST_INTERNAL_C_API = True
 --- a/Lib/test/test_c_locale_coercion.py
 +++ b/Lib/test/test_c_locale_coercion.py
 @@ -39,6 +39,10 @@
@@ -1754,30 +1841,21 @@
          self.assertEqual(subprocess.getstatusoutput('echo xyzzy'),
 --- a/Lib/test/test_sysconfig.py
 +++ b/Lib/test/test_sysconfig.py
-@@ -388,6 +388,8 @@
-     @unittest.skipIf(is_wasi, "Incompatible with WASI mapdir and OOT builds")
-     @unittest.skipIf(is_apple_mobile,
-                      f"{sys.platform} doesn't distribute header files in the runtime environment")
-+    @unittest.skipIf(support.is_veda,
-+                     "Veda's Python has no header files: Veda loads no extension modules")
-     def test_get_config_h_filename(self):
-         config_h = sysconfig.get_config_h_filename()
-         self.assertTrue(os.path.isfile(config_h), config_h)
-@@ -532,6 +534,8 @@
+@@ -532,6 +532,8 @@
      @unittest.skipIf(is_wasi, "Incompatible with WASI mapdir and OOT builds")
      @unittest.skipIf(is_apple_mobile,
                       f"{sys.platform} doesn't include config folder at runtime")
 +    @unittest.skipIf(support.is_veda,
-+                     "Veda's Python has no build configuration: Veda loads no extension modules")
++                     "Veda's Python has no build configuration: its image leaves out the Makefile")
      def test_srcdir(self):
          # See Issues #15322, #15364.
          srcdir = sysconfig.get_config_var('srcdir')
-@@ -834,6 +838,8 @@
+@@ -834,6 +836,8 @@
      @unittest.skipIf(is_wasi, "Incompatible with WASI mapdir and OOT builds")
      @unittest.skipIf(is_apple_mobile,
                       f"{sys.platform} doesn't include config folder at runtime")
 +    @unittest.skipIf(support.is_veda,
-+                     "Veda's Python has no build configuration: Veda loads no extension modules")
++                     "Veda's Python has no build configuration: its image leaves out the Makefile")
      def test_get_makefile_filename(self):
          makefile = sysconfig.get_makefile_filename()
          self.assertTrue(os.path.isfile(makefile), makefile)

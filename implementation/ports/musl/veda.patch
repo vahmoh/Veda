@@ -1,3 +1,10 @@
+--- a/crt/Scrt1.c
++++ b/crt/Scrt1.c
+@@ -1 +1,4 @@
++/* Veda: the entry of a dynamically linked program is the dynamic linker's,
++   which took the bootstrap channel; the program's own start leaves it. */
++#define VEDA_DYNAMIC_START
+ #include "crt1.c"
 --- a/include/paths.h
 +++ b/include/paths.h
 @@ -15,8 +15,8 @@
@@ -22,6 +29,205 @@
  
  struct spwd {
  	char *sp_namp;
+--- a/ldso/dynlink.c
++++ b/ldso/dynlink.c
+@@ -135,7 +135,7 @@
+ 
+ static struct dso ldso;
+ static struct dso *head, *tail, *fini_head, *syms_tail, *lazy_head;
+-static char *env_path, *sys_path;
++static char *env_path;
+ static unsigned long long gencnt;
+ static int runtime;
+ static int ldd_mode;
+@@ -163,6 +163,9 @@
+ 
+ extern hidden int __malloc_replaced;
+ 
++/* Veda: reads the startup message (the POSIX layer's lib.rs). */
++hidden void __veda_startup(void);
++
+ hidden void (*const __init_array_start)(void)=0, (*const __fini_array_start)(void)=0;
+ 
+ extern hidden void (*const __init_array_end)(void), (*const __fini_array_end)(void);
+@@ -623,20 +626,6 @@
+ 	}
+ }
+ 
+-static ssize_t read_loop(int fd, void *p, size_t n)
+-{
+-	for (size_t i=0; i<n; ) {
+-		ssize_t l = read(fd, (char *)p+i, n-i);
+-		if (l<0) {
+-			if (errno==EINTR) continue;
+-			else return -1;
+-		}
+-		if (l==0) return i;
+-		i += l;
+-	}
+-	return n;
+-}
+-
+ static void *mmap_fixed(void *p, size_t n, int prot, int flags, int fd, off_t off)
+ {
+ 	static int no_map_fixed;
+@@ -797,15 +786,13 @@
+ 	addr_min &= -PAGE_SIZE;
+ 	off_start &= -PAGE_SIZE;
+ 	map_len = addr_max - addr_min + off_start;
+-	/* The first time, we map too much, possibly even more than
+-	 * the length of the file. This is okay because we will not
+-	 * use the invalid part; we just need to reserve the right
+-	 * amount of virtual address space to map over later. */
+-	map = DL_NOMMU_SUPPORT
+-		? mmap((void *)addr_min, map_len, PROT_READ|PROT_WRITE|PROT_EXEC,
+-			MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)
+-		: mmap((void *)addr_min, map_len, prot,
+-			MAP_PRIVATE, fd, off_start);
++	/* Veda: the span is reserved first, inaccessible, and every segment
++	 * then mapped over it with its own pages of the file alone: the
++	 * pages of a library of the system image that nothing writes are
++	 * then the image's own, which every process that loads it shares,
++	 * where a mapping of more than the file has would be a copy. */
++	map = mmap((void *)addr_min, map_len, PROT_NONE,
++		MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+ 	if (map==MAP_FAILED) goto error;
+ 	dso->map = map;
+ 	dso->map_len = map_len;
+@@ -835,10 +822,8 @@
+ 		prot = (((ph->p_flags&PF_R) ? PROT_READ : 0) |
+ 			((ph->p_flags&PF_W) ? PROT_WRITE: 0) |
+ 			((ph->p_flags&PF_X) ? PROT_EXEC : 0));
+-		/* Reuse the existing mapping for the lowest-address LOAD */
+-		if ((ph->p_vaddr & -PAGE_SIZE) != addr_min || DL_NOMMU_SUPPORT)
+-			if (mmap_fixed(base+this_min, this_max-this_min, prot, MAP_PRIVATE|MAP_FIXED, fd, off_start) == MAP_FAILED)
+-				goto error;
++		if (mmap_fixed(base+this_min, this_max-this_min, prot, MAP_PRIVATE|MAP_FIXED, fd, off_start) == MAP_FAILED)
++			goto error;
+ 		if (ph->p_memsz > ph->p_filesz && (ph->p_flags&PF_W)) {
+ 			size_t brk = (size_t)base+ph->p_vaddr+ph->p_filesz;
+ 			size_t pgbrk = brk+PAGE_SIZE-1 & -PAGE_SIZE;
+@@ -847,12 +832,14 @@
+ 				goto error;
+ 		}
+ 	}
++	/* Veda: no memory is writable and executable at once, so a library
++	 * whose code has relocations (built without -fPIC) is refused. */
+ 	for (i=0; ((size_t *)(base+dyn))[i]; i+=2)
+-		if (((size_t *)(base+dyn))[i]==DT_TEXTREL) {
+-			if (mprotect(map, map_len, PROT_READ|PROT_WRITE|PROT_EXEC)
+-			    && errno != ENOSYS)
+-				goto error;
+-			break;
++		if (((size_t *)(base+dyn))[i]==DT_TEXTREL
++		    || (((size_t *)(base+dyn))[i]==DT_FLAGS
++		    && (((size_t *)(base+dyn))[i+1] & DF_TEXTREL))) {
++			errno = ENOEXEC;
++			goto error;
+ 		}
+ done_mapping:
+ 	dso->base = base;
+@@ -923,19 +910,9 @@
+ 		 * (either system paths or a call to dlopen). */
+ 		if (libc.secure)
+ 			return 0;
+-		l = readlink("/proc/self/exe", buf, buf_size);
+-		if (l == -1) switch (errno) {
+-		case ENOENT:
+-		case ENOTDIR:
+-		case EACCES:
+-			return 0;
+-		default:
+-			return -1;
+-		}
+-		if (l >= buf_size)
+-			return 0;
+-		buf[l] = 0;
+-		origin = buf;
++		/* Veda has no /proc: the program's path is the one its
++		 * loader gives it (AT_EXECFN), which is its name here. */
++		origin = p->name;
+ 	} else {
+ 		origin = p->name;
+ 	}
+@@ -1122,43 +1099,12 @@
+ 				fd = path_open(name, p->rpath, buf, sizeof buf);
+ 		}
+ 		if (fd == -1) {
+-			if (!sys_path) {
+-				char *prefix = 0;
+-				size_t prefix_len;
+-				if (ldso.name[0]=='/') {
+-					char *s, *t, *z;
+-					for (s=t=z=ldso.name; *s; s++)
+-						if (*s=='/') z=t, t=s;
+-					prefix_len = z-ldso.name;
+-					if (prefix_len < PATH_MAX)
+-						prefix = ldso.name;
+-				}
+-				if (!prefix) {
+-					prefix = "";
+-					prefix_len = 0;
+-				}
+-				char etc_ldso_path[prefix_len + 1
+-					+ sizeof "/etc/ld-musl-" LDSO_ARCH ".path"];
+-				snprintf(etc_ldso_path, sizeof etc_ldso_path,
+-					"%.*s/etc/ld-musl-" LDSO_ARCH ".path",
+-					(int)prefix_len, prefix);
+-				fd = open(etc_ldso_path, O_RDONLY|O_CLOEXEC);
+-				if (fd>=0) {
+-					size_t n = 0;
+-					if (!fstat(fd, &st)) n = st.st_size;
+-					if ((sys_path = malloc(n+1)))
+-						sys_path[n] = 0;
+-					if (!sys_path || read_loop(fd, sys_path, n)<0) {
+-						free(sys_path);
+-						sys_path = "";
+-					}
+-					close(fd);
+-				} else if (errno != ENOENT) {
+-					sys_path = "";
+-				}
+-			}
+-			if (!sys_path) sys_path = "/lib:/usr/local/lib:/usr/lib";
+-			fd = path_open(name, sys_path, buf, sizeof buf);
++			/* Veda: the system's libraries, then those of the
++			 * packages installed, which only the packages service
++			 * writes (a package's cannot stand in for one of the
++			 * system's); no file names others. */
++			fd = path_open(name, "/system/lib:/home/packages/lib",
++				buf, sizeof buf);
+ 		}
+ 		pathname = buf;
+ 	}
+@@ -1817,6 +1763,11 @@
+ 	libc.secure = ((aux[0]&0x7800)!=0x7800 || aux[AT_UID]!=aux[AT_EUID]
+ 		|| aux[AT_GID]!=aux[AT_EGID] || aux[AT_SECURE]);
+ 
++	/* Veda: the POSIX layer reads the startup message (the descriptors,
++	 * the working directory, the connections to the system's services)
++	 * before anything opens a library or reports an error. */
++	__veda_startup();
++
+ 	/* Only trust user/env if kernel says we're not suid/sgid */
+ 	if (!libc.secure) {
+ 		env_path = getenv("LD_LIBRARY_PATH");
+--- a/Makefile
++++ b/Makefile
+@@ -158,9 +158,11 @@
+ obj/%.lo: $(srcdir)/%.c $(GENH) $(IMPH)
+ 	$(CC_CMD)
+ 
+-lib/libc.so: $(LOBJS) $(LDSO_OBJS)
++# Veda: the POSIX layer, which carries out the system calls, is part of
++# libc.so: its object is VEDA_OBJS.
++lib/libc.so: $(LOBJS) $(LDSO_OBJS) $(VEDA_OBJS)
+ 	$(CC) $(CFLAGS_ALL) $(LDFLAGS_ALL) -nostdlib -shared \
+-	-Wl,-e,_dlstart -o $@ $(LOBJS) $(LDSO_OBJS) $(LIBCC)
++	-Wl,-e,_dlstart -o $@ $(LOBJS) $(LDSO_OBJS) $(VEDA_OBJS) $(LIBCC)
+ 
+ lib/libc.a: $(AOBJS)
+ 	rm -f $@
 --- a/src/env/__libc_start_main.c
 +++ b/src/env/__libc_start_main.c
 @@ -15,6 +15,10 @@
@@ -103,6 +309,21 @@
  	info.dlpi_phdr  = (void *)aux[AT_PHDR];
  	info.dlpi_phnum = aux[AT_PHNUM];
  	info.dlpi_adds  = 0;
+--- a/src/ldso/dlopen.c
++++ b/src/ldso/dlopen.c
+@@ -1,9 +1,11 @@
+ #include <dlfcn.h>
+ #include "dynlink.h"
+ 
++/* Veda: what a program linked statically is told; a dynamically linked
++   one has the dynamic linker's dlopen. */
+ static void *stub_dlopen(const char *file, int mode)
+ {
+-	__dl_seterr("Dynamic loading not supported");
++	__dl_seterr("Dynamic loading needs a dynamically linked program: this one is linked statically");
+ 	return 0;
+ }
+ 
 --- a/src/legacy/getusershell.c
 +++ b/src/legacy/getusershell.c
 @@ -16,7 +16,7 @@

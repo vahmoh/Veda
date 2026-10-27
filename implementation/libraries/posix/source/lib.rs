@@ -30,10 +30,16 @@
 //! musl's hooks into this layer are:
 //!
 //! * `_start` stores the bootstrap channel the kernel passed (the entry
-//!   point's first argument) in [`__veda_bootstrap`]; `__init_libc` then calls [`__veda_init`], which
-//!   reads the startup message: the working directory, the descriptors the
-//!   program was given (role `FD + n`), the terminal, the registry, and what
-//!   it inherits that is no handle (`inherit`);
+//!   point's first argument) in [`__veda_bootstrap`] (in a dynamically
+//!   linked program, the dynamic linker's `_dlstart` does, its own start
+//!   leaving it); [`__veda_startup`] reads the startup message: the
+//!   working directory, the descriptors the program was given (role
+//!   `FD + n`), the terminal, the registry, and what it inherits that is no
+//!   handle (`inherit`). `__init_libc` then calls [`__veda_init`], which
+//!   reads it first if nothing has (a program linked statically), and sets
+//!   up the signals; the dynamic linker reads it before it opens the
+//!   program's libraries, when the main thread's thread pointer is not yet
+//!   the one it keeps;
 //! * `__veda_syscall(n, a1, ..., a6)` replaces the `syscall` instruction:
 //!   the architecture's gate (`architecture::signal`), which keeps where
 //!   its caller resumes, then [`syscall_gate`];
@@ -103,19 +109,61 @@ mod unix;
 mod user;
 mod vfs;
 
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use abi::startup::role;
 use rt::object::Vmo;
+use rt::sync::Mutex;
 
-/// The bootstrap channel the kernel passed the process, stored by `_start`.
+/// The bootstrap channel the kernel passed the process, stored by `_start`
+/// (by the dynamic linker's, in a dynamically linked program).
 #[unsafe(no_mangle)]
 pub static __veda_bootstrap: AtomicU32 = AtomicU32::new(0);
 
-/// Sets the layer up from the startup message (called by `__init_libc`,
-/// once the thread pointer is set, before any constructor runs). Signals
-/// from other processes are the program's from then on: until it has a
-/// signal entry, they end it, or not, as they end a program by default.
+/// Whether [`__veda_startup`] has read the startup message.
+static STARTED: AtomicBool = AtomicBool::new(false);
+
+/// What the startup message says of the signals the program ignores and
+/// blocks, and of its nice value, which [`__veda_init`] makes the main
+/// thread's once it has the thread pointer it keeps.
+static INHERITED: Mutex<(u64, u64, i32)> = Mutex::new((0, 0, 0));
+
+/// Reads the startup message, once: the working directory, the descriptors
+/// the program was given (role `FD + n`), the terminal, the registry, and
+/// what it inherits that is no handle (`inherit`). Called by the dynamic
+/// linker of a dynamically linked program before it opens the program's
+/// libraries, and otherwise by [`__veda_init`]. Nothing here needs the
+/// main thread's thread pointer, which the dynamic linker may change
+/// before the program runs.
+#[unsafe(no_mangle)]
+pub extern "C" fn __veda_startup() {
+    if STARTED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let _layer = interrupt::Layer::enter();
+    rt::env::adopt(__veda_bootstrap.swap(0, Ordering::Relaxed));
+    let entries = rt::env::vars();
+    let inherited = inherit::Inherited::parse(entries.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    *INHERITED.lock() = (inherited.ignored, inherited.mask, inherited.nice);
+    if let Some((top, size)) = inherited.main_stack {
+        thread::set_main_stack(top, size);
+    }
+    vfs::set_cwd(rt::env::cwd());
+    if let Some(h) = rt::env::take_handle(role::TERMINAL) {
+        tty::adopt(Vmo::from_handle(h));
+    }
+    if let Some(h) = rt::env::take_handle(role::PARENT) {
+        process::adopt_parent(rt::object::Process::from_handle(h));
+    }
+    io::adopt_startup_fds(&inherited);
+}
+
+/// Sets the layer up (called by `__init_libc`, once the thread pointer is
+/// the one the main thread keeps, before any constructor runs): from the
+/// startup message, which it reads unless the dynamic linker has
+/// ([`__veda_startup`]), then the signals. Signals from other processes are
+/// the program's from then on: until it has a signal entry, they end it,
+/// or not, as they end a program by default.
 #[unsafe(no_mangle)]
 pub extern "C" fn __veda_init() {
     // Thread-local storage is set up: threads can be told apart, and each
@@ -128,22 +176,10 @@ pub extern "C" fn __veda_init() {
     signal::threads_ready();
     let _layer = interrupt::Layer::enter();
     thread::main_thread_ready();
-    rt::env::adopt(__veda_bootstrap.swap(0, Ordering::Relaxed));
-    let entries = rt::env::vars();
-    let inherited = inherit::Inherited::parse(entries.iter().map(|(k, v)| (k.as_str(), v.as_str())));
-    signal::inherit(inherited.ignored, inherited.mask);
-    sched::inherit(inherited.nice);
-    if let Some((top, size)) = inherited.main_stack {
-        thread::set_main_stack(top, size);
-    }
-    vfs::set_cwd(rt::env::cwd());
-    if let Some(h) = rt::env::take_handle(role::TERMINAL) {
-        tty::adopt(Vmo::from_handle(h));
-    }
-    if let Some(h) = rt::env::take_handle(role::PARENT) {
-        process::adopt_parent(rt::object::Process::from_handle(h));
-    }
-    io::adopt_startup_fds(&inherited);
+    __veda_startup();
+    let (ignored, mask, nice) = *INHERITED.lock();
+    signal::inherit(ignored, mask);
+    sched::inherit(nice);
     #[cfg(target_os = "none")]
     let _ = rt::sys::call(abi::nr::SIGNAL_ENTRY_SET, [architecture::signal::entry_address(), 0, 0, 0, 0, 0]);
 }

@@ -148,7 +148,11 @@ logs (see [the driver VM](DRIVERVM.md)).
   for it in chunks of a page: the kernel's heap takes an allocation over
   2 KiB as physically contiguous memory, which memory fragmented by use
   may not have, so no allocation of the kernel's grows with what is
-  unmapped. The
+  unmapped. `vm_barrier` has every processor that runs a thread of the
+  caller's process go through a full memory barrier before it returns, as
+  Linux's `membarrier` does, by the shootdowns' IPI, which flushes nothing
+  for it: the C library's dynamic linker orders with it what every thread
+  sees of a library's thread-local storage. The
   kernel keeps a reserve of memory (1/64 of it, 8 to 64 MiB) for itself;
   `system_info` counts as free only what programs may still take.
 - **When memory runs out.** Memory is committed as it is touched, so it
@@ -252,10 +256,12 @@ logs (see [the driver VM](DRIVERVM.md)).
 
 ## User space
 
-Every program, and the kernel, is a static ELF64 executable for the System
-V ABI; only the loader is PE/COFF, the format UEFI starts. Programs are of
-two kinds (see [Rust on Veda](RUST.md)); `automation/source/components.rs`
-says which each is:
+Every program, and the kernel, is an ELF64 executable for the System V
+ABI, linked statically but for the POSIX programs that load libraries at
+run time ([Linking and loading](LINKING.md)); only the loader is PE/COFF,
+the format UEFI starts. Programs are of two kinds (see
+[Rust on Veda](RUST.md)); `automation/source/components.rs` says which
+each is:
 
 | Kind | Programs | Built |
 |------|----------|-------|
@@ -278,7 +284,13 @@ says which each is:
   of 2^28 pages). A program from the system image runs from the image's
   own pages where nothing writes them (its code and read-only data,
   through slices of the image's VMO), shared by every process that runs
-  it; only the pages its writable segments touch are its own. A crash's
+  it; only the pages its writable segments touch are its own. A
+  dynamically linked POSIX program names the system's dynamic linker, the
+  C library's shared object (`/system/lib/libc.so`, the only one started),
+  which is loaded beside it, at a random address of its own, and links it
+  with its shared libraries as it starts (GCC's runtime's among them, which
+  every such program shares: one C++ library and one unwinder in a
+  process). A crash's
   log line gives the failing address within the program's image
   (`target/` keeps Veda's programs with their symbols).
 - **POSIX.** C programs and programs on the standard library run on musl,
@@ -1105,8 +1117,10 @@ the actions every `ui` application offers over the `agentapp` protocol
   reports, the window system's restart, memory running out (an expendable
   process ended before an application that holds more, then the
   application that holds the most, never the process whose access found
-  no page), and the C, C++ and Rust test programs (`verification/c`,
-  `verification/rust`, `verification/stdcrates`). `nettest` checks DNS,
+  no page), and the C, C++ and Rust test programs, linked statically and
+  dynamically, with the libraries they load (`verification/c`,
+  `verification/rust`, `verification/stdcrates`, `verification/plugins`).
+  `nettest` checks DNS,
   UDP, TCP, HTTP, HTTPS and ping, against a server on the host in the
   network cards' scripts (`nettest local`).
 - **GUI scripts** (`verification/ui/*.vts`, in the language of

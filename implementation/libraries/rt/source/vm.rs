@@ -52,6 +52,12 @@ pub fn protect(process: Option<&Process>, addr: usize, len: usize, flags: usize)
     call(nr::VM_PROTECT, [p as usize, addr, len, flags, 0, 0]).map(|_| ())
 }
 
+/// Has every processor running a thread of this process go through a full
+/// memory barrier before it returns (`abi::nr::VM_BARRIER`).
+pub fn barrier() -> Result<(), Error> {
+    call(nr::VM_BARRIER, [0; 6]).map(|_| ())
+}
+
 /// A VMO mapped into this process for the lifetime of the value.
 pub struct Mapping {
     vmo: Vmo,

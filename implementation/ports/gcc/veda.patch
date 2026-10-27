@@ -36,9 +36,31 @@
  *-*-fuchsia*)
    native_system_header_dir=/include
    tmake_file="t-fuchsia"
+--- a/gcc/configure
++++ b/gcc/configure
+@@ -33907,7 +33907,7 @@
+       gcc_cv_target_dl_iterate_phdr=no
+     fi
+     ;;
+-  *-linux-musl*)
++  *-linux-musl* | *-*-veda*)
+     gcc_cv_target_dl_iterate_phdr=yes
+     ;;
+ esac
+--- a/gcc/configure.ac
++++ b/gcc/configure.ac
+@@ -7076,7 +7076,7 @@
+       gcc_cv_target_dl_iterate_phdr=no
+     fi
+     ;;
+-  *-linux-musl*)
++  *-linux-musl* | *-*-veda*)
+     gcc_cv_target_dl_iterate_phdr=yes
+     ;;
+ esac
 --- /dev/null
 +++ b/gcc/config/veda.h
-@@ -0,0 +1,103 @@
+@@ -0,0 +1,139 @@
 +/* Definitions for Veda, a POSIX environment over a capability microkernel.
 +   Copyright (C) 2026 Free Software Foundation, Inc.
 +
@@ -58,11 +80,14 @@
 +along with GCC; see the file COPYING3.  If not see
 +<http://www.gnu.org/licenses/>.  */
 +
-+/* Veda's C library is musl, and every program is linked statically:
-+   either at a fixed address (the default) or as a position-independent
-+   executable that relocates itself (-static-pie).  The system lives under
-+   /system: headers in /system/include, libraries and start files in
-+   /system/lib.  */
++/* Veda's C library is musl.  A program is linked statically by default,
++   at a fixed address, or as a position-independent executable that
++   relocates itself (-static-pie); or dynamically, as a position-independent
++   executable (-pie) that the system's dynamic linker links with the C
++   library's shared object and its other libraries as it starts.  Shared
++   libraries (-shared) stand on the C library's shared object too.  The
++   system lives under /system: headers in /system/include, libraries and
++   start files in /system/lib.  */
 +
 +#undef  TARGET_OS_CPP_BUILTINS
 +#define TARGET_OS_CPP_BUILTINS()		\
@@ -96,15 +121,22 @@
 +#undef  MD_EXEC_PREFIX
 +#define MD_EXEC_PREFIX "/system/bin/"
 +
-+#define VEDA_PIE_SPEC "static-pie|pie"
++/* The dynamic linker, which dynamically linked programs name: the C
++   library's shared object, as musl's is.  */
++#define VEDA_DYNAMIC_LINKER "/system/lib/libc.so"
 +
++/* Which output is made, the options winning over one another in this
++   order: -shared (a shared library always stands on the C library's
++   shared object), -static (over -static-pie and -pie, as on GNU/Linux),
++   -static-pie, -pie; and -shared and -pie over each other, whichever
++   comes last, as GCC's options have them.  */
 +#undef  STARTFILE_SPEC
 +#define STARTFILE_SPEC \
-+  "%{" VEDA_PIE_SPEC ":rcrt1.o%s;:crt1.o%s} crti.o%s \
-+   %{" VEDA_PIE_SPEC ":crtbeginS.o%s;:crtbeginT.o%s}"
++  "%{shared:;static:crt1.o%s;static-pie:rcrt1.o%s;pie:Scrt1.o%s;:crt1.o%s} crti.o%s \
++   %{shared:crtbeginS.o%s;static:crtbeginT.o%s;static-pie|pie:crtbeginS.o%s;:crtbeginT.o%s}"
 +
 +#define VEDA_ENDFILE_SPEC \
-+  "%{" VEDA_PIE_SPEC ":crtendS.o%s;:crtend.o%s} crtn.o%s"
++  "%{shared:crtendS.o%s;static:crtend.o%s;static-pie|pie:crtendS.o%s;:crtend.o%s} crtn.o%s"
 +
 +#undef  ENDFILE_SPEC
 +#define ENDFILE_SPEC VEDA_ENDFILE_SPEC
@@ -113,22 +145,48 @@
 +#undef  LIB_SPEC
 +#define LIB_SPEC "%{pthread:} -lc"
 +
++/* What is linked dynamically is linked as GNU/Linux distributions link
++   it: no relocations of code, which would need memory both writable and
++   executable (-z text); what is relocated read-only before any code runs
++   (-z relro -z now); the GNU hash table alone; relative relocations packed
++   (DT_RELR); and a search path given (-rpath) as DT_RUNPATH.  */
++#define VEDA_DYNAMIC_LINK_SPEC \
++  "-z text -z relro -z now --hash-style=gnu -z pack-relative-relocs --enable-new-dtags"
++
++/* The linker's options for each kind of output, which wins as in
++   STARTFILE_SPEC.  */
 +#undef  LINK_SPEC
 +#define LINK_SPEC \
-+  "%{shared:%e-shared is not supported (Veda links programs statically)} \
-+   %{" VEDA_PIE_SPEC ":-static -pie --no-dynamic-linker -z text;:-static} \
++  "%{shared:-shared " VEDA_DYNAMIC_LINK_SPEC "; \
++     static:-static; \
++     static-pie:-static -pie --no-dynamic-linker -z text; \
++     pie:-pie -dynamic-linker " VEDA_DYNAMIC_LINKER " " VEDA_DYNAMIC_LINK_SPEC "; \
++     :-static} \
 +   %{rdynamic:-export-dynamic} %{s:-s}"
 +
-+/* -pie means a static position-independent executable.  */
++/* LINK_SPEC gives -pie its meaning: a dynamically linked
++   position-independent executable, as on GNU/Linux.  */
 +#undef  LINK_PIE_SPEC
 +#define LINK_PIE_SPEC ""
++
++/* GCC's runtime: a statically linked program has its own (libgcc.a, and
++   the unwinder in libgcc_eh.a); dynamically linked programs and shared
++   libraries share the unwinder, libgcc_s.so.1, as on GNU/Linux, so that a
++   process has one, which knows every object's frames and those registered
++   with it.  It is linked if used (libstdc++.so.6 uses it), or always with
++   -shared-libgcc; the rest of libgcc is static.  */
++#undef  REAL_LIBGCC_SPEC
++#define REAL_LIBGCC_SPEC \
++  "%{static|static-pie|static-libgcc:-lgcc -lgcc_eh; \
++     shared|pie:%{shared-libgcc:-lgcc_s -lgcc;:-lgcc --push-state --as-needed -lgcc_s --pop-state}; \
++     :-lgcc -lgcc_eh}"
 +
 +/* The C library and libgcc refer to each other.  */
 +#undef  LINK_GCC_C_SEQUENCE_SPEC
 +#define LINK_GCC_C_SEQUENCE_SPEC "--start-group %G %{!nolibc:%L} --end-group"
 +
 +#if defined(HAVE_LD_EH_FRAME_HDR)
-+#define LINK_EH_SPEC "%{" VEDA_PIE_SPEC ":--eh-frame-hdr} "
++#define LINK_EH_SPEC "%{shared:--eh-frame-hdr;static:;static-pie|pie:--eh-frame-hdr} "
 +#endif
 +
 +#define TARGET_POSIX_IO
@@ -188,6 +246,49 @@
 +rdynamic
 +UrlSuffix(gcc/Link-Options.html#index-rdynamic)
 +
+--- a/libatomic/configure
++++ b/libatomic/configure
+@@ -6155,6 +6155,9 @@
+ tpf*)
+   lt_cv_deplibs_check_method=pass_all
+   ;;
++veda*)
++  lt_cv_deplibs_check_method=pass_all
++  ;;
+ vxworks*)
+   # Assume VxWorks cross toolchains are built on Linux, possibly
+   # as canadian for Windows hosts.
+@@ -9585,7 +9588,7 @@
+       archive_expsym_cmds='sed "s,^,_," $export_symbols >$output_objdir/$soname.expsym~$CC -shared $pic_flag $libobjs $deplibs $compiler_flags ${wl}-h,$soname ${wl}--retain-symbols-file,$output_objdir/$soname.expsym ${wl}--image-base,`expr ${RANDOM-$$} % 4096 / 2 \* 262144 + 1342177280` -o $lib'
+       ;;
+ 
+-    gnu* | linux* | tpf* | k*bsd*-gnu | kopensolaris*-gnu | uclinuxfdpiceabi)
++    gnu* | linux* | tpf* | k*bsd*-gnu | kopensolaris*-gnu | uclinuxfdpiceabi | veda*)
+       tmp_diet=no
+       if test "$host_os" = linux-dietlibc; then
+ 	case $cc_basename in
+@@ -11406,6 +11409,21 @@
+   shlibpath_var=LD_LIBRARY_PATH
+   ;;
+ 
++# Veda: ELF, and musl's dynamic linker (the C library's shared object),
++# which looks in LD_LIBRARY_PATH first.
++veda*)
++  version_type=linux
++  need_lib_prefix=no
++  need_version=no
++  library_names_spec='${libname}${release}${shared_ext}$versuffix ${libname}${release}${shared_ext}$major $libname${shared_ext}'
++  soname_spec='${libname}${release}${shared_ext}$major'
++  shlibpath_var=LD_LIBRARY_PATH
++  shlibpath_overrides_runpath=yes
++  hardcode_into_libs=yes
++  sys_lib_dlsearch_path_spec='/system/lib /home/packages/lib'
++  dynamic_linker='Veda ld.so'
++  ;;
++
+ # Shared libraries for VwWorks, >= 7 only at this stage
+ # and (fpic) still incompatible with "large" code models
+ # in a few configurations. Only for RTP mode in any case,
 --- a/libatomic/configure.tgt
 +++ b/libatomic/configure.tgt
 @@ -175,7 +175,7 @@
@@ -201,21 +302,110 @@
  	;;
 --- a/libgcc/config.host
 +++ b/libgcc/config.host
-@@ -297,6 +297,11 @@
+@@ -297,6 +297,14 @@
    tmake_file="$tmake_file t-crtstuff-pic t-libgcc-pic t-eh-dw2-dip t-slibgcc t-slibgcc-fuchsia"
    extra_parts="crtbegin.o crtend.o"
    ;;
 +*-*-veda*)
-+  # Static linking only: no shared libgcc.
-+  tmake_file="$tmake_file t-crtstuff-pic t-libgcc-pic t-eh-dw2-dip"
++  # libgcc_s.so.1 for dynamically linked programs and shared libraries,
++  # versioned as on GNU/Linux; libgcc_s.so, which links it, is a linker
++  # script (Veda's files have no links).
++  tmake_file="$tmake_file t-crtstuff-pic t-libgcc-pic t-eh-dw2-dip t-slibgcc t-slibgcc-gld t-slibgcc-elf-ver"
++  tmake_file="$tmake_file t-slibgcc-libgcc"
 +  extra_parts="crtbegin.o crtbeginS.o crtbeginT.o crtend.o crtendS.o"
 +  ;;
  *-*-linux* | frv-*-*linux* | *-*-kfreebsd*-gnu | *-*-gnu* | *-*-kopensolaris*-gnu | *-*-uclinuxfdpiceabi)
    tmake_file="$tmake_file t-crtstuff-pic t-libgcc-pic t-eh-dw2-dip t-slibgcc t-slibgcc-gld t-slibgcc-elf-ver t-linux"
    extra_parts="crtbegin.o crtbeginS.o crtbeginT.o crtend.o crtendS.o"
+--- a/libgcc/unwind-dw2-fde-dip.c
++++ b/libgcc/unwind-dw2-fde-dip.c
+@@ -59,7 +59,7 @@
+ 
+ #if !defined(inhibit_libc) && defined(HAVE_LD_EH_FRAME_HDR) \
+     && defined(TARGET_DL_ITERATE_PHDR) \
+-    && defined(__linux__)
++    && (defined(__linux__) || defined(__veda__))
+ # define USE_PT_GNU_EH_FRAME
+ #endif
+ 
 --- a/libstdc++-v3/configure
 +++ b/libstdc++-v3/configure
-@@ -39204,7 +39204,7 @@
+@@ -7075,6 +7075,9 @@
+ tpf*)
+   lt_cv_deplibs_check_method=pass_all
+   ;;
++veda*)
++  lt_cv_deplibs_check_method=pass_all
++  ;;
+ vxworks*)
+   # Assume VxWorks cross toolchains are built on Linux, possibly
+   # as canadian for Windows hosts.
+@@ -10371,7 +10374,7 @@
+       archive_expsym_cmds='sed "s,^,_," $export_symbols >$output_objdir/$soname.expsym~$CC -shared $pic_flag $libobjs $deplibs $compiler_flags ${wl}-h,$soname ${wl}--retain-symbols-file,$output_objdir/$soname.expsym ${wl}--image-base,`expr ${RANDOM-$$} % 4096 / 2 \* 262144 + 1342177280` -o $lib'
+       ;;
+ 
+-    gnu* | linux* | tpf* | k*bsd*-gnu | kopensolaris*-gnu | uclinuxfdpiceabi)
++    gnu* | linux* | tpf* | k*bsd*-gnu | kopensolaris*-gnu | uclinuxfdpiceabi | veda*)
+       tmp_diet=no
+       if test "$host_os" = linux-dietlibc; then
+ 	case $cc_basename in
+@@ -12204,6 +12207,21 @@
+   shlibpath_var=LD_LIBRARY_PATH
+   ;;
+ 
++# Veda: ELF, and musl's dynamic linker (the C library's shared object),
++# which looks in LD_LIBRARY_PATH first.
++veda*)
++  version_type=linux
++  need_lib_prefix=no
++  need_version=no
++  library_names_spec='${libname}${release}${shared_ext}$versuffix ${libname}${release}${shared_ext}$major $libname${shared_ext}'
++  soname_spec='${libname}${release}${shared_ext}$major'
++  shlibpath_var=LD_LIBRARY_PATH
++  shlibpath_overrides_runpath=yes
++  hardcode_into_libs=yes
++  sys_lib_dlsearch_path_spec='/system/lib /home/packages/lib'
++  dynamic_linker='Veda ld.so'
++  ;;
++
+ # Shared libraries for VwWorks, >= 7 only at this stage
+ # and (fpic) still incompatible with "large" code models
+ # in a few configurations. Only for RTP mode in any case,
+@@ -14400,6 +14418,11 @@
+         esac
+         ;;
+ 
++      veda*)
++        # Veda: GNU C++ and GNU ld, with ELF's conventions.
++        ld_shlibs_CXX=yes
++        ;;
++
+       vxworks*)
+         # For VxWorks ports, we assume the use of a GNU linker with
+         # standard elf conventions.
+@@ -15954,6 +15977,21 @@
+   shlibpath_var=LD_LIBRARY_PATH
+   ;;
+ 
++# Veda: ELF, and musl's dynamic linker (the C library's shared object),
++# which looks in LD_LIBRARY_PATH first.
++veda*)
++  version_type=linux
++  need_lib_prefix=no
++  need_version=no
++  library_names_spec='${libname}${release}${shared_ext}$versuffix ${libname}${release}${shared_ext}$major $libname${shared_ext}'
++  soname_spec='${libname}${release}${shared_ext}$major'
++  shlibpath_var=LD_LIBRARY_PATH
++  shlibpath_overrides_runpath=yes
++  hardcode_into_libs=yes
++  sys_lib_dlsearch_path_spec='/system/lib /home/packages/lib'
++  dynamic_linker='Veda ld.so'
++  ;;
++
+ # Shared libraries for VwWorks, >= 7 only at this stage
+ # and (fpic) still incompatible with "large" code models
+ # in a few configurations. Only for RTP mode in any case,
+@@ -39204,7 +39242,7 @@
  
    fi
      ;;
@@ -235,3 +425,58 @@
      GLIBCXX_CHECK_COMPILER_FEATURES
      GLIBCXX_CHECK_LINKER_FEATURES
      GLIBCXX_CHECK_MATH_SUPPORT
+--- a/libtool.m4
++++ b/libtool.m4
+@@ -2768,6 +2768,21 @@
+   shlibpath_var=LD_LIBRARY_PATH
+   ;;
+ 
++# Veda: ELF, and musl's dynamic linker (the C library's shared object),
++# which looks in LD_LIBRARY_PATH first.
++veda*)
++  version_type=linux
++  need_lib_prefix=no
++  need_version=no
++  library_names_spec='${libname}${release}${shared_ext}$versuffix ${libname}${release}${shared_ext}$major $libname${shared_ext}'
++  soname_spec='${libname}${release}${shared_ext}$major'
++  shlibpath_var=LD_LIBRARY_PATH
++  shlibpath_overrides_runpath=yes
++  hardcode_into_libs=yes
++  sys_lib_dlsearch_path_spec='/system/lib /home/packages/lib'
++  dynamic_linker='Veda ld.so'
++  ;;
++
+ # Shared libraries for VwWorks, >= 7 only at this stage
+ # and (fpic) still incompatible with "large" code models
+ # in a few configurations. Only for RTP mode in any case,
+@@ -3274,6 +3289,9 @@
+ tpf*)
+   lt_cv_deplibs_check_method=pass_all
+   ;;
++veda*)
++  lt_cv_deplibs_check_method=pass_all
++  ;;
+ vxworks*)
+   # Assume VxWorks cross toolchains are built on Linux, possibly
+   # as canadian for Windows hosts.
+@@ -4571,7 +4589,7 @@
+       _LT_TAGVAR(archive_expsym_cmds, $1)='sed "s,^,_," $export_symbols >$output_objdir/$soname.expsym~$CC -shared $pic_flag $libobjs $deplibs $compiler_flags ${wl}-h,$soname ${wl}--retain-symbols-file,$output_objdir/$soname.expsym ${wl}--image-base,`expr ${RANDOM-$$} % 4096 / 2 \* 262144 + 1342177280` -o $lib'
+       ;;
+ 
+-    gnu* | linux* | tpf* | k*bsd*-gnu | kopensolaris*-gnu | uclinuxfdpiceabi)
++    gnu* | linux* | tpf* | k*bsd*-gnu | kopensolaris*-gnu | uclinuxfdpiceabi | veda*)
+       tmp_diet=no
+       if test "$host_os" = linux-dietlibc; then
+ 	case $cc_basename in
+@@ -6520,6 +6538,11 @@
+         esac
+         ;;
+ 
++      veda*)
++        # Veda: GNU C++ and GNU ld, with ELF's conventions.
++        _LT_TAGVAR(ld_shlibs, $1)=yes
++        ;;
++
+       vxworks*)
+         # For VxWorks ports, we assume the use of a GNU linker with
+         # standard elf conventions.

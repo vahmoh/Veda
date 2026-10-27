@@ -159,6 +159,15 @@ pub fn std_target_dir() -> PathBuf {
     util::target_dir().join("std")
 }
 
+/// Where Cargo builds Veda's dynamically linked programs on the standard
+/// library (`components::Program::dynamic`): apart from the others, as
+/// Cargo builds every crate again for other flags; inside
+/// [`std_target_dir`], which goes with it when the toolchain's Rust is
+/// built again.
+pub fn std_dynamic_target_dir() -> PathBuf {
+    std_target_dir().join("dynamic")
+}
+
 /// Empties [`std_target_dir`] if the toolchain's Rust has been built again
 /// since it was filled: crates compiled against another build of the
 /// standard library do not link with this one, and Cargo, which knows a
@@ -330,8 +339,9 @@ fn cross_tool(name: &str) -> PathBuf {
 
 /// The symbols the POSIX layer gives the C library (and, for the `veda_`
 /// ones, C programs: `<veda/ipc.h>`); all else in it stays private.
-const POSIX_LAYER_EXPORTS: [&str; 40] = [
+const POSIX_LAYER_EXPORTS: [&str; 41] = [
     "__veda_syscall",
+    "__veda_startup",
     "__veda_init",
     "__veda_spawn",
     "__veda_lookup_name",
@@ -440,29 +450,72 @@ pub fn c_library() -> PathBuf {
     root().join("cross").join("sysroot").join("system").join("lib").join("libc.a")
 }
 
+/// The cross toolchain's C library as a shared object, which dynamically
+/// linked programs and shared libraries are linked with, and which is
+/// their dynamic linker (`elf::INTERPRETER`): musl's, with the POSIX layer
+/// in it.
+pub fn shared_c_library() -> PathBuf {
+    c_library().with_file_name("libc.so")
+}
+
 /// Brings the cross toolchain's C library up to date with the POSIX layer
-/// (its object in `libc.a`, its headers `<veda/*.h>`), holding the
-/// toolchain's lock meanwhile: for builds of C libraries that use it (the
-/// web engine's).
+/// (its object in `libc.a` and `libc.so`, its headers `<veda/*.h>`),
+/// holding the toolchain's lock meanwhile: for builds of C libraries that
+/// use it (the web engine's).
 pub fn refresh_c_library() -> Result {
     let _lock = lock()?;
     refresh_posix_layer()
 }
 
+/// Links the C library's shared object with the POSIX layer's `object` by
+/// musl's own rule, in musl's build (`implementation/ports/build.sh` first
+/// did), unless it is newer: its path. `None` for a toolchain built before
+/// the C library had one, which says so.
+fn link_shared_c_library(object: &Path) -> Result<Option<PathBuf>> {
+    let musl = root().join("build").join("musl");
+    let shared = musl.join("lib").join("libc.so");
+    if !musl.join("obj").join("ldso").join("dynlink.lo").is_file() {
+        util::status(
+            "Note",
+            "the toolchain has no shared C library, and dynamically linked programs do not run: `cargo automation \
+             toolchain` builds it again",
+        );
+        return Ok(None);
+    }
+    if !is_newer(&shared, &[object]) {
+        let mut path = OsString::from(root().join("cross").join("bin"));
+        path.push(":");
+        path.push(std::env::var_os("PATH").unwrap_or_default());
+        let mut make = Command::new("make");
+        make.arg("-s").arg("-C").arg(&musl).arg("lib/libc.so").arg(format!("VEDA_OBJS={}", object.display()));
+        util::run(make.env("PATH", path))?;
+    }
+    Ok(Some(shared))
+}
+
 /// Puts the current POSIX layer into the cross toolchain's C library (and
 /// the native toolchain's, if built), so that C programs built from now
-/// on get it.
+/// on get it: into its archive, and into its shared object, which is
+/// linked again with it.
 fn refresh_posix_layer() -> Result {
     let object = posix_layer_object();
     let library = posix_library()?;
     util::create_dir_all(&root().join("build"))?;
     posix_object(&library, &object)?;
+    let shared = link_shared_c_library(&object)?;
     let headers =
         util::workspace_root().join("implementation").join("libraries").join("posix").join("include").join("veda");
     for sysroot in [root().join("cross").join("sysroot"), root().join("native")] {
         let libc = sysroot.join("system").join("lib").join("libc.a");
         if libc.is_file() && !is_newer(&libc, &[&object]) {
             util::run(Command::new(cross_tool("ar")).arg("rcs").arg(&libc).arg(&object))?;
+        }
+        let libc_so = libc.with_file_name("libc.so");
+        if let Some(shared) = &shared
+            && libc.is_file()
+            && !is_newer(&libc_so, &[shared])
+        {
+            util::copy(shared, &libc_so)?;
         }
         // Its own header, `<veda/ipc.h>`.
         if libc.is_file() {
@@ -479,35 +532,50 @@ fn refresh_posix_layer() -> Result {
     Ok(())
 }
 
-/// How each C test program is linked: once at a fixed address, as GCC links
-/// by default, and once position-independent. The suffix of the
-/// executable's name, and the flags.
-const C_TEST_VARIANTS: &[(&str, &[&str])] = &[("", &[]), ("-pie", &["-fPIE", "-static-pie"])];
+/// How each C test program is linked: statically, once at a fixed address,
+/// as GCC links by default, and once position-independent; and dynamically
+/// (position-independent, with the shared objects of the C library and
+/// GCC's runtime), giving the libraries it loads what it defines. The
+/// suffix of the executable's name, and the flags.
+const C_TEST_VARIANTS: &[(&str, &[&str])] =
+    &[("", &[]), ("-pie", &["-fPIE", "-static-pie"]), ("-dynamic", &["-fPIE", "-pie", "-rdynamic"])];
+
+/// The shared libraries the C test programs load (`verification/c/shared`,
+/// built as `lib<stem>.so`): each one's stem, and the libraries it needs,
+/// which it finds beside itself (its RUNPATH is `$ORIGIN`). Each comes
+/// after those it needs.
+const C_TEST_LIBRARIES: &[(&str, &[&str])] = &[("base", &[]), ("plugin", &["base"]), ("host", &[]), ("thrower", &[])];
 
 /// Compiles the test programs in C and C++ (`verification/c/*.c` and
-/// `*.cc`, each in every one of [`C_TEST_VARIANTS`]) for the system image:
-/// `(name, executable)`. None without a cross compiler. What they expect of
-/// the architecture is in the headers of
+/// `*.cc`, each in every one of [`C_TEST_VARIANTS`]) and the shared
+/// libraries they load ([`C_TEST_LIBRARIES`], in `lib/`) for the system
+/// image: `(name, file)`. None without a cross compiler. What they expect
+/// of the architecture is in the headers of
 /// `verification/c/architectures/<architecture>/`.
 fn c_tests() -> Result<Vec<(String, Vec<u8>)>> {
     let Some(gcc) = cross_gcc() else { return Ok(Vec::new()) };
     let gxx = cross_tool("g++");
-    let libc = root().join("cross").join("sysroot").join("system").join("lib").join("libc.a");
+    let libc = c_library();
+    let libc_so = shared_c_library();
+    let runtimes = SHARED_RUNTIMES.map(shared_runtime);
     let src = util::workspace_root().join("verification").join("c");
     let arch_headers = src.join("architectures").join(architecture::NAME);
     let headers = util::files_under(&arch_headers)?;
     let out = root().join("tests");
     util::create_dir_all(&out)?;
+    let mut programs = c_test_libraries(&src.join("shared"), &out.join("lib"), &gcc, &gxx)?;
     let sources = util::files_in(&src, &["c", "cc"])?;
-    let mut programs = Vec::new();
     for source in sources {
         let stem = source.file_stem().unwrap().to_string_lossy().into_owned();
         let compiler = if source.extension().is_some_and(|x| x == "cc") { &gxx } else { &gcc };
         for (suffix, flags) in C_TEST_VARIANTS {
             let name = format!("{stem}{suffix}");
             let exe = out.join(&name);
-            let inputs: Vec<&Path> =
-                [source.as_path(), compiler, &libc].into_iter().chain(headers.iter().map(PathBuf::as_path)).collect();
+            let inputs: Vec<&Path> = [source.as_path(), compiler, &libc, &libc_so]
+                .into_iter()
+                .chain(runtimes.iter().map(PathBuf::as_path))
+                .chain(headers.iter().map(PathBuf::as_path))
+                .collect();
             let mut cc = Command::new(compiler);
             cc.args(["-O2", "-Wall", "-Wextra", "-Werror", "-g0", "-s"])
                 .arg(util::c_path_remap())
@@ -528,44 +596,101 @@ fn c_tests() -> Result<Vec<(String, Vec<u8>)>> {
     Ok(programs)
 }
 
-/// How each Rust test program is linked: position-independent, as Rust's
-/// target for Veda links programs by default, and at a fixed address. The
-/// suffix of the executable's name, and the flags.
-const RUST_TEST_VARIANTS: &[(&str, &[&str])] = &[("", &[]), ("-fixed", &["-C", "relocation-model=static"])];
+/// Compiles the shared libraries of [`C_TEST_LIBRARIES`], from `src` into
+/// `out`: `(lib/lib<stem>.so, file)`. Every source in `src` is one of them.
+fn c_test_libraries(src: &Path, out: &Path, gcc: &Path, gxx: &Path) -> Result<Vec<(String, Vec<u8>)>> {
+    for source in util::files_in(src, &["c", "cc"])? {
+        let stem = source.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+        if !C_TEST_LIBRARIES.iter().any(|(name, _)| *name == stem) {
+            return Err(format!("{}: not among C_TEST_LIBRARIES (automation/source/toolchain.rs)", source.display()));
+        }
+    }
+    util::create_dir_all(out)?;
+    let libc_so = shared_c_library();
+    let runtimes = SHARED_RUNTIMES.map(shared_runtime);
+    let mut libraries = Vec::new();
+    for (stem, needs) in C_TEST_LIBRARIES {
+        let (source, compiler) = match src.join(format!("{stem}.c")) {
+            c if c.is_file() => (c, gcc),
+            _ => (src.join(format!("{stem}.cc")), gxx),
+        };
+        let file = out.join(format!("lib{stem}.so"));
+        let mut cc = Command::new(compiler);
+        cc.args(["-O2", "-Wall", "-Wextra", "-Werror", "-g0", "-s", "-fPIC", "-shared"])
+            .arg(util::c_path_remap())
+            .arg("-o")
+            .arg(&file)
+            .arg(&source);
+        if !needs.is_empty() {
+            cc.arg("-L").arg(out).args(needs.iter().map(|n| format!("-l{n}"))).arg("-Wl,-rpath,$ORIGIN");
+        }
+        let needed: Vec<PathBuf> = needs.iter().map(|n| out.join(format!("lib{n}.so"))).collect();
+        let inputs: Vec<&Path> = [source.as_path(), compiler, &libc_so]
+            .into_iter()
+            .chain(runtimes.iter().map(PathBuf::as_path))
+            .chain(needed.iter().map(PathBuf::as_path))
+            .collect();
+        let recipe = Recipe::of(&file, &cc, &inputs);
+        if !recipe.fresh() {
+            util::run(&mut cc)?;
+            recipe.record()?;
+        }
+        libraries.push((format!("lib/lib{stem}.so"), util::read(&file)?));
+    }
+    Ok(libraries)
+}
+
+/// How each Rust test program is linked: statically, position-independent,
+/// as Rust's target for Veda links programs by default, and at a fixed
+/// address; and dynamically, with the shared objects of the C library and
+/// GCC's runtime. The suffix of the executable's name, and the flags.
+const RUST_TEST_VARIANTS: &[(&str, &[&str])] =
+    &[("", &[]), ("-fixed", &["-C", "relocation-model=static"]), ("-dynamic", &["-C", "target-feature=-crt-static"])];
 
 /// Compiles the test programs in Rust (`verification/rust/*.rs`, each in
-/// every one of [`RUST_TEST_VARIANTS`]) for the system image: `(name,
-/// executable)`. None without Rust. They keep their symbols and line
-/// tables, which their backtraces show.
+/// every one of [`RUST_TEST_VARIANTS`]), and the libraries they load
+/// (`verification/rust/shared/*.rs`, each a `cdylib`, `lib/lib<stem>.so`),
+/// for the system image: `(name, file)`. None without Rust. They keep
+/// their symbols and line tables, which their backtraces show.
 fn rust_tests() -> Result<Vec<(String, Vec<u8>)>> {
     let (Some(rustc), Some(gcc)) = (rustc(), cross_gcc()) else { return Ok(Vec::new()) };
-    let libc = root().join("cross").join("sysroot").join("system").join("lib").join("libc.a");
+    let (libc, libc_so) = (c_library(), shared_c_library());
+    let unwinder = shared_runtime("libgcc_s.so.1");
     let src = util::workspace_root().join("verification").join("rust");
     let out = root().join("tests").join("rust");
-    util::create_dir_all(&out)?;
-    let sources = util::files_in(&src, &["rs"])?;
+    util::create_dir_all(&out.join("lib"))?;
+    let compile = |source: &Path, file: &Path, flags: &[&str]| -> Result {
+        let mut compile = Command::new(&rustc);
+        compile
+            .args(["--edition", "2024", "--target", architecture::STD_TARGET, "-D", "warnings"])
+            .args(["-C", "opt-level=2", "-C", "debuginfo=line-tables-only"])
+            .arg(rust_path_remap())
+            .arg("-C")
+            .arg(format!("linker={}", gcc.display()))
+            .args(flags)
+            .arg("-o")
+            .arg(file)
+            .arg(source);
+        let recipe = Recipe::of(file, &compile, &[source, &rustc, &gcc, &libc, &libc_so, &unwinder]);
+        if !recipe.fresh() {
+            util::run(&mut compile)?;
+            recipe.record()?;
+        }
+        Ok(())
+    };
     let mut programs = Vec::new();
-    for source in sources {
+    for source in util::files_in(&src.join("shared"), &["rs"])? {
+        let stem = source.file_stem().unwrap().to_string_lossy().into_owned();
+        let file = out.join("lib").join(format!("lib{stem}.so"));
+        compile(&source, &file, &["--crate-type", "cdylib"])?;
+        programs.push((format!("lib/lib{stem}.so"), util::read(&file)?));
+    }
+    for source in util::files_in(&src, &["rs"])? {
         let stem = source.file_stem().unwrap().to_string_lossy().into_owned();
         for (suffix, flags) in RUST_TEST_VARIANTS {
             let name = format!("{stem}{suffix}");
             let exe = out.join(&name);
-            let mut compile = Command::new(&rustc);
-            compile
-                .args(["--edition", "2024", "--target", architecture::STD_TARGET, "-D", "warnings"])
-                .args(["-C", "opt-level=2", "-C", "debuginfo=line-tables-only"])
-                .arg(rust_path_remap())
-                .arg("-C")
-                .arg(format!("linker={}", gcc.display()))
-                .args(*flags)
-                .arg("-o")
-                .arg(&exe)
-                .arg(&source);
-            let recipe = Recipe::of(&exe, &compile, &[&source, &rustc, &gcc, &libc]);
-            if !recipe.fresh() {
-                util::run(&mut compile)?;
-                recipe.record()?;
-            }
+            compile(&source, &exe, flags)?;
             programs.push((name, util::read(&exe)?));
         }
     }
@@ -749,6 +874,45 @@ fn relink_native() -> Result {
     build(std::thread::available_parallelism().map_or(4, |n| n.get()))
 }
 
+/// GCC's runtime libraries as shared objects, which dynamically linked
+/// programs and shared libraries share, as on GNU/Linux: a process has one
+/// unwinder, one C++ library, and one set of the locks that atomic
+/// operations take. Each by the name programs ask for it by, its soname.
+const SHARED_RUNTIMES: [&str; 3] = ["libgcc_s.so.1", "libstdc++.so.6", "libatomic.so.1"];
+
+/// Where the cross toolchain has the shared object of GCC's runtime `name`.
+fn shared_runtime(name: &str) -> PathBuf {
+    root().join("cross").join(architecture::C_TARGET).join("lib").join(name)
+}
+
+/// The system's shared libraries for the image, at their paths in it: the
+/// dynamic linker (`lib/libc.so`: the C library's shared object,
+/// `elf::INTERPRETER`) and GCC's runtime ([`SHARED_RUNTIMES`]), without
+/// the symbols that linking does not read (their dynamic ones stay). Those
+/// the toolchain has; it says so if GCC's are missing.
+fn shared_libraries() -> Result<Vec<(String, Vec<u8>)>> {
+    let runtimes = SHARED_RUNTIMES.map(|name| (name, shared_runtime(name)));
+    if shared_c_library().is_file() && runtimes.iter().any(|(_, path)| !path.is_file()) {
+        util::status(
+            "Note",
+            "the toolchain has no shared GCC runtime, and dynamically linked programs in C++ or Rust do not run: \
+             `cargo automation toolchain` builds it again",
+        );
+    }
+    let mut libraries = Vec::new();
+    for (name, path) in std::iter::once(("libc.so", shared_c_library())).chain(runtimes) {
+        if !path.is_file() {
+            continue;
+        }
+        let stripped = root().join("build").join(format!("{name}.stripped"));
+        if !is_newer(&stripped, &[&path]) {
+            util::run(Command::new(cross_tool("strip")).arg("--strip-unneeded").arg("-o").arg(&stripped).arg(&path))?;
+        }
+        libraries.push((format!("lib/{name}"), util::read(&stripped)?));
+    }
+    Ok(libraries)
+}
+
 /// The native toolchain's files for the system image: paths relative to
 /// `/system` and their contents. None if it has not been built.
 fn native_files() -> Result<Vec<(String, Vec<u8>)>> {
@@ -764,7 +928,9 @@ fn native_files() -> Result<Vec<(String, Vec<u8>)>> {
 /// What the toolchain gives the system image, at their paths in it: the C
 /// library's databases (`etc/services`, `etc/passwd`...), the C and Rust
 /// test programs (`tests/c`, `tests/rust`), the native toolchain (as
-/// `/system` has it), and the media decoder (`bin/mediadec`) and its
+/// `/system` has it), the system's shared libraries (`lib/libc.so`, the C
+/// library's shared object, which is the dynamic linker, and GCC's
+/// runtime's), and the media decoder (`bin/mediadec`) and its
 /// libraries' tests (`tests/media`) if `with_mediadec`, with the licence
 /// texts of the ports these have (`licences/<port>`). The POSIX layer
 /// goes into the C library once, first; all of it is made while this
@@ -796,6 +962,13 @@ pub fn image_files(with_mediadec: bool) -> Result<Vec<(String, Vec<u8>)>> {
         licensed.extend(["binutils", "gmp", "mpfr", "mpc"]);
     }
     files.extend(native);
+    // The system's shared libraries, which dynamically linked programs need
+    // whether the image has the C toolchain or not: in place of the native
+    // toolchain's copies, without the symbols that linking does not read.
+    for (path, library) in shared_libraries()? {
+        files.retain(|(p, _)| *p != path);
+        files.push((path, library));
+    }
     if with_mediadec {
         let decoder = mediadec()?;
         if decoder.is_none() {

@@ -1,3 +1,22 @@
+--- a/compiler/rustc_session/src/session.rs
++++ b/compiler/rustc_session/src/session.rs
+@@ -640,6 +640,16 @@
+             // we use compiler options to determine the crate_type.
+             // We can't check `#![crate_type = "proc-macro"]` here.
+             false
++        } else if self.target.os == Os::Veda
++            && match crate_type {
++                Some(t) => matches!(t, CrateType::Cdylib | CrateType::Dylib),
++                None => self.opts.crate_types.iter().any(|t| matches!(t, CrateType::Cdylib | CrateType::Dylib)),
++            }
++        {
++            // Veda: a shared library stands on the C library's shared
++            // object, as the dynamically linked program that loads it does:
++            // a process has one C library.
++            false
+         } else {
+             self.target.crt_static_default
+         }
 --- a/compiler/rustc_target/src/spec/base/mod.rs
 +++ b/compiler/rustc_target/src/spec/base/mod.rs
 @@ -34,6 +34,7 @@
@@ -10,20 +29,26 @@
  pub(crate) mod windows_gnu;
 --- /dev/null
 +++ b/compiler/rustc_target/src/spec/base/veda.rs
-@@ -0,0 +1,23 @@
+@@ -0,0 +1,29 @@
 +use crate::spec::{Env, Os, TargetOptions, cvs};
 +
-+/// Veda: its C library is musl, and every program is linked statically,
-+/// position-independent by default (`-static-pie`), by the driver of the C
-+/// toolchain (`<arch>-veda-gcc`), which brings Veda's start files, its C
-+/// library and GCC's runtime and unwinder, as for C programs.
++/// Veda: its C library is musl. A program is linked by the driver of the
++/// C toolchain (`<arch>-veda-gcc`), which brings Veda's start files, its C
++/// library and GCC's runtime and unwinder, as for C programs: statically,
++/// position-independent (`-static-pie`) by default; dynamically with
++/// `-C target-feature=-crt-static` (`-pie`), with the shared objects of the
++/// C library (which is also the dynamic linker) and of GCC's runtime,
++/// linked as it starts. A shared library (`cdylib`, `dylib`) always stands
++/// on those shared objects, as the program that loads it does
++/// (`Session::crt_static`).
 +pub(crate) fn opts() -> TargetOptions {
 +    TargetOptions {
 +        os: Os::Veda,
 +        env: Env::Musl,
 +        families: cvs!["unix"],
-+        // There are no shared libraries.
-+        dynamic_linking: false,
++        dynamic_linking: true,
++        // `-C rpath`: libraries found where the program is (`$ORIGIN`).
++        has_rpath: true,
 +        crt_static_default: true,
 +        crt_static_respected: true,
 +        position_independent_executables: true,
@@ -770,13 +795,18 @@
  cfg_select! {
      all(feature = "llvm-libunwind", feature = "system-llvm-libunwind") => {
          compile_error!("`llvm-libunwind` and `system-llvm-libunwind` cannot be enabled at the same time");
-@@ -216,6 +216,12 @@
+@@ -216,6 +216,17 @@
  #[link(name = "gcc_s")]
  unsafe extern "C" {}
  
-+// Veda's programs are static, and unwind with GCC's unwinder, as its C++
-+// programs do: it is in libgcc, as GCC is built for static linking alone.
++// Veda's programs and libraries unwind with GCC's unwinder, as its C++
++// ones do: a statically linked program has its own (libgcc_eh), and
++// dynamically linked programs and shared libraries share the shared one
++// (libgcc_s.so.1), as on GNU/Linux. libgcc has the rest of GCC's runtime,
++// which the C code linked in may call.
 +#[cfg(target_os = "veda")]
++#[link(name = "gcc_eh", kind = "static", modifiers = "-bundle", cfg(target_feature = "crt-static"))]
++#[link(name = "gcc_s", cfg(not(target_feature = "crt-static")))]
 +#[link(name = "gcc", kind = "static", modifiers = "-bundle")]
 +unsafe extern "C" {}
 +

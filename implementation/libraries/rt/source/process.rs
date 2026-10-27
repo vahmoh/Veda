@@ -8,8 +8,8 @@
 //! give it a stack, create its first thread and start it with a bootstrap
 //! channel carrying the startup message (`abi::startup`).
 //!
-//! Every program is a static ELF64 executable for the System V ABI, checked
-//! and laid out by `elf`, and placed at a random address if it is
+//! Every program is an ELF64 executable for the System V ABI, checked and
+//! laid out by `elf`, and placed at a random address if it is
 //! position-independent. Its note (`elf::veda`) tells which of two kinds
 //! it is:
 //!
@@ -25,6 +25,14 @@
 //!   what their POSIX layer inherits from the one that starts them
 //!   ([`Spawn::inherited`]) and where their main thread's stack is
 //!   ([`startup::MAIN_STACK`]).
+//!
+//! A POSIX program may be linked dynamically: it names the system's dynamic
+//! linker (`elf::INTERPRETER`, the C library's shared object), which is
+//! loaded beside it, at a random address of its own, and started in its
+//! place, the auxiliary vector saying where both are; the dynamic linker
+//! links the program with its libraries and starts it. Who starts such a
+//! program says how the dynamic linker's file is had
+//! ([`Spawn::dynamic_linker`]); no other is ever started.
 
 use alloc::borrow::Cow;
 use alloc::string::String;
@@ -78,6 +86,12 @@ pub enum SpawnError {
     TooLarge,
     /// No process the caller accepts ([`Spawn::accept`]) could be made.
     Refused,
+    /// A dynamically linked program that names another dynamic linker than
+    /// the system's (`elf::INTERPRETER`).
+    OtherDynamicLinker,
+    /// A dynamically linked program whose dynamic linker could not be had
+    /// ([`Spawn::dynamic_linker`]), or is not one.
+    NoDynamicLinker,
     Kernel(Error),
 }
 
@@ -95,6 +109,12 @@ impl core::fmt::Display for SpawnError {
             SpawnError::Incompatible => f.write_str("built for another version of Veda"),
             SpawnError::TooLarge => f.write_str("the argument list is too long"),
             SpawnError::Refused => f.write_str("no process the caller accepts could be made"),
+            SpawnError::OtherDynamicLinker => {
+                write!(f, "names a dynamic linker other than the system's ({})", elf::INTERPRETER)
+            }
+            SpawnError::NoDynamicLinker => {
+                write!(f, "linked dynamically, but the dynamic linker ({}) cannot be had", elf::INTERPRETER)
+            }
             SpawnError::Kernel(e) => write!(f, "{e}"),
         }
     }
@@ -154,26 +174,43 @@ pub fn interpreter(start: &[u8]) -> Option<Interpreter<'_>> {
 }
 
 /// Where a position-independent image of `len` bytes goes: a random page
-/// of the span programs are placed in (`abi::program_base`).
-fn random_base(len: usize) -> Result<u64, Error> {
-    let mut r = [0u8; 8];
-    crate::object::try_random_bytes(&mut r)?;
-    Ok(abi::program_base(len, u64::from_le_bytes(r)) as u64)
+/// of the span programs are placed in (`abi::program_base`), clear of the
+/// addresses `avoid` (the program's, as its dynamic linker is placed).
+fn random_base(len: usize, avoid: Option<(u64, u64)>) -> Result<u64, Error> {
+    /// The places drawn at most: two images of a few hundred MiB meet in
+    /// the span (a TiB) once in thousands of draws.
+    const DRAWS: usize = 16;
+    for _ in 0..DRAWS {
+        let mut r = [0u8; 8];
+        crate::object::try_random_bytes(&mut r)?;
+        let base = abi::program_base(len, u64::from_le_bytes(r)) as u64;
+        if avoid.is_none_or(|(start, end)| base.saturating_add(len as u64) <= start || end <= base) {
+            return Ok(base);
+        }
+    }
+    Err(Error::NoMemory)
 }
 
 /// Maps `elf`'s image into `process`, at its address or, if it is
-/// position-independent, at a random one; relocated for it if `relocate`
-/// (POSIX programs relocate themselves). The pages nothing writes are the
-/// pages of `file`, if it is given (the VMO `elf` was parsed from, from
-/// offset 0), where it has them ([`Elf::file_pages`]): every process
-/// running the program shares them. The others are memory of the
-/// process's own, a copy of what the segments put there. Returns the load
-/// bias, which moves an address of the file to where it is (downwards too:
-/// the arithmetic wraps).
-fn load_image(process: &Process, elf: &Elf, relocate: bool, file: Option<&Vmo>) -> Result<u64, SpawnError> {
+/// position-independent, at a random one clear of the addresses `avoid`;
+/// relocated for it if `relocate` (POSIX programs relocate themselves, as
+/// the dynamic linker does). The pages nothing writes are the pages of
+/// `file`, if it is given (the VMO `elf` was parsed from, from offset 0),
+/// where it has them ([`Elf::file_pages`]): every process running the
+/// program shares them. The others are memory of the process's own, a copy
+/// of what the segments put there. Returns the load bias, which moves an
+/// address of the file to where it is (downwards too: the arithmetic
+/// wraps).
+fn load_image(
+    process: &Process,
+    elf: &Elf,
+    relocate: bool,
+    file: Option<&Vmo>,
+    avoid: Option<(u64, u64)>,
+) -> Result<u64, SpawnError> {
     let (lo, hi) = elf.span();
     let len = (hi - lo) as usize;
-    let base = if elf.is_position_independent() { random_base(len)? } else { lo };
+    let base = if elf.is_position_independent() { random_base(len, avoid)? } else { lo };
     let bias = base.wrapping_sub(lo);
     let end = base.checked_add(hi - lo);
     if base < abi::USER_SPACE_START as u64 || end.is_none_or(|e| e > abi::USER_SPACE_END as u64) {
@@ -221,6 +258,11 @@ fn load_image(process: &Process, elf: &Elf, relocate: bool, file: Option<&Vmo>) 
     Ok(bias)
 }
 
+/// How the system's dynamic linker is had ([`Spawn::dynamic_linker`]):
+/// given its path (`elf::INTERPRETER`), its file as a VMO and the length of
+/// its bytes, or `None` if it cannot be had.
+pub type DynamicLinker<'a> = dyn Fn(&str) -> Option<(Vmo, usize)> + 'a;
+
 /// What to give a new process.
 pub struct Spawn<'a> {
     /// Process name (shown by the task manager).
@@ -257,6 +299,11 @@ pub struct Spawn<'a> {
     /// (`abi::nr::PROCESS_SIGNALS_INHERITED`): for a program a POSIX one
     /// starts.
     pub signals_inherited: (u64, u64),
+    /// How the system's dynamic linker is had, if the program is linked
+    /// dynamically ([`DynamicLinker`]): its bytes must not change while the
+    /// program runs (as the system image's files cannot). `None` refuses
+    /// programs linked dynamically ([`SpawnError::NoDynamicLinker`]).
+    pub dynamic_linker: Option<&'a DynamicLinker<'a>>,
 }
 
 impl<'a> Spawn<'a> {
@@ -273,6 +320,7 @@ impl<'a> Spawn<'a> {
             max_priority: None,
             memory_class: None,
             signals_inherited: (0, 0),
+            dynamic_linker: None,
         }
     }
 
@@ -321,6 +369,13 @@ impl<'a> Spawn<'a> {
     /// ([`abi::memory_class`]).
     pub fn memory_class(mut self, class: usize) -> Self {
         self.memory_class = Some(class);
+        self
+    }
+
+    /// How the system's dynamic linker is had, for a program linked
+    /// dynamically ([`Spawn::dynamic_linker`](Self#structfield.dynamic_linker)).
+    pub fn dynamic_linker(mut self, get: &'a DynamicLinker<'a>) -> Self {
+        self.dynamic_linker = Some(get);
         self
     }
 
@@ -421,10 +476,14 @@ impl<'a> Spawn<'a> {
     }
 
     /// Starts a Veda program: relocated where it is placed, its arguments
-    /// and environment in its startup message.
+    /// and environment in its startup message. It is static: only POSIX
+    /// programs are linked dynamically.
     fn start_veda(self, elf: &Elf, file: Option<&Vmo>) -> Result<Process, SpawnError> {
+        if elf.interpreter().is_some() {
+            return Err(SpawnError::BadElf(elf::ElfError::Dynamic));
+        }
         let (process, thread) = self.create_process()?;
-        let bias = load_image(&process, elf, true, file)?;
+        let bias = load_image(&process, elf, true, file, None)?;
 
         // Stack: guard pages, then the stack proper.
         let stack = Vmo::create(STACK_GUARD + MAIN_STACK)?;
@@ -443,12 +502,47 @@ impl<'a> Spawn<'a> {
         self.launch(process, thread, entry, sp, &args, &env)
     }
 
+    /// The system's dynamic linker, for a program that names it
+    /// (`elf::INTERPRETER`), as [`Spawn::dynamic_linker`] has it: its file
+    /// and the length of its bytes. `None` for a program linked statically.
+    fn dynamic_linker_of(&self, elf: &Elf) -> Result<Option<(Vmo, usize)>, SpawnError> {
+        match elf.interpreter() {
+            None => Ok(None),
+            Some(path) if path != elf::INTERPRETER.as_bytes() => Err(SpawnError::OtherDynamicLinker),
+            Some(_) => {
+                let get = self.dynamic_linker.ok_or(SpawnError::NoDynamicLinker)?;
+                get(elf::INTERPRETER).map(Some).ok_or(SpawnError::NoDynamicLinker)
+            }
+        }
+    }
+
     /// Starts a POSIX program: its arguments, environment and auxiliary
     /// vector on its stack, and what its POSIX layer inherits in its
-    /// startup message.
+    /// startup message. A dynamically linked one starts at its dynamic
+    /// linker's entry, which links it.
     fn start_posix(mut self, elf: &Elf, file: Option<&Vmo>) -> Result<Process, SpawnError> {
+        let linker_file = self.dynamic_linker_of(elf)?;
         let (process, thread) = self.create_process()?;
-        let bias = load_image(&process, elf, false, file)?;
+        let bias = load_image(&process, elf, false, file, None)?;
+        // Where the main thread starts, and where the dynamic linker is
+        // (`AT_BASE`): the program itself, and none, unless it has one.
+        let (mut start, mut linker_bias) = (elf.entry().wrapping_add(bias), 0);
+        if let Some((linker_file, len)) = &linker_file {
+            let map = vm::Mapping::new(Vmo(linker_file.0.duplicate(None)?), (*len).max(1), map_flags::READ)?;
+            // SAFETY: a read-only mapping of the dynamic linker's file, `len`
+            // bytes, which lives until it is loaded; nothing changes the file.
+            let image = unsafe { &map.as_slice()[..*len] };
+            let linker = Elf::parse(image).map_err(|_| SpawnError::NoDynamicLinker)?;
+            // A static position-independent POSIX program, which relocates
+            // itself as it starts, then the program.
+            if linker.interpreter().is_some() || linker.kind() != Kind::Posix || !linker.is_position_independent() {
+                return Err(SpawnError::NoDynamicLinker);
+            }
+            let (lo, hi) = elf.span();
+            let program = (lo.wrapping_add(bias), hi.wrapping_add(bias));
+            linker_bias = load_image(&process, &linker, false, Some(linker_file), Some(program))?;
+            start = linker.entry().wrapping_add(linker_bias);
+        }
 
         // Stack: guard pages, then the stack proper, its top holding the
         // arguments, environment and auxiliary vector.
@@ -464,6 +558,7 @@ impl<'a> Spawn<'a> {
             phdr: elf.phdr_vaddr().wrapping_add(bias),
             phnum: elf.phnum() as u64,
             entry: elf.entry().wrapping_add(bias),
+            base: linker_bias,
             hwcap: crate::architecture::hwcap(),
             platform: elf::NATIVE.platform,
             uid: UID,
@@ -480,13 +575,12 @@ impl<'a> Spawn<'a> {
         let sp = elf::initial_stack(top, &self.args, &self.env, &aux, &mut img).map_err(SpawnError::BadElf)?;
         stack.write(STACK_GUARD + size - len, &img)?;
 
-        let entry = elf.entry().wrapping_add(bias) as usize;
         // Where its main thread's stack is, which only the loader knows
         // (its top and size, without the guard pages).
         let stack_entry = alloc::format!("{}={top:x}:{size:x}", startup::MAIN_STACK);
         let mut inherited = core::mem::take(&mut self.inherited);
         inherited.push(&stack_entry);
-        self.launch(process, thread, entry, sp as usize, &[], &inherited)
+        self.launch(process, thread, start as usize, sp as usize, &[], &inherited)
     }
 }
 

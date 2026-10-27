@@ -10,10 +10,12 @@
 //! compiler builds it): first the tools for this machine that its build
 //! runs (pkgconf, and the same release of Python), then the C libraries its
 //! modules stand on, for Veda, static and position-independent, then
-//! CPython, its modules built into the interpreter. Once it is built, every
-//! image has it in `/system` (`/system/bin/python3`, the standard library
-//! in `/system/lib/python3.15`), and an image built for tests has its
-//! tests too.
+//! CPython, the standard library's modules built into the interpreter,
+//! which is linked dynamically: it loads extension modules, and ctypes's
+//! libraries. Once it is built, every image has it in `/system`
+//! (`/system/bin/python3`, the standard library in
+//! `/system/lib/python3.15`, its C API in `/system/include/python3.15`),
+//! and an image built for tests has its tests too.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -25,11 +27,11 @@ use crate::{architecture, certificates, toolchain};
 /// The ports Python is built from: the tools for this machine, the
 /// libraries in the order the build makes them, then CPython.
 pub const PORTS: &[&str] =
-    &["pkgconf", "zlib", "bzip2", "xz", "zstd", "mpdecimal", "expat", "sqlite", "openssl", "python"];
+    &["pkgconf", "zlib", "bzip2", "xz", "zstd", "mpdecimal", "expat", "sqlite", "openssl", "libffi", "python"];
 
 /// The libraries built into the interpreter, whose licence texts the image
 /// has beside Python's (`/system/licences/python/<port>`).
-const LIBRARIES: &[&str] = &["zlib", "bzip2", "xz", "zstd", "mpdecimal", "expat", "sqlite", "openssl"];
+const LIBRARIES: &[&str] = &["zlib", "bzip2", "xz", "zstd", "mpdecimal", "expat", "sqlite", "openssl", "libffi"];
 
 /// What the build runs from this machine beyond a C compiler: Autoconf's
 /// shell and make, CMake and Ninja (for XZ Utils and Expat), Perl (for
@@ -59,12 +61,6 @@ fn ports_fingerprint() -> Result<String> {
 
 fn ports_note() -> PathBuf {
     root().join("build").join("ports-fingerprint")
-}
-
-/// Where `cargo automation python` notes the C library the interpreter was
-/// linked with: the SHA-256 of its archive.
-fn c_library_note() -> PathBuf {
-    root().join("build").join("c-library")
 }
 
 /// Whether Python has been built.
@@ -117,29 +113,6 @@ fn is_current() -> bool {
     }
 }
 
-/// The interpreter is a C program, with the C library linked in: when the
-/// library has changed since it was linked (the POSIX layer in it, most
-/// often), links it again (`implementation/ports/python/build.sh` redoes
-/// only that, and what follows from it). Without the build tools it says so
-/// and leaves it as it is.
-fn relink() -> Result {
-    let library = toolchain::c_library();
-    if !library.is_file() {
-        return Ok(());
-    }
-    let current = util::sha256_file(&library)?;
-    if std::fs::read_to_string(c_library_note()).is_ok_and(|linked| linked.trim() == current) {
-        return Ok(());
-    }
-    if let Err(e) = tools() {
-        util::status("Note", format!("Python in the image has an older C library: {e}"));
-        return Ok(());
-    }
-    util::status("Linking", "Python with the current C library");
-    let _lock = lock()?;
-    build(std::thread::available_parallelism().map_or(4, |n| n.get()))
-}
-
 /// The files under `dir`, at their paths relative to it, after `prefix`.
 fn tree(dir: &std::path::Path, prefix: &str) -> Result<Vec<(String, Vec<u8>)>> {
     let mut files = Vec::new();
@@ -151,12 +124,14 @@ fn tree(dir: &std::path::Path, prefix: &str) -> Result<Vec<(String, Vec<u8>)>> {
 }
 
 /// What Python gives the system image, at their paths in it, once it is
-/// built: the interpreter and its standard library (as `/system` has them),
-/// the standard library's tests if `tests` (images built for testing), the
-/// checks of Python on Veda (`verification/python`, in
-/// `/system/tests/python`), and the licence texts of Python and of the
-/// libraries built into it (`licences/python/<port>`), each with where its
-/// source is.
+/// built: the interpreter, its standard library and its C API (as
+/// `/system` has them), the standard library's tests and their extension
+/// modules if `tests` (images built for testing), the checks of Python on
+/// Veda (`verification/python`, in `/system/tests/python`), and the
+/// licence texts of Python and of the libraries built into it
+/// (`licences/python/<port>`), each with where its source is. The
+/// interpreter stands on the C library's shared object, which the image
+/// has as it is now.
 pub fn image_files(tests: bool) -> Result<Vec<(String, Vec<u8>)>> {
     if !built() {
         return Ok(Vec::new());
@@ -168,7 +143,6 @@ pub fn image_files(tests: bool) -> Result<Vec<(String, Vec<u8>)>> {
              builds it again",
         );
     }
-    relink()?;
     let mut files = tree(&root().join("python").join("system"), "")?;
     let Some((_, interpreter)) = files.iter().find(|(path, _)| path == "bin/python3") else {
         return Err("Python's build has no interpreter: `cargo automation python` makes it".into());
@@ -214,7 +188,8 @@ pub fn command(args: &[String]) -> Result {
     let started = std::time::Instant::now();
     let _machine = util::heavy_build_lock("Python")?;
     let _lock = lock()?;
-    // Python links the C library as the POSIX layer has it now.
+    // Python is configured and linked with the C library as the POSIX layer
+    // has it now.
     toolchain::refresh_c_library()?;
     // The ports, and the certificate authorities its TLS trusts, which the
     // image has with it.
@@ -228,7 +203,7 @@ pub fn command(args: &[String]) -> Result {
 }
 
 /// Runs Python's build (`jobs` at a time), its ports downloaded, holding its
-/// lock, and notes what it was built from: the ports, and the C library.
+/// lock, and notes the ports it was built from.
 fn build(jobs: usize) -> Result {
     let ports = ports::dir();
     util::run(
@@ -240,6 +215,5 @@ fn build(jobs: usize) -> Result {
             .env("VEDA_TOOLCHAIN", toolchain::root())
             .env("JOBS", jobs.to_string()),
     )?;
-    util::write(&ports_note(), ports_fingerprint()?)?;
-    util::write(&c_library_note(), util::sha256_file(&toolchain::c_library())?)
+    util::write(&ports_note(), ports_fingerprint()?)
 }

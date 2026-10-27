@@ -352,8 +352,9 @@ unsafe fn generic(n: usize, a: [usize; 6]) -> SysResult {
             }
             nr::GETRANDOM => system::getrandom(a[0], a[1], a[2] as u32),
             nr::STATX => fs::statx(fd0, a[1], a[2] as u32, a[3] as u32, a[4]),
-            // musl falls back to the calls above.
-            nr::MEMBARRIER | nr::RSEQ => Err(ENOSYS),
+            nr::MEMBARRIER => mem::membarrier(a[0] as u32, a[1] as u32),
+            // musl does without it.
+            nr::RSEQ => Err(ENOSYS),
             _ => unsupported(n),
         }
     }

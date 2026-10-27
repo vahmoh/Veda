@@ -20,7 +20,7 @@
 //! | `thread` | a thread's saved context, and switching between threads |
 //! | `paging` | page tables: mappings, address spaces, the kernel's own |
 //! | `memory` | the layout of the kernel's address space, memory and registers the architecture keeps, caches, access to user memory |
-//! | `tlb` | TLB shootdowns, of the processors' and of guests' translations |
+//! | `tlb` | TLB shootdowns, of the processors' and of guests' translations; memory barriers on the processors running an address space |
 //! | `irq` | devices' interrupts: their vectors, lines and MSIs |
 //! | `timer`, `clock` | each CPU's one-shot timer; the clock's counter |
 //! | `serial` | the serial console the kernel log goes to |

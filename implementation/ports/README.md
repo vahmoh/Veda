@@ -72,18 +72,36 @@ What the patches change:
   (`x86_64_elf64_vec`), gas and ld (`elf_x86_64`, with code on pages of its
   own, as on Linux).
 * **gcc**: Veda's target in `config.sub`, `gcc/config.gcc`,
-  `libgcc/config.host`, `gcc/config/veda.h` (`/system/lib`, static
-  linking, `rcrt1.o` for `-static-pie`, musl's types) and `veda.opt`
-  (`-pthread`, `-rdynamic`, `-posix`); no `fixincludes` for musl's
-  headers; libstdc++ checks Veda's C library as Linux's when cross
-  compiled; C++ sees the C library's GNU extensions (`_GNU_SOURCE`), as on
-  GNU/Linux; libatomic is built, as for any POSIX system. On AMD64,
+  `libgcc/config.host`, `gcc/config/veda.h` (`/system/lib`, musl's types;
+  static linking by default, `rcrt1.o` for `-static-pie`; `-pie` a
+  dynamically linked program, whose dynamic linker is
+  `/system/lib/libc.so`, and `-shared` a shared library, both hardened:
+  `-z text`, `-z relro -z now`, the GNU hash table, `DT_RELR`,
+  `RUNPATH`; GCC's runtime static for static programs, shared for the
+  rest, `REAL_LIBGCC_SPEC`) and `veda.opt` (`-pthread`, `-rdynamic`,
+  `-posix`); no `fixincludes` for musl's headers; libgcc's shared library
+  (`t-slibgcc` in `libgcc/config.host`), and its unwinder finding every
+  object's tables with `dl_iterate_phdr` (`TARGET_DL_ITERATE_PHDR` in
+  `gcc/configure`, `unwind-dw2-fde-dip.c`), as on Linux; libtool knows
+  Veda's shared libraries (`libtool.m4`, and the `configure` of libstdc++
+  and libatomic generated from it), so that they are shared too;
+  libstdc++ checks Veda's C library as Linux's when cross compiled; C++
+  sees the C library's GNU extensions (`_GNU_SOURCE`), as on GNU/Linux;
+  libatomic is built, as for any POSIX system. On AMD64,
   `gcc/config/i386/veda.h`: the System V x86-64 ABI, the stack
   protector's canary where musl keeps it.
 * **gmp**, **mpfr**, **mpc**: `config.sub` knows `veda`.
 * **musl**: `__init_libc` sets the POSIX layer up, `posix_spawn` asks it to
   start the program, `dl_iterate_phdr` names the program by `AT_EXECFN`
-  (there is no `/proc/self/exe`), the databases Linux keeps in `/etc`
+  (there is no `/proc/self/exe`); its dynamic linker (`ldso/dynlink.c`, in
+  `libc.so`, which the `Makefile` links with the layer's object,
+  `VEDA_OBJS`) has the layer read the startup message before it opens a
+  library (`__veda_startup`), looks for libraries by name in
+  `/system/lib` then `/home/packages/lib` (no file names others), takes the
+  program's `$ORIGIN` from `AT_EXECFN`, maps each segment of a library
+  over a reservation, so that the pages of the system image's libraries are
+  the image's own, and refuses libraries with text relocations; a statically
+  linked program's `dlopen` says why it loads nothing (`src/ldso/dlopen.c`); the databases Linux keeps in `/etc`
   (`hosts`, `services`, `passwd`, `group`, `shadow`, `shells`) are in
   `/system/etc`, names not in its `hosts` go to the network service's
   resolver (`__lookup_name`), musl's DNS client to its DNS servers
@@ -91,23 +109,28 @@ What the patches change:
   stack from the layer (`__veda_main_stack`; there is no `mremap` to probe
   it with), and with no `TZ` the time zone is the system's offset from UTC
   (`__tz.c`, from the layer's `__veda_tz`). On AMD64, system calls,
-  `_start` (the bootstrap channel) and the thread routines
+  `_start` (the bootstrap channel, which a dynamically linked program's
+  dynamic linker takes: `Scrt1.o` leaves it) and the thread routines
   (`src/thread/x86_64/*.s`) go through the layer; `vfork` takes the
   generic version, which fails: there is no `fork`. See
   [C on Veda](../../documentation/C.md#how-it-works).
 * **rust**: Veda's target in the compiler (`Os::Veda`,
-  `spec/base/veda.rs`; on AMD64 `x86_64-unknown-veda`, linked by
-  `x86_64-veda-gcc`, in `STAGE0_MISSING_TARGETS`) and in `library/std`,
+  `spec/base/veda.rs`, with dynamic linking: programs with
+  `-C target-feature=-crt-static`, and `cdylib` and `dylib` crates, which
+  `rustc_session` never links with the static C library; on AMD64
+  `x86_64-unknown-veda`, linked by `x86_64-veda-gcc`, in
+  `STAGE0_MISSING_TARGETS`) and in `library/std`,
   which takes the code of the systems whose C library has what Veda's has;
   Linux's definitions on musl in the vendored `libc` (`vendor/libc-*`;
   `build.sh` updates its `.cargo-checksum.json`); GCC's unwinder in
-  `library/unwind`, shared with C++; `AT_EXECFN` for `library/backtrace`.
+  `library/unwind` (`libgcc_eh` static, `libgcc_s.so.1` for what is linked
+  dynamically), shared with C++; `AT_EXECFN` for `library/backtrace`.
   See [Rust on Veda](../../documentation/RUST.md#how-it-works).
 * **ffmpeg**: `veda` as a `--target-os` in `configure`. **dav1d**: none.
 
 dav1d (8- and 16-bit) and FFmpeg are built static, with the architecture's
-assembler (nasm on AMD64) and their `checkasm`, which `systest` runs on
-Veda, into `target/toolchain/media`, as only `mediadec` links them. FFmpeg
+assembler (nasm on AMD64) and their `checkasm` (static, position-independent
+programs), which `systest` runs on Veda, into `target/toolchain/media`, as only `mediadec` links them. FFmpeg
 has only the demuxers, decoders (AV1 through dav1d), parsers, bitstream
 filter, scaler and resampler that `mediadec` uses. It stays LGPL:
 `build.sh` checks that `config.h` has `CONFIG_GPL 0` and
@@ -315,7 +338,10 @@ What the patches change:
   a picture comes out for is shown: gst-libav took one that FFmpeg asked
   no buffer for (`get_buffer2`) to be decoded only, and dav1d's decoder
   allocates its pictures itself.
-* **libffi**: Veda's ELF in its assembly; **libgcrypt**, **libgpg-error**,
+* **libffi**: Veda's ELF in its assembly; its closures, code it makes at
+  run time, always in memory files mapped twice, where they are written
+  and where they run (`src/closures.c`), never in memory both writable and
+  executable; **libgcrypt**, **libgpg-error**,
   **libtasn1**, **icu**: `config.sub` knows Veda; **libgpg-error**: the
   lock type of musl's threads (`lock-obj-pub.x86_64-pc-veda.h`).
 * The others: none.
@@ -325,8 +351,10 @@ What the patches change:
 `cargo automation python` builds these with `python/build.sh`, in
 `target/python`, for [Python on Veda](../../documentation/PYTHON.md): the
 libraries its modules stand on, for Veda, static and position-independent,
-compiled as the web engine's are (`VEDA_CFLAGS`), then CPython, its
-modules built into the interpreter; and, for the build machine, pkgconf and
+compiled as the web engine's are (`VEDA_CFLAGS`), then CPython, the
+standard library's modules built into the interpreter, which is linked
+dynamically, to load extension modules and `ctypes`' libraries; and, for
+the build machine, pkgconf and
 the same release of Python, which CPython's build runs. The ports it shares
 with the web engine are built for each apart. Its last stage gathers the
 licence texts of Python and of the libraries built into it
@@ -342,6 +370,7 @@ wheel `ensurepip` carries, which the image installs in
 | `expat` | 2.9.0 | MIT | `xml.etree`, `xml.parsers.expat` |
 | `sqlite` | 3.54.1 | blessing | `sqlite3`, `dbm.sqlite3` |
 | `openssl` | 3.5.9 | Apache-2.0 | `ssl`, `hashlib`, `hmac` |
+| `libffi` | 3.8.0 | MIT | `ctypes`: calls of C functions, and callbacks into Python |
 | `pkgconf` | 3.0.9 | ISC | For the build machine: finding the libraries |
 
 What the patch changes:
@@ -350,8 +379,9 @@ What the patch changes:
   `configure`, generated from it by Autoconf 2.72; `config.sub`,
   `Misc/platform_triplet.c`): `x86_64-veda`, its modules built into the
   interpreter, without the functions musl has that Veda does not carry
-  out (`fork`, `exec*`, `dlopen`, links, pseudo-terminals,
-  `if_nameindex`); programs started with `posix_spawn`
+  out (`fork`, `exec*`, links, pseudo-terminals, `if_nameindex`), its
+  shared libraries linked as GNU/Linux's (`LDSHARED`, `CCSHARED`,
+  `LINKFORSHARED`); programs started with `posix_spawn`
   (`Modules/_posixsubprocess.c`, `Lib/os.py`'s `spawn*`, `multiprocessing`
   spawning alone); the interpreter's own path from the loader
   (`Modules/getpath.c`), UTF-8 as the locale's encoding
@@ -360,7 +390,9 @@ What the patch changes:
   interactive interpreter in Veda's Terminal (`Lib/_pyrepl/main.py`),
   virtual environments as copies (`Lib/venv`), the asyncio shell without
   the tools that read other processes' memory, `multiprocessing`'s heap
-  in `/dev/shm` (`Lib/multiprocessing/heap.py`); and CPython's tests,
+  in `/dev/shm` (`Lib/multiprocessing/heap.py`), libraries found by
+  `ctypes` where the dynamic linker finds them (`Lib/ctypes/util.py`); and
+  CPython's tests,
   which skip what Veda has not by what they need
   ([Python on Veda](../../documentation/PYTHON.md#the-port)).
   `config.site` answers configure's run-time checks.
@@ -387,6 +419,7 @@ in Veda's programs on the standard library.
 | `socket2` | 0.6.5 | MIT OR Apache-2.0 | Sockets, under `tokio` |
 | `mio` | 1.2.4 | MIT | The event loop under `tokio` |
 | `tokio` | 1.53.3 | MIT | The asynchronous runtime |
+| `libloading` | 0.9.0 | ISC | Loading shared libraries at run time |
 
 A crate's release is its `.crate` archive on crates.io, pinned by
 crates.io's checksum. The workspace depends on its version, directly
@@ -491,6 +524,9 @@ What the patches change:
   `target_os = "linux"` outside the `linux_raw` backend names Veda too. Its
   `[hints]` go, as Cargo warns about them for a crate built from a path.
 * **errno**: read where Linux's C library keeps it (`__errno_location`).
+* **libloading**: Veda's `RTLD_*` constants are Linux's (musl's), and its
+  `dlerror` is the thread's own, as on Linux: each list of systems that
+  names Linux names Veda too; and Veda is in `check-cfg`.
 * **socket2**, **mio**, **tokio**: every `target_os = "linux"` outside
   comments names Veda too, so they take Linux's code (`epoll`, `eventfd`,
   `accept4`, `SOCK_NONBLOCK`, `pidfd_open`, socket options), which the

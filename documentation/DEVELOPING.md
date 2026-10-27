@@ -288,14 +288,15 @@ from this machine.
 
 | Source | Installed as |
 |--------|--------------|
-| The programs in `PROGRAMS` (`automation/source/components.rs`), without the symbols that `target/x86_64-unknown-linux-musl/` (on `rt` alone) and `target/std/x86_64-unknown-veda/` (on the standard library) keep | `/system/bin/<name>` |
+| The programs in `PROGRAMS` (`automation/source/components.rs`), without the symbols that `target/x86_64-unknown-linux-musl/` (on `rt` alone), `target/std/x86_64-unknown-veda/` (on the standard library) and `target/std/dynamic/x86_64-unknown-veda/` (on it, linked dynamically) keep | `/system/bin/<name>` |
 | `LICENSE` (the GPL, version 3) | `/system/LICENSE.txt` |
 | The licence texts of what the image has of others' (as each part's release has them: the toolchain's, the driver VM's and the web engine's `licences` stages, the firmware lists' licences, the crates' packages), each port's `SOURCE`, and `README`, the list of the parts that About Veda shows (`automation/source/notices.rs`) | `/system/licences/` |
 | The fonts and their licence, `implementation/ports/fonts/` | `/system/fonts/` |
 | The manifests, `implementation/applications/<name>/<name>.app` | `/system/apps/<name>.app` |
 | What the generators' manifests list | `/system/<same relative path>` |
-| `verification/c/*.c` and `*.cc`, by the cross toolchain (also as `<name>-pie`), for `systest` and the scripts | `/system/tests/c/<name>` |
-| `verification/rust/*.rs`, by the toolchain's Rust (also as `<name>-fixed`), the same | `/system/tests/rust/<name>` |
+| `verification/c/*.c` and `*.cc`, by the cross toolchain (also as `<name>-pie` and `<name>-dynamic`), for `systest` and the scripts; the shared libraries they load, `verification/c/shared` | `/system/tests/c/<name>`; `/system/tests/c/lib/lib<name>.so` |
+| `verification/rust/*.rs`, by the toolchain's Rust (also as `<name>-fixed` and `<name>-dynamic`), the same; the libraries they load, `verification/rust/shared` | `/system/tests/rust/<name>`; `/system/tests/rust/lib/lib<name>.so` |
+| The system's shared libraries ([Linking and loading](LINKING.md)), without the symbols linking does not read: the C library's shared object, which is the dynamic linker, and GCC's runtime's | `/system/lib/libc.so`; `/system/lib/libgcc_s.so.1`, `libstdc++.so.6`, `libatomic.so.1` |
 | The native C toolchain, `target/toolchain/native/system` | `/system/bin/gcc` ..., `/system/include`, `/system/lib`, `/system/libexec` |
 | Python, once built (`target/python`): the interpreter (also as `python3.15` and `python`) and its standard library; its tests in an image built with `--python-tests`; `verification/python`, for `systest` and the scripts | `/system/bin/python3`, `/system/lib/python3.15/`; `/system/lib/python3.15/test/`; `/system/tests/python/` |
 | The databases Linux keeps in `/etc`: `passwd` and `group` (the one user) and `services` (IANA's registry, from the `iana-etc` port) | `/system/etc/` |
@@ -452,6 +453,11 @@ AMD64), and the cross compiler links ([C on Veda](C.md),
 target/toolchain/cross/bin/x86_64-veda-gcc -O2 -Wall -o hello hello.c
 target/toolchain/rust/bin/rustc --edition 2024 --target x86_64-unknown-veda -C linker=target/toolchain/cross/bin/x86_64-veda-gcc -O -o hello hello.rs
 ```
+
+A program that loads libraries at run time is linked dynamically instead,
+with the C library's shared object: in C with `-fPIE -pie`, in Rust with
+`-C target-feature=-crt-static`, and, for a program of the image's, as a
+`Program::dynamic("<name>")` ([Linking and loading](LINKING.md)).
 
 ### Programs in Python
 

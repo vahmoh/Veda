@@ -363,6 +363,14 @@ impl AddressSpace {
         map.insert(at, right);
     }
 
+    /// Makes the processors that have these page tables loaded, which run
+    /// this address space's threads, go through a full memory barrier, and
+    /// waits until each has (`vm_barrier`). The others run none of them:
+    /// they go through the scheduler, and its barriers, before they do.
+    pub fn barrier(&self) {
+        crate::architecture::tlb::barrier_space(self.root);
+    }
+
     /// Changes the permissions of `[addr, addr+len)`, which must be mapped
     /// completely, splitting mappings at its ends as needed. No mapping may
     /// get permissions beyond those it was mapped with.

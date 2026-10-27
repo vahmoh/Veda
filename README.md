@@ -167,7 +167,7 @@ covers the rest.
 | **Services** | Drivers, the file system, the window system, audio, networking and the agent, in user space; `init` restarts them if they fail |
 | **Drivers** | Veda drives its own disks; Linux drives the rest in the [driver VM](documentation/DRIVERVM.md), on Veda's hypervisor |
 | **Graphics** | A compositing window system, the immediate-mode `ui` toolkit, and OpenGL ES 3.0 on the GPU through Mesa or in software |
-| **Programs** | Rust's standard library, and C with GCC 16 and musl, over `posix`, a POSIX layer in Rust |
+| **Programs** | Rust's standard library, and C with GCC 16 and musl, over `posix`, a POSIX layer in Rust; static or dynamically linked, loading shared libraries at run time |
 | **Network** | IPv4 and IPv6, TLS 1.3, WPA3 Wi-Fi, and a firewall in stealth mode by default |
 
 Where a proven library exists, Veda uses it: smoltcp, rustls, RustCrypto,
@@ -195,6 +195,7 @@ a stand-in for Deepgram, so they are offline, deterministic and free.
 | [Networking](documentation/NETWORKING.md) | The network and Wi-Fi services, the firewall and TLS |
 | [The web browser](documentation/BROWSER.md) | The browser, WebKit's port to Veda, and how pages are drawn |
 | [C on Veda](documentation/C.md) and [Rust on Veda](documentation/RUST.md) | Programs, the POSIX layer and the toolchains |
+| [Linking and loading](documentation/LINKING.md) | Static and dynamically linked programs, shared libraries, and loading them at run time from C, C++, Rust and Python |
 | [Python on Veda](documentation/PYTHON.md) | Python, its standard library, and CPython's port |
 | [Packages](documentation/PACKAGES.md) | Installing software with `pkg`: the packages service, signed repositories, and changes that survive the power going |
 | [Developing](documentation/DEVELOPING.md) | Commands, the system image and writing applications |

@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 """stdlib.py: checks of Python's standard library on Veda, where CPython
-stands on the C library and its modules are built into the interpreter (see
-documentation/PYTHON.md).
+stands on the C library's shared object, the standard library's modules
+built into the interpreter, which loads extension modules and ctypes's
+libraries (see documentation/PYTHON.md).
 
 Each check prints `ok - NAME` or `not ok - NAME: REASON`; the program exits
 with the number of failed checks (0: all passed). `systest` runs it inside
@@ -12,8 +13,8 @@ and the empty input as its standard input: `python3 stdlib.py`, or
 `python3 stdlib.py host ADDRESS TCP-PORT UDP-PORT` to reach the host
 machine's servers too (see `check_host`).
 
-What Veda does not have (fork, dynamic loading...) is checked too: it must
-fail as documentation/PYTHON.md says.
+What Veda does not have (fork, exec...) is checked too: it must fail as
+documentation/PYTHON.md says.
 """
 
 import errno
@@ -108,17 +109,27 @@ def check_startup():
     ensure(user.pw_name == "user" and user.pw_dir == "/home/user", f"the user is {user}")
     ensure(getpass.getuser() == "user", f"getpass says {getpass.getuser()!r}")
     ensure(tempfile.gettempdir() == "/tmp", f"the temporary directory is {tempfile.gettempdir()}")
-    # No compiler for C extensions, and none to load: the modules are built
-    # in.
+    # Extension modules load, by Veda's names for them, as the build details
+    # say too, and the C API they are compiled with is there.
     import importlib.machinery
+    import json
 
-    ensure(importlib.machinery.EXTENSION_SUFFIXES == [], "extension modules could be loaded")
+    suffixes = importlib.machinery.EXTENSION_SUFFIXES
+    veda = [".cpython-315-x86_64-veda.so", ".abi3-x86_64-veda.so", ".abi3.so", ".abi3t-x86_64-veda.so", ".abi3t.so"]
+    ensure(suffixes == [*veda, ".so"], f"extension modules are {suffixes}")
+    with open(os.path.join(sysconfig.get_path("stdlib"), "build-details.json"), encoding="utf-8") as f:
+        details = json.load(f)
+    ensure(details["suffixes"]["extensions"] == suffixes, f"build-details.json has {details['suffixes']}")
+    ensure(details["abi"].get("extension_suffix") == suffixes[0], f"build-details.json has {details['abi']}")
+    include = sysconfig.get_path("include")
+    ensure(include == "/system/include/python3.15", f"the C API is in {include}")
+    ensure(os.path.isfile(os.path.join(include, "Python.h")), "Python.h is not there")
 
 
 # The modules of the standard library built into the interpreter, beyond
 # those every build of CPython has.
 BUILT_IN = (
-    "_asyncio _bisect _blake2 _bz2 _contextvars _csv _datetime _decimal _elementtree _hashlib _heapq _hmac _json "
+    "_asyncio _bisect _blake2 _bz2 _contextvars _csv _ctypes _datetime _decimal _elementtree _hashlib _heapq _hmac _json "
     "_lsprof _lzma _md5 _multibytecodec _multiprocessing _opcode _pickle _posixshmem _posixsubprocess _queue "
     "_random _sha1 _sha2 _sha3 _socket _sqlite3 _ssl _statistics _struct _zoneinfo _zstd array binascii cmath "
     "fcntl grp math mmap pyexpat resource select termios unicodedata zlib"
@@ -126,7 +137,6 @@ BUILT_IN = (
 
 # What Veda has not, and why a traceback says it is missing.
 MISSING = {
-    "ctypes": "dynamic loading",
     "curses": "cannot move the cursor",
     "readline": "edits each line itself",
     "tkinter": "has no Tk",
@@ -144,6 +154,141 @@ def check_modules():
         e = raises(ModuleNotFoundError, __import__, name)
         said = "".join(traceback.format_exception_only(e))
         ensure(why in said, f"import {name} says: {said.strip()}")
+
+
+def check_ctypes():
+    import ctypes
+    import ctypes.util
+
+    # Libraries found as the dynamic linker finds them: musl's are the C
+    # library's shared object, and GCC's runtime's are named by their
+    # sonames.
+    for name in ("c", "m", "pthread", "dl"):
+        found = ctypes.util.find_library(name)
+        ensure(found == "/system/lib/libc.so", f"find_library({name!r}) is {found!r}")
+    found = ctypes.util.find_library("stdc++")
+    ensure(found == "/system/lib/libstdc++.so.6", f"find_library('stdc++') is {found!r}")
+    ensure(ctypes.util.find_library("nothing") is None, "find_library('nothing') found something")
+    # The C library's functions, through the program's handle and by name.
+    libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+    ensure(libc.strlen(b"ctypes") == 6, "strlen")
+    ensure(ctypes.CDLL(None).getpid() == os.getpid(), "getpid through the program's handle")
+    ensure(ctypes.CDLL("libc.so").abs(-7) == 7, "abs through libc.so by name")
+    # errno, as the C library sets it.
+    libc.close.argtypes = [ctypes.c_int]
+    ensure(libc.close(-1) == -1 and ctypes.get_errno() == errno.EBADF, f"close(-1): errno {ctypes.get_errno()}")
+    # A callback into Python (a libffi closure, its code in a memory file
+    # mapped twice): qsort sorting with it.
+    compare = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int))
+    values = (ctypes.c_int * 6)(5, 3, 6, 1, 4, 2)
+    libc.qsort(values, len(values), ctypes.sizeof(ctypes.c_int), compare(lambda a, b: a[0] - b[0]))
+    ensure(list(values) == [1, 2, 3, 4, 5, 6], f"qsort gave {list(values)}")
+    # Complex numbers, as the System V ABI passes them.
+    libc.csqrt.argtypes = [ctypes.c_double_complex]
+    libc.csqrt.restype = ctypes.c_double_complex
+    root = libc.csqrt(-4)
+    ensure(root == 2j, f"csqrt(-4) is {root}")
+    # Structures, pointers and memory.
+    class Point(ctypes.Structure):
+        _fields_ = [("x", ctypes.c_int), ("y", ctypes.c_double)]
+
+    point = Point(3, 4.5)
+    pointer = ctypes.pointer(point)
+    pointer.contents.x = 7
+    buffer = ctypes.create_string_buffer(16)
+    ctypes.memmove(buffer, b"veda", 4)
+    ensure(point.x == 7 and point.y == 4.5 and buffer.value == b"veda", "structures and memory")
+    # A library of the C tests (verification/c/shared), where the image has
+    # them: a function, its data, and the library it needs, found beside it.
+    plugin = "/system/tests/c/lib/libplugin.so"
+    if os.path.exists(plugin):
+        library = ctypes.CDLL(plugin)
+        answer = ctypes.c_int.in_dll(library, "plugin_answer")
+        ensure(library.plugin_twice(21) == 42 and answer.value == 42 and library.plugin_base() == 41, plugin)
+    e = raises(OSError, ctypes.CDLL, "/system/lib/libnothing.so")
+    ensure("libnothing.so" in str(e), f"loading a library that is not there: {e}")
+
+
+def child_of_shared_ctypes(value, array):
+    with value.get_lock():
+        value.value += 1
+    array[0] = 42.5
+
+
+def check_shared_ctypes():
+    import multiprocessing
+
+    # multiprocessing's shared values and arrays: ctypes's objects in shared
+    # memory, which a spawned child writes.
+    context = multiprocessing.get_context("spawn")
+    value = context.Value("i", 41)
+    array = context.Array("d", 3)
+    child = context.Process(target=child_of_shared_ctypes, args=(value, array))
+    child.start()
+    child.join(120)
+    ensure(child.exitcode == 0, f"the child exited with {child.exitcode}")
+    ensure(value.value == 42 and array[:] == [42.5, 0.0, 0.0], f"the child left {value.value} and {array[:]}")
+
+
+# An extension module, which check_extension_modules compiles with Veda's
+# GCC and imports.
+EXTENSION = r"""
+#include <Python.h>
+
+static PyObject *twice(PyObject *self, PyObject *arg)
+{
+	long n = PyLong_AsLong(arg);
+	if (n == -1 && PyErr_Occurred())
+		return NULL;
+	return PyLong_FromLong(2 * n);
+}
+
+static PyMethodDef methods[] = {
+	{ "twice", twice, METH_O, "Twice its argument." },
+	{ NULL, NULL, 0, NULL },
+};
+
+static struct PyModuleDef module = {
+	PyModuleDef_HEAD_INIT, "built_on_veda", "An extension module built on Veda.", 0, methods,
+};
+
+PyMODINIT_FUNC PyInit_built_on_veda(void)
+{
+	return PyModuleDef_Init(&module);
+}
+"""
+
+
+def check_extension_modules():
+    import importlib
+    import subprocess
+    import sysconfig
+
+    gcc = "/system/bin/gcc"
+    if not os.path.exists(gcc):
+        print("# extension modules: the image has no C compiler to build one with")
+        return
+    with tempfile.TemporaryDirectory() as directory:
+        source = os.path.join(directory, "built_on_veda.c")
+        with open(source, "w", encoding="utf-8") as f:
+            f.write(EXTENSION)
+        module = os.path.join(directory, "built_on_veda" + sysconfig.get_config_var("EXT_SUFFIX"))
+        include = "-I" + sysconfig.get_path("include")
+        compiled = subprocess.run(
+            [gcc, "-shared", "-fPIC", "-O2", include, "-o", module, source],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        ensure(compiled.returncode == 0, lambda: f"gcc failed: {compiled.stderr.strip()}")
+        sys.path.insert(0, directory)
+        try:
+            built = importlib.import_module("built_on_veda")
+        finally:
+            sys.path.remove(directory)
+        ensure(built.__file__ == module, f"the module is {built.__file__}")
+        ensure(built.twice(21) == 42, "built_on_veda.twice")
+        raises(TypeError, built.twice, "not a number")
 
 
 def check_bytecode():
@@ -980,6 +1125,9 @@ def check_host():
 CHECKS = [
     ("startup", check_startup),
     ("modules", check_modules),
+    ("ctypes", check_ctypes),
+    ("ctypes in processes", check_shared_ctypes),
+    ("extension modules", check_extension_modules),
     ("bytecode", check_bytecode),
     ("files", check_files),
     ("threads", check_threads),

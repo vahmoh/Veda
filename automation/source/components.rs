@@ -18,7 +18,10 @@
 //!   (`architecture::STD_TARGET`) by the toolchain's Rust, and linked by
 //!   its C toolchain's driver with the C library, whose POSIX layer is
 //!   brought up to date first (`toolchain::std_rust`). They are POSIX
-//!   programs: the C library starts them.
+//!   programs: the C library starts them. They are linked statically, but
+//!   for those that load libraries at run time, which are linked
+//!   dynamically (`Program::dynamic`), with the shared objects of the C
+//!   library and GCC's runtime, in a build of their own.
 //!
 //! Every build names the build machine's directories by fixed names in
 //! what it compiles (`util::cargo_for`), so that none of them goes into the
@@ -47,22 +50,33 @@ pub struct Program {
     /// Linked with the web engine (`cargo automation web`): left out of the
     /// image until it is built.
     pub web: bool,
+    /// On the standard library, linked dynamically, with the shared objects
+    /// of the C library and GCC's runtime (`-C target-feature=-crt-static`):
+    /// a program that loads libraries at run time. Otherwise linked
+    /// statically.
+    pub dynamic: bool,
 }
 
 impl Program {
     /// A program on `rt` alone (`no_std`).
     const fn native(package: &'static str) -> Program {
-        Program { package, binary: package, std: false, web: false }
+        Program { package, binary: package, std: false, web: false, dynamic: false }
     }
 
     /// A program on Rust's standard library.
     const fn std(package: &'static str) -> Program {
-        Program { package, binary: package, std: true, web: false }
+        Program { package, binary: package, std: true, web: false, dynamic: false }
     }
 
     /// A program on Rust's standard library with the web engine.
     const fn web(package: &'static str) -> Program {
-        Program { package, binary: package, std: true, web: true }
+        Program { package, binary: package, std: true, web: true, dynamic: false }
+    }
+
+    /// A program on Rust's standard library linked dynamically, which loads
+    /// libraries at run time.
+    const fn dynamic(package: &'static str) -> Program {
+        Program { package, binary: package, std: true, web: false, dynamic: true }
     }
 
     /// The program as the binary `binary`, of a package named otherwise
@@ -83,6 +97,7 @@ pub const PROGRAMS: &[Program] = &[
     Program::native("audiotest"),
     Program::native("fakedec"),
     Program::std("stdcrates"),
+    Program::dynamic("plugins"),
     Program::native("devmgr"),
     Program::native("drivervm"),
     Program::native("nvme"),
@@ -180,22 +195,47 @@ fn build_programs(profile: Profile, skip: &[String]) -> Result<Vec<(Program, Pat
 }
 
 /// Builds programs on Rust's standard library, for Veda's own target, with
-/// the toolchain's Rust (which `cargo automation toolchain` builds).
+/// the toolchain's Rust (which `cargo automation toolchain` builds): those
+/// linked statically, then those linked dynamically, in a target directory
+/// of their own, as the standard library's `crt-static` changes how every
+/// crate is compiled (and Cargo would build the others again for it).
 fn build_std_programs(programs: &[Program], profile: Profile) -> Result<Vec<(Program, PathBuf)>> {
     let (_lock, rust) = toolchain::std_rust()?;
-    let dir = toolchain::std_target_dir().join(STD_TARGET).join(profile.dir());
-    // Linked again when the C library's POSIX layer has changed.
-    toolchain::forget_old_links(&dir, &programs.iter().map(|p| p.binary).collect::<Vec<_>>())?;
-    util::status("Building", format!("{} programs on the standard library ({STD_TARGET})", programs.len()));
-    let mut cmd = rust.cargo_for_programs();
-    // Where the web engine is, for the programs linked with it.
-    cmd.env("VEDA_WEB", crate::web::root());
-    cmd.args(["build", "--target", STD_TARGET]).args(profile.cargo_flag());
-    for p in programs {
-        cmd.args(["--package", p.package]);
+    let (dynamic, programs): (Vec<Program>, Vec<Program>) = programs.iter().partition(|p| p.dynamic);
+    let mut built = Vec::new();
+    if !programs.is_empty() {
+        let dir = toolchain::std_target_dir().join(STD_TARGET).join(profile.dir());
+        // Linked again when the C library's POSIX layer has changed.
+        toolchain::forget_old_links(&dir, &programs.iter().map(|p| p.binary).collect::<Vec<_>>())?;
+        util::status("Building", format!("{} programs on the standard library ({STD_TARGET})", programs.len()));
+        let mut cmd = rust.cargo_for_programs();
+        // Where the web engine is, for the programs linked with it.
+        cmd.env("VEDA_WEB", crate::web::root());
+        cmd.args(["build", "--target", STD_TARGET]).args(profile.cargo_flag());
+        for p in &programs {
+            cmd.args(["--package", p.package]);
+        }
+        util::run(&mut cmd)?;
+        built.extend(programs.iter().map(|p| (*p, dir.join(p.binary))));
     }
-    util::run(&mut cmd)?;
-    Ok(programs.iter().map(|p| (*p, dir.join(p.binary))).collect())
+    if !dynamic.is_empty() {
+        // The POSIX layer is the C library's shared object's: nothing of it
+        // is in these programs to link again.
+        let target_dir = toolchain::std_dynamic_target_dir();
+        let dir = target_dir.join(STD_TARGET).join(profile.dir());
+        util::status("Building", format!("{} dynamically linked programs ({STD_TARGET})", dynamic.len()));
+        let mut cmd = rust.cargo_for_programs();
+        cmd.env("CARGO_TARGET_DIR", &target_dir)
+            .arg("--config")
+            .arg(format!("target.{STD_TARGET}.rustflags=[\"-C\", \"target-feature=-crt-static\"]"));
+        cmd.args(["build", "--target", STD_TARGET]).args(profile.cargo_flag());
+        for p in &dynamic {
+            cmd.args(["--package", p.package]);
+        }
+        util::run(&mut cmd)?;
+        built.extend(dynamic.iter().map(|p| (*p, dir.join(p.binary))));
+    }
+    Ok(built)
 }
 
 /// Builds the loader, the kernel and the user-space programs (all but `skip`).

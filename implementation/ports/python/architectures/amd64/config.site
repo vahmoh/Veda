@@ -7,3 +7,7 @@
 ac_cv_aligned_required=no
 ac_cv_wchar_t_signed=yes
 ac_cv_rshift_extends_sign=yes
+
+# libffi passes complex numbers as the System V ABI has them (ctypes's
+# c_double_complex and the like).
+ac_cv_ffi_complex_double_supported=yes

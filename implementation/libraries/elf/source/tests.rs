@@ -592,9 +592,6 @@ fn refuses_what_it_cannot_run() {
     // A huge image.
     assert_eq!(with(&|b| b[ph(3, 40)..ph(3, 48)].copy_from_slice(&(8u64 << 30).to_le_bytes())), ElfError::TooLarge);
 
-    let mut dynamic = typical();
-    dynamic.extra.push(extra(pt::INTERP, 0, 0));
-    assert_eq!(Elf::parse_for(&dynamic.build(), amd64::MACHINE).unwrap_err(), ElfError::Dynamic);
     // Program headers said to be where nothing is loaded.
     let mut stray = typical();
     stray.extra.push(extra(pt::PHDR, 0x1000_0000, 0));
@@ -610,6 +607,48 @@ fn refuses_what_it_cannot_run() {
     let mut wraps = typical();
     wraps.extra.push(extra(pt::GNU_RELRO, u64::MAX - 8, 4096));
     assert_eq!(Elf::parse_for(&wraps.build(), amd64::MACHINE).unwrap_err(), ElfError::BadSegment);
+}
+
+/// A dynamically linked program, as GNU ld lays one out: a
+/// position-independent executable that names its dynamic linker
+/// (`interpreter`, the bytes of its `PT_INTERP`).
+fn dynamic(interpreter: &[u8]) -> Exe {
+    let segs = vec![seg(R, 0, 0x300, 0), seg(RX, 0x1000, 0x100, 0x100), seg(RW, 0x2e00, 0x200, 0x400)];
+    let mut exe = Exe::new(0x1040, segs);
+    exe.kind = ET_DYN;
+    let path = interpreter.to_vec();
+    exe.extra.push(Extra { kind: pt::INTERP, vaddr: 0x238, mem_size: path.len() as u64, align: 1, file: path });
+    exe
+}
+
+#[test]
+fn dynamically_linked_programs_name_their_dynamic_linker() {
+    let bytes = dynamic(b"/system/lib/libc.so\0").build();
+    let elf = Elf::parse_for(&bytes, amd64::MACHINE).unwrap();
+    assert_eq!(elf.interpreter(), Some(INTERPRETER.as_bytes()));
+    assert!(elf.is_position_independent());
+    assert_eq!(elf.kind(), Kind::Posix);
+    assert_eq!(Elf::parse_for(&typical().build(), amd64::MACHINE).unwrap().interpreter(), None);
+
+    // A path that is empty, has no NUL to end it, or one before its end.
+    for path in [&b""[..], b"\0", b"/system/lib/libc.so", b"/system/lib\0/libc.so\0"] {
+        let refused = Elf::parse_for(&dynamic(path).build(), amd64::MACHINE).unwrap_err();
+        assert_eq!(refused, ElfError::BadSegment, "{path:?}");
+    }
+    // One beyond the end of the file (its header follows the segments').
+    let mut beyond = bytes.clone();
+    let at = 64 + 3 * PHDR_SIZE + 8;
+    beyond[at..at + 8].copy_from_slice(&(1u64 << 40).to_le_bytes());
+    assert_eq!(Elf::parse_for(&beyond, amd64::MACHINE).unwrap_err(), ElfError::BadSegment);
+    // Two of them.
+    let mut two = dynamic(b"/system/lib/libc.so\0");
+    two.extra.push(Extra { kind: pt::INTERP, vaddr: 0x250, mem_size: 7, align: 1, file: b"/other\0".to_vec() });
+    assert_eq!(Elf::parse_for(&two.build(), amd64::MACHINE).unwrap_err(), ElfError::BadSegment);
+    // Stripped, it keeps its path: loading reads it.
+    let mut stripped = bytes.clone();
+    let len = strip(&mut stripped, amd64::MACHINE).unwrap();
+    let elf = Elf::parse_for(&stripped[..len], amd64::MACHINE).unwrap();
+    assert_eq!(elf.interpreter(), Some(INTERPRETER.as_bytes()));
 }
 
 #[test]
@@ -665,6 +704,7 @@ fn aux(execfn: &[u8]) -> AuxInfo<'_> {
         phdr: 0x400040,
         phnum: 4,
         entry: 0x401040,
+        base: 0x7f12_3456_7000,
         hwcap: 0x178bfbff,
         platform: amd64::MACHINE.platform,
         uid: 1000,
@@ -715,6 +755,7 @@ fn lays_out_the_initial_stack() {
     assert_eq!(get(at::PHNUM), 4);
     assert_eq!(get(at::PAGESZ), 4096);
     assert_eq!(get(at::ENTRY), 0x401040);
+    assert_eq!(get(at::BASE), 0x7f12_3456_7000);
     assert_eq!(get(at::UID), 1000);
     assert_eq!(get(at::EGID), 1000);
     assert_eq!(get(at::SECURE), 0);
@@ -766,7 +807,7 @@ impl Rng {
 
 /// Executables of every layout the tests build: a static one, a static PIE
 /// with relocations of both kinds and a note, one whose segments share a
-/// page.
+/// page, and a dynamically linked one.
 fn corpus() -> Vec<Vec<u8>> {
     let relative = amd64::MACHINE.relative as u64;
     let mut tags = rela_tags(2);
@@ -778,7 +819,7 @@ fn corpus() -> Vec<Vec<u8>> {
     let mut shared = Exe::new(0x401000, vec![seg(RX, 0x401000, 0x900, 0x900), seg(RW, 0x401a00, 0x10, 0x1000)]);
     shared.headers_in_first = false;
     shared.extra.push(extra(pt::PHDR, 0x401000, 0));
-    vec![typical().build(), pie.build(), shared.build()]
+    vec![typical().build(), pie.build(), shared.build(), dynamic(b"/system/lib/libc.so\0").build()]
 }
 
 /// `data` with a few random changes, most of them in the headers, where
@@ -819,7 +860,7 @@ fn mutate(rng: &mut Rng, data: &[u8]) -> Vec<u8> {
 fn exercise(bytes: &[u8]) {
     let Ok(elf) = Elf::parse_for(bytes, amd64::MACHINE) else { return };
     let _ = elf.kind();
-    let _ = (elf.stack_size(), elf.relro(), elf.notes().count(), elf.loaded_len());
+    let _ = (elf.stack_size(), elf.relro(), elf.notes().count(), elf.loaded_len(), elf.interpreter());
     for relro in [Relro::ReadOnly, Relro::Writable] {
         let runs: Vec<PageRun> = page_runs(&elf, relro).collect();
         let (lo, hi) = elf.span();

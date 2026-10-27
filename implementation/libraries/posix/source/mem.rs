@@ -213,6 +213,24 @@ pub fn mprotect(addr: usize, len: usize, prot: u32) -> SysResult {
     })
 }
 
+/// `membarrier`: the commands that order the memory accesses of this
+/// process's threads, which the kernel's barrier on the processors running
+/// them carries out (`vm_barrier`): `MEMBARRIER_CMD_PRIVATE_EXPEDITED`, as
+/// the dynamic linker has it give every thread a library's thread-local
+/// storage, its registration (which it does not need here), and the query
+/// of what is had. The others, for memory other processes share, for the
+/// instruction caches (`SYNC_CORE`) or restartable sequences, are not had
+/// (`EINVAL`, as Linux says of commands it has not).
+pub fn membarrier(cmd: u32, flags: u32) -> SysResult {
+    use crate::linux::membarrier::{PRIVATE_EXPEDITED, QUERY, REGISTER_PRIVATE_EXPEDITED};
+    match (cmd, flags) {
+        (QUERY, 0) => Ok((PRIVATE_EXPEDITED | REGISTER_PRIVATE_EXPEDITED) as usize),
+        (REGISTER_PRIVATE_EXPEDITED, 0) => Ok(0),
+        (PRIVATE_EXPEDITED, 0) => vm::barrier().map(|()| 0).map_err(error::kernel),
+        _ => Err(EINVAL),
+    }
+}
+
 /// `madvise`. Dropping pages (`MADV_DONTNEED`, `MADV_FREE`) frees them at
 /// once in private anonymous memory, which reads as zeros afterwards; other
 /// memory has nowhere to take its contents back from, so the advice is

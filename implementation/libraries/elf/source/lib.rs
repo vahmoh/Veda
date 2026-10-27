@@ -3,15 +3,18 @@
 
 //! `elf` — Veda's executables: ELF64.
 //!
-//! Every program Veda runs, and its kernel, is a static ELF64 executable for
-//! the System V ABI of its processor (x86-64's on AMD64):
+//! Every program Veda runs, and its kernel, is an ELF64 executable for the
+//! System V ABI of its processor (x86-64's on AMD64):
 //!
 //! * the kernel, linked at its fixed address, which the boot loader maps;
-//! * Veda's own programs, position-independent, which their loader places
-//!   at a random address and relocates;
+//! * Veda's own programs, static and position-independent, which their
+//!   loader places at a random address and relocates;
 //! * POSIX programs (C, built by Veda's GCC; Rust on its standard library),
-//!   which start as on Linux and relocate themselves if they are
-//!   position-independent.
+//!   which start as on Linux. Linked statically, they relocate themselves
+//!   if they are position-independent. Linked dynamically, they name the
+//!   system's dynamic linker ([`INTERPRETER`], their `PT_INTERP`), which
+//!   the loader places beside them and starts in their place, and which
+//!   links them with the C library and their other shared libraries.
 //!
 //! Loading one takes:
 //!
@@ -25,9 +28,10 @@
 //! 4. mapping the [`page_runs`], the image's pages grouped by permissions;
 //! 5. starting it at [`Elf::entry`]: a POSIX program with the stack
 //!    [`initial_stack`] lays out (arguments, environment, auxiliary vector).
-//!
-//! Executables that need a dynamic linker (`PT_INTERP`, `DT_NEEDED`) are
-//! refused: Veda links every program statically.
+//!    A dynamically linked one starts at its dynamic linker's entry
+//!    instead, its dynamic linker loaded as steps 1 to 4 load a static
+//!    position-independent program (it relocates itself); the auxiliary
+//!    vector says where both are.
 //!
 //! An executable is for one processor ([`Machine`]): each architecture's is
 //! in `implementation/libraries/elf/source/architectures/<architecture>/`
@@ -64,6 +68,12 @@ pub struct Machine {
 /// The processor this code runs on.
 #[cfg(target_arch = "x86_64")]
 pub const NATIVE: Machine = amd64::MACHINE;
+
+/// The dynamic linker that Veda's dynamically linked programs name
+/// (`PT_INTERP`): the C library's shared object, which is musl's dynamic
+/// linker too, as on Linux. It is the only one a loader starts, so that a
+/// program cannot have another run in its place.
+pub const INTERPRETER: &str = "/system/lib/libc.so";
 
 /// The note that marks a Veda program, one built on Veda's runtime (`rt`,
 /// which carries it): its loader relocates it, makes its RELRO read-only,
@@ -106,7 +116,8 @@ pub enum ElfError {
     WrongMachine(&'static str),
     /// A relocatable object or core dump, not an executable.
     NotExecutable,
-    /// The executable needs a dynamic linker or libraries.
+    /// The executable needs shared libraries, which only the dynamic linker
+    /// links ([`Elf::relocate`] relocates static executables).
     Dynamic,
     /// A program header is malformed, segments overlap, or there are more
     /// than [`MAX_SEGMENTS`].
@@ -130,7 +141,7 @@ impl fmt::Display for ElfError {
             ElfError::WrongClass => "not a 64-bit little-endian ELF file",
             ElfError::WrongMachine(machine) => return write!(f, "not an {machine} program"),
             ElfError::NotExecutable => "not an executable (an object file or core dump)",
-            ElfError::Dynamic => "dynamically linked (Veda runs static executables)",
+            ElfError::Dynamic => "linked with shared libraries, which only the dynamic linker links",
             ElfError::BadSegment => "malformed program header",
             ElfError::NoSegments => "nothing to load",
             ElfError::BadEntry => "the entry point is not in executable code",
@@ -314,6 +325,9 @@ pub struct Elf<'a> {
     dynamic: Option<(u64, u64)>,
     /// `PT_GNU_RELRO`: address and size.
     relro: Option<(u64, u64)>,
+    /// The dynamic linker's path among the file's bytes (`PT_INTERP`, with
+    /// its terminating NUL): offset and size.
+    interpreter: Option<(u64, u64)>,
 }
 
 /// Whether `data` starts like an ELF file.
@@ -371,11 +385,21 @@ impl<'a> Elf<'a> {
         let mut phdr_vaddr = None;
         let mut dynamic = None;
         let mut relro = None;
+        let mut interpreter = None;
         let mut loads = 0;
         for i in 0..phnum {
             let ph = ProgramHeader::read(data, phoff + i * PHDR_SIZE);
             match ph.kind {
-                pt::INTERP => return Err(ElfError::Dynamic),
+                pt::INTERP => {
+                    // One path, among the file's bytes: not empty, ending
+                    // with its NUL alone.
+                    let path = file_range(data, ph.offset, ph.file_size).ok_or(ElfError::BadSegment)?;
+                    let named = path.split_last().is_some_and(|(&nul, p)| nul == 0 && !p.is_empty() && !p.contains(&0));
+                    if interpreter.is_some() || !named {
+                        return Err(ElfError::BadSegment);
+                    }
+                    interpreter = Some((ph.offset, ph.file_size));
+                }
                 pt::PHDR => phdr_vaddr = Some(ph.vaddr),
                 pt::DYNAMIC => {
                     file_range(data, ph.offset, ph.file_size).ok_or(ElfError::BadSegment)?;
@@ -416,7 +440,7 @@ impl<'a> Elf<'a> {
         if hi - lo > MAX_IMAGE {
             return Err(ElfError::TooLarge);
         }
-        let elf = Elf { data, machine, pie, entry, phoff, phnum, phdr_vaddr, lo, hi, dynamic, relro };
+        let elf = Elf { data, machine, pie, entry, phoff, phnum, phdr_vaddr, lo, hi, dynamic, relro, interpreter };
         if !elf.segments().any(|s| s.perms.exec && s.vaddr <= entry && entry < s.end()) {
             return Err(ElfError::BadEntry);
         }
@@ -505,6 +529,16 @@ impl<'a> Elf<'a> {
         }
         let offset = run.start.wrapping_add(distance?);
         (offset.checked_add(run.len)? <= page_up(self.data.len() as u64)?).then_some(offset)
+    }
+
+    /// The dynamic linker the program names (`PT_INTERP`), without its
+    /// terminating NUL: that of a dynamically linked program, which starts
+    /// it in the program's place ([`INTERPRETER`], on Veda). `None` for a
+    /// program linked statically.
+    pub fn interpreter(&self) -> Option<&'a [u8]> {
+        let (offset, size) = self.interpreter?;
+        // `parse_for` checked that it is in the file, NUL-terminated.
+        file_range(self.data, offset, size).and_then(|path| path.split_last()).map(|(_, path)| path)
     }
 
     /// The main thread's stack size the program asks for (`PT_GNU_STACK`),
@@ -879,6 +913,9 @@ pub struct AuxInfo<'a> {
     pub phnum: u64,
     /// The entry point (load bias applied).
     pub entry: u64,
+    /// Where the program's dynamic linker is loaded (`AT_BASE`): 0 for a
+    /// program linked statically.
+    pub base: u64,
     /// The processor's features, as Linux's `AT_HWCAP` gives them.
     pub hwcap: u64,
     /// The platform's name (`AT_PLATFORM`: [`Machine::platform`]).
@@ -980,7 +1017,7 @@ pub fn initial_stack(top: u64, args: &[&[u8]], env: &[&[u8]], aux: &AuxInfo, out
         (at::PHENT, PHDR_SIZE as u64),
         (at::PHNUM, aux.phnum),
         (at::PAGESZ, PAGE_SIZE),
-        (at::BASE, 0),
+        (at::BASE, aux.base),
         (at::FLAGS, 0),
         (at::ENTRY, aux.entry),
         (at::UID, aux.uid as u64),

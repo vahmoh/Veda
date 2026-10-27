@@ -276,7 +276,12 @@ impl ChildState {
 /// The `errno` for a failure to start a program.
 fn spawn_errno(e: SpawnError) -> isize {
     match e {
-        SpawnError::NotExecutable | SpawnError::BadElf(_) | SpawnError::Incompatible => ENOEXEC,
+        SpawnError::NotExecutable
+        | SpawnError::BadElf(_)
+        | SpawnError::Incompatible
+        | SpawnError::OtherDynamicLinker => ENOEXEC,
+        // As Linux says of a program whose dynamic linker is not there.
+        SpawnError::NoDynamicLinker => ENOENT,
         SpawnError::TooLarge => E2BIG,
         SpawnError::Refused => EAGAIN,
         SpawnError::Kernel(abi::Error::NoMemory) => ENOMEM,
@@ -425,6 +430,13 @@ unsafe fn spawn(res: usize, name: usize, ops: usize, attr: usize, argv: usize, e
     spawn.signals_inherited = (ignored, mask);
     let unused = |koid: u64| !CHILDREN.lock().contains_key(&pid_of(koid));
     spawn.accept = Some(&unused);
+    // A program linked dynamically starts with the system's dynamic
+    // linker, which the system image's pages are.
+    let linker = |path: &str| {
+        let (vmo, size) = error::ipc(vfs::with(|c| c.read_file(path.into())).ok()?).ok()?;
+        Some((vmo, usize::try_from(size).ok()?))
+    };
+    spawn.dynamic_linker = Some(&linker);
     let process = spawn.start_file(&program.vmo, program.size).map_err(spawn_errno)?;
     let pid = pid_of(process.0.koid());
     CHILDREN.lock().insert(pid, process);

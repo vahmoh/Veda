@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# libloading: loading shared libraries at run time (the C library's
+# dlopen, dlsym and dlclose, behind a safer interface), as Rust's crates
+# load plug-ins and drivers, in Veda's dynamically linked programs on the
+# standard library. A crate: its release on crates.io, which Cargo builds.
+name = "libloading"
+version = "0.9.0"
+url = "https://static.crates.io/crates/libloading/libloading-0.9.0.crate"
+sha256 = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
+license = "ISC"

@@ -51,8 +51,8 @@ It uses:
   on musl for Veda's target, which Cargo builds in place of the releases
   (`implementation/ports/README.md`): crates such as `rand` and `tempfile`
   build and run (`verification/stdcrates` checks them). A crate that names operating
-  systems itself may need a port too, as `tokio`, `mio` and `socket2`
-  have; tokio's runtimes, of one thread or several, work.
+  systems itself may need a port too, as `tokio`, `mio`, `socket2` and
+  `libloading` have; tokio's runtimes, of one thread or several, work.
 
 A program started by `init` (a service, or an application from the start
 menu) writes its standard output and error to the system log, a line at
@@ -104,17 +104,23 @@ the web build's own pkg-config ([The web browser](BROWSER.md#building-it)).
 
 A program is a static ELF executable, as C programs are,
 position-independent by default (`-static-pie`) or at a fixed address
-with `-C relocation-model=static`, and runs as they do.
+with `-C relocation-model=static`, and runs as they do. With
+`-C target-feature=-crt-static` it is linked dynamically, with the C
+library's shared object, and loads libraries at run time (with
+`libloading`); a `cdylib` crate is a shared library, which programs in any
+language load ([Linking and loading](LINKING.md#in-rust)).
 
 ## How it works
 
 **The target**, `x86_64-unknown-veda` on AMD64, is Veda's own in the
 compiler: `target_os = "veda"`, in the `unix` family, with
-`target_env = "musl"`, thread-local storage and unwinding. Programs link
-statically with the C toolchain's start files, the C library (musl and
-the POSIX layer) and GCC's runtime, whose unwinder unwinds Rust's panics
-as it unwinds C++'s exceptions: a program in Rust and C++ has one
-unwinder.
+`target_env = "musl"`, thread-local storage, unwinding and dynamic
+linking. Programs link statically with the C toolchain's start files, the
+C library (musl and the POSIX layer) and GCC's runtime, whose unwinder
+unwinds Rust's panics as it unwinds C++'s exceptions: a program in Rust
+and C++ has one unwinder. Linked dynamically, a program and the libraries
+it loads stand on the shared objects of the C library and of GCC's runtime
+instead, and share the unwinder (`libgcc_s.so.1`).
 
 **The standard library** stands on the C library, as C++'s does
 ([C on Veda](C.md)). The C library's interface is musl's, and so
@@ -158,9 +164,10 @@ library.
 Rust programs share the limits of C programs
 ([C on Veda](C.md#limits)). In the standard library's terms:
 
-- **No compiler inside Veda.** Rust's compiler needs shared libraries
-  (its own and LLVM's) and loads procedural macros as shared libraries;
-  Veda links statically and has no `dlopen`.
+- **No compiler inside Veda.** Rust's compiler and Cargo run on the
+  development machine: the toolchain builds neither for Veda (the
+  compiler stands on LLVM's libraries and its own, and loads procedural
+  macros as shared libraries).
 - **No `fork` or `exec`.** `Command` starts every program with
   `posix_spawn`. What only a child between `fork` and `exec` could do
   fails with `Unsupported` (`CommandExt::pre_exec`, `uid`, `gid`), as do
@@ -221,15 +228,22 @@ CMake (for LLVM) and Python 3 (for `x.py`) are among the toolchain's
   UDP, shared with child processes, and the host's servers through QEMU),
   names, file locks between processes, panics, backtraces and a deep
   stack, and that `pre_exec` and `exec` fail. `cargo automation build`
-  compiles it twice into `/system/tests/rust`: position-independent
-  (`stdlib`) and at a fixed address (`stdlib-fixed`).
+  compiles it three times into `/system/tests/rust`: position-independent
+  (`stdlib`) and at a fixed address (`stdlib-fixed`), both linked
+  statically, and linked dynamically (`stdlib-dynamic`).
+- **`verification/rust/loading.rs`**, built the same three ways, loads a
+  Rust library (`verification/rust/shared`, a `cdylib`) and a C one at
+  run time, dynamically linked, and fails to as it says, statically
+  linked ([Linking and loading](LINKING.md#tests)).
 - **`verification/stdcrates`** (`/system/bin/stdcrates` in the image)
   checks crates as Veda's ports have them: libc, both releases of
   getrandom, rand, rustix, tempfile, and tokio (both runtimes, with TCP,
   UDP and Unix domain sockets, timers and a child process).
+  **`verification/plugins`**, a dynamically linked program, checks
+  libloading.
 - **`verification/ui/rust-programs.vts`** runs `stdlib` in the Terminal.
   Each application has its GUI scripts (`verification/ui`) and its
   agent's (`verification/agent`).
 
-`systest` runs `stdlib`, `stdlib-fixed` and `stdcrates` inside Veda;
+`systest` runs them all inside Veda;
 `cargo automation test` runs `systest`, and `--ui` adds the scripts.

@@ -261,6 +261,43 @@ pub fn test_unmapped_on_every_processor() -> TestResult {
     check(code == abi::EXIT_CODE_CRASHED, &format!("the copy ends with a reader's fault (it ended with {code})"))
 }
 
+/// Memory barriers on the processors running a process's threads
+/// (`vm_barrier`, which the C library's `membarrier` makes): with a thread
+/// busy on each other processor, each call returns once all of them have
+/// gone through one, a thousand times in a few seconds at most. (That they
+/// order memory, no test can see for sure: the dynamic linker relies on it
+/// as it gives every thread a library's thread-local storage, which
+/// `verification/c/libraries.c` checks.)
+pub fn test_barrier_on_every_processor() -> TestResult {
+    use core::sync::atomic::{AtomicBool, AtomicUsize};
+    static STOP: AtomicBool = AtomicBool::new(false);
+    static SPINNING: AtomicUsize = AtomicUsize::new(0);
+    let cpus = rt::object::system_info().map_or(2, |i| i.cpu_count as usize);
+    let threads: Vec<_> = (1..cpus.max(2))
+        .map(|_| {
+            rt::thread::spawn(|| {
+                SPINNING.fetch_add(1, Ordering::AcqRel);
+                while !STOP.load(Ordering::Acquire) {
+                    core::hint::spin_loop();
+                }
+            })
+        })
+        .collect();
+    let until = rt::time::now_ns() + 5_000_000_000;
+    while SPINNING.load(Ordering::Acquire) < threads.len() && rt::time::now_ns() < until {
+        core::hint::spin_loop();
+    }
+    let started = rt::time::now_ns();
+    let done = (0..1000).try_for_each(|_| vm::barrier());
+    let took = rt::time::now_ns() - started;
+    STOP.store(true, Ordering::Release);
+    for t in threads {
+        let _ = t.join();
+    }
+    check(done.is_ok(), &format!("vm_barrier failed: {done:?}"))?;
+    check(took < 5_000_000_000, &format!("a thousand barriers took {} ms", took / 1_000_000))
+}
+
 /// `systest unmapped`: a thread for each other processor reads a page over
 /// and over while the main thread, keeping its own processor busy (so that
 /// no reader runs where the unmap flushes the TLB itself), unmaps it and
@@ -373,18 +410,27 @@ pub fn test_shared_program_pages() -> TestResult {
     check(a + size / 4 < b, &format!("{a} bytes of memory for the program from the image's pages, {b} for a copy"))
 }
 
+/// The processes the kernel lists, however many there are.
+fn processes() -> Vec<abi::ProcessInfo> {
+    let mut list = alloc::vec![abi::ProcessInfo::default(); 256];
+    loop {
+        let n = rt::object::process_list(&mut list).unwrap_or(0);
+        if n <= list.len() {
+            list.truncate(n);
+            return list;
+        }
+        list = alloc::vec![abi::ProcessInfo::default(); n + 32];
+    }
+}
+
 /// The live process that `parent` started, if any.
 fn child_of(parent: u64) -> Option<u64> {
-    let mut list = [abi::ProcessInfo::default(); 256];
-    let n = rt::object::process_list(&mut list).ok()?.min(list.len());
-    list[..n].iter().find(|p| p.parent_koid == parent && p.state == abi::process_state::RUNNING).map(|p| p.koid)
+    processes().iter().find(|p| p.parent_koid == parent && p.state == abi::process_state::RUNNING).map(|p| p.koid)
 }
 
 /// Whether process `koid` still runs.
 fn running(koid: u64) -> bool {
-    let mut list = [abi::ProcessInfo::default(); 256];
-    let n = rt::object::process_list(&mut list).unwrap_or(0).min(list.len());
-    list[..n].iter().any(|p| p.koid == koid && p.state == abi::process_state::RUNNING)
+    processes().iter().any(|p| p.koid == koid && p.state == abi::process_state::RUNNING)
 }
 
 /// Killing a job (`kill_tree`) ends the processes its leader started too.
@@ -764,8 +810,14 @@ pub(crate) fn run_c_for(path: &str, args: &[&str], cwd: &str, seconds: u64) -> R
         .map_err(|e| format!("{e:?}"))?
         .map_err(s)?
         .map_err(|e| format!("{e:?}"))?;
+    // A program linked dynamically starts with the system's dynamic linker.
+    let linker = |path: &str| {
+        let (vmo, size) = fs.read_file(path.into()).ok()?.ok()?;
+        Some((vmo, usize::try_from(size).ok()?))
+    };
     let mut spawn = Spawn::new("c-test")
         .path(path)
+        .dynamic_linker(&linker)
         .cwd(cwd)
         .env("HOME=/home/user")
         .env("PATH=/system/bin")
@@ -810,19 +862,21 @@ fn host_args() -> Vec<String> {
     }
 }
 
-/// C and C++ programs built by the cross toolchain run, linked at a fixed
-/// address and position-independent: the smallest one, then the checks of
-/// the C library and the POSIX layer (`verification/c/posix.c`, with the
-/// host's servers when there are some) and of the C++ library
-/// (`verification/c/cxx.cc`).
+/// C and C++ programs built by the cross toolchain run, linked statically
+/// (at a fixed address and position-independent) and dynamically: the
+/// smallest one, then the checks of the C library and the POSIX layer
+/// (`verification/c/posix.c`, with the host's servers when there are some),
+/// of the C++ library (`verification/c/cxx.cc`) and of shared libraries
+/// and loading them (`verification/c/libraries.c`).
 pub fn test_c_programs() -> TestResult {
     let fs = vfs_client()?;
     if fs.stat("/system/tests/c/hello".into()).map_err(s)?.is_err() {
         rt::println!("c programs: none in this image (no cross toolchain was built)");
         return Ok(());
     }
-    // Each program linked at a fixed address and position-independent.
-    for variant in ["", "-pie"] {
+    // Each program linked statically, at a fixed address and
+    // position-independent, and dynamically.
+    for variant in ["", "-pie", "-dynamic"] {
         let hello = format!("hello{variant}");
         let (code, out) = run_c(&format!("/system/tests/c/{hello}"), &["one", "two"], "/tmp")?;
         rt::println!("{hello}: {}", out.trim_end());
@@ -830,10 +884,10 @@ pub fn test_c_programs() -> TestResult {
         let greeting = out.contains("Hello from C on Veda! argc=3 argv[0]=c-test") && out.contains("cwd=/tmp");
         check(greeting, &format!("{hello}'s output"))?;
 
-        // The checks of the C library and the POSIX layer, and of the C++
-        // library.
+        // The checks of the C library and the POSIX layer, of the C++
+        // library, and of shared libraries.
         let host = host_args();
-        for checks in ["posix", "cxx"] {
+        for checks in ["posix", "cxx", "libraries"] {
             let program = format!("{checks}{variant}");
             let dir = format!("/tmp/{program}-test");
             let _ = fs.mkdir(dir.clone());
@@ -850,10 +904,11 @@ pub fn test_c_programs() -> TestResult {
     Ok(())
 }
 
-/// Rust programs built by Rust's toolchain run, position-independent (as
-/// Rust links them for Veda) and at a fixed address: the checks of its
-/// standard library (`verification/rust/stdlib.rs`, with the host's servers
-/// when there are some).
+/// Rust programs built by Rust's toolchain run, linked statically
+/// (position-independent, as Rust links them for Veda, and at a fixed
+/// address) and dynamically: the checks of its standard library
+/// (`verification/rust/stdlib.rs`, with the host's servers when there are
+/// some), and of loading libraries (`verification/rust/loading.rs`).
 pub fn test_rust_programs() -> TestResult {
     let fs = vfs_client()?;
     if fs.stat("/system/tests/rust/stdlib".into()).map_err(s)?.is_err() {
@@ -861,27 +916,51 @@ pub fn test_rust_programs() -> TestResult {
         return Ok(());
     }
     let host = host_args();
-    let args: Vec<&str> = host.iter().map(String::as_str).collect();
-    for variant in ["", "-fixed"] {
-        let program = format!("stdlib{variant}");
-        let dir = format!("/tmp/{program}-test");
-        let _ = fs.mkdir(dir.clone());
-        let (code, out) = run_c(&format!("/system/tests/rust/{program}"), &args, &dir)?;
-        for line in out.lines().filter(|l| !l.starts_with("ok - ")) {
-            rt::println!("{program}: {line}");
+    for variant in ["", "-fixed", "-dynamic"] {
+        for checks in ["stdlib", "loading"] {
+            let program = format!("{checks}{variant}");
+            let dir = format!("/tmp/{program}-test");
+            let _ = fs.mkdir(dir.clone());
+            let args: Vec<&str> =
+                if checks == "stdlib" { host.iter().map(String::as_str).collect() } else { Vec::new() };
+            let (code, out) = run_c(&format!("/system/tests/rust/{program}"), &args, &dir)?;
+            for line in out.lines().filter(|l| !l.starts_with("ok - ")) {
+                rt::println!("{program}: {line}");
+            }
+            let passed = code == 0 && out.contains("PASS: 0 failed");
+            check(passed, &format!("{program} checks failed (exit code {code})"))?;
         }
-        let passed = code == 0 && out.contains("PASS: 0 failed");
-        check(passed, &format!("{program} checks failed (exit code {code})"))?;
     }
     Ok(())
+}
+
+/// A dynamically linked program on the standard library loads libraries at
+/// run time with libloading (`verification/plugins`), where the image has
+/// the libraries it loads (the C and Rust test programs').
+pub fn test_plugins() -> TestResult {
+    let fs = vfs_client()?;
+    let libraries = ["/system/tests/c/lib/libplugin.so", "/system/tests/rust/lib/librustplugin.so"];
+    if libraries.iter().any(|l| !fs.stat((*l).into()).is_ok_and(|r| r.is_ok())) {
+        rt::println!("plugins: no test libraries in this image (no toolchain was built)");
+        return Ok(());
+    }
+    let dir = String::from("/tmp/plugins-test");
+    let _ = fs.mkdir(dir.clone());
+    let (code, out) = run_c("/system/bin/plugins", &[], &dir)?;
+    for line in out.lines().filter(|l| !l.starts_with("ok - ")) {
+        rt::println!("plugins: {line}");
+    }
+    let passed = code == 0 && out.contains("PASS: 0 failed");
+    check(passed, &format!("plugins checks failed (exit code {code})"))
 }
 
 /// Python's standard library works on Veda as `documentation/PYTHON.md`
 /// says (`verification/python/stdlib.py`, with the host's servers when
 /// there are some), where the image has Python: its interpreter, from
-/// subprocesses and virtual environments (with pip) to TLS, SQLite and the
-/// compression formats, and what Veda has not failing as said. Given ten
-/// minutes, as it builds an environment.
+/// subprocesses and virtual environments (with pip) to TLS, SQLite, the
+/// compression formats, `ctypes` and an extension module it compiles, and
+/// what Veda has not failing as said. Given ten minutes, as it builds an
+/// environment.
 pub fn test_python() -> TestResult {
     let fs = vfs_client()?;
     if fs.stat("/system/bin/python3".into()).map_err(s)?.is_err() {

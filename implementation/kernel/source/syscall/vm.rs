@@ -245,6 +245,13 @@ pub fn vm_decommit(proc: RawHandle, addr: usize, len: usize) -> SysResult {
     ok(0)
 }
 
+/// `vm_barrier()`: the processors running the caller's threads go through
+/// a full memory barrier before it returns (see `abi::nr::VM_BARRIER`).
+pub fn vm_barrier() -> SysResult {
+    target_process(abi::INVALID_HANDLE)?.aspace().ok_or(Error::BadState)?.barrier();
+    ok(0)
+}
+
 pub fn vm_unmap(proc: RawHandle, addr: usize, len: usize) -> SysResult {
     let p = target_process(proc)?;
     p.aspace().ok_or(Error::BadState)?.unmap(addr as u64, len as u64)?;

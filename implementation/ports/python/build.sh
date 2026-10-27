@@ -4,11 +4,12 @@
 
 # Builds Python for Veda from the ports: CPython's interpreter with its
 # standard library's modules built in, and the C libraries they stand on,
-# static and position-independent; and the tools for this machine its
-# build runs (pkgconf, and the same release of Python, which a cross build
-# of CPython runs its own scripts with). `cargo automation python` runs it
-# after downloading and verifying the sources; see
-# automation/source/python.rs and documentation/PYTHON.md.
+# static and position-independent, the interpreter linked dynamically, so
+# that it loads extension modules and ctypes's libraries; and the tools for
+# this machine its build runs (pkgconf, and the same release of Python,
+# which a cross build of CPython runs its own scripts with).
+# `cargo automation python` runs it after downloading and verifying the
+# sources; see automation/source/python.rs and documentation/PYTHON.md.
 #
 # Environment:
 #   VEDA_PORTS       implementation/ports
@@ -27,10 +28,14 @@
 #                    include/ and lib/ (static archives and their pkg-config
 #                    files)
 #   python/system/   Python for Veda as the image installs it in /system:
-#                    bin/python3, and lib/python3.15, the standard library
-#                    with its bytecode, but for its tests
+#                    bin/python3; lib/python3.15, the standard library
+#                    with its bytecode, but for its tests; and
+#                    include/python3.15, its C API, which extension modules
+#                    are compiled with
 #   tests/system/    the standard library's tests (lib/python3.15/test),
-#                    which images for testing add
+#                    and the extension modules of its tests, which must be
+#                    shared libraries (lib/python3.15/lib-dynload), which
+#                    images for testing add
 #   licences/        the licence texts of Python and of the libraries it
 #                    has built in, which the image installs in
 #                    /system/licences
@@ -191,7 +196,7 @@ stage_expat() {
 library expat
 
 # The amalgamation (`sqlite3`), compiled as one file: thread-safe, without
-# loadable extensions (Veda links statically), with full-text search
+# loadable extensions (code its databases would choose), with full-text search
 # (FTS3, FTS4 and FTS5), R*Tree indexes and the mathematical functions, as
 # python.org's builds have them. It locks a database's file, as on Linux
 # (its unix VFS), with the locks Veda's file system arbitrates between
@@ -243,6 +248,15 @@ stage_openssl() {
 }
 library openssl @OPENSSL_OPTIONS @OPENSSL_ARCH
 
+# libffi (`ctypes`), whose closures (callbacks into Python) are code made at
+# run time: in memory files mapped twice, where they are written and where
+# they run (its patch), never memory both writable and executable. No
+# static trampolines, which read /proc.
+stage_libffi() {
+	autoconf_veda libffi configure --disable-docs --disable-multi-os-directory --disable-exec-static-tramp
+}
+library libffi
+
 # --- Python, for Veda -----------------------------------------------------------
 
 # The modules of the standard library that Python on Veda must have built
@@ -250,8 +264,8 @@ library openssl @OPENSSL_OPTIONS @OPENSSL_ARCH
 # writes whether each can be built, and the build fails if one of these
 # cannot.
 PYTHON_MODULES=(
-	_bz2 _decimal _elementtree _hashlib _lzma _multiprocessing _posixshmem _posixsubprocess _socket _sqlite3 _ssl
-	_zstd mmap pyexpat resource select termios zlib
+	_bz2 _ctypes _decimal _elementtree _hashlib _lzma _multiprocessing _posixshmem _posixsubprocess _socket _sqlite3
+	_ssl _zstd mmap pyexpat resource select termios zlib
 )
 
 # Why a module of the standard library is missing on Veda, which a
@@ -260,7 +274,6 @@ PYTHON_MODULES=(
 # out tkinter and IDLE, which stand on Tk, and pty, whose every function
 # needs a pseudo-terminal or fork().
 MISSING_MODULES='{
-  "_ctypes": "ctypes is not available on Veda yet: it needs dynamic loading (dlopen)",
   "_curses": "curses is not available on Veda: its Terminal cannot move the cursor yet",
   "_curses_panel": "curses is not available on Veda: its Terminal cannot move the cursor yet",
   "_dbm": "dbm.ndbm is not available on Veda: dbm.sqlite3 and dbm.dumb are",
@@ -281,11 +294,17 @@ MISSING_MODULES='{
 # then the architecture's), no pip installed (ensurepip has it, for
 # environments), and the time zones in /system/share/zoneinfo, where Veda
 # has none yet. Compiled with CPython's own optimisations, position-
-# independent with stack protection as the libraries are; linked
-# -static-pie, the sections of the libraries' code that nothing uses
-# dropped.
+# independent with stack protection as the libraries are. The interpreter
+# is linked dynamically (-pie, which CPython's LINKFORSHARED gives it
+# alone, as on Android: a shared library linked -pie would be a program),
+# with the C library's shared object, that of the extension modules it
+# loads: its C API is theirs too (-export-dynamic), but none of the
+# libraries' it holds, which a module with a copy of its own would take
+# for its own (--exclude-libs). The sections of the libraries' code that
+# nothing uses are dropped.
 PYTHON_CFLAGS="-fPIE -fstack-protector-strong -fstack-clash-protection $PREFIX_MAP"
-PYTHON_LDFLAGS="-static-pie -Wl,--gc-sections"
+PYTHON_LIBRARY_ARCHIVES=libz.a:libbz2.a:liblzma.a:libzstd.a:libmpdec.a:libexpat.a:libsqlite3.a:libssl.a:libcrypto.a:libffi.a
+PYTHON_LDFLAGS="-Wl,--gc-sections -Wl,--exclude-libs=$PYTHON_LIBRARY_ARCHIVES"
 PYTHON_OPTIONS=(
 	--host=$TARGET --build="$BUILD_TRIPLE" --prefix=/system --disable-shared --without-ensurepip --with-system-expat
 	--with-pkg-config=yes --with-tzpath=/system/share/zoneinfo --enable-ipv6
@@ -295,10 +314,10 @@ stage_src_python() { unpack python; }
 stage src_python +python
 
 # Veda's C library: musl, whose release platform.libc_ver() gives and whose
-# headers and patch CPython is configured and built for (+musl below), and
-# its archive, which the interpreter is linked with.
+# headers and patch CPython is configured and built for (+musl below). The
+# interpreter is linked with its shared object, which the image has as it
+# is now, whatever it was when the interpreter was linked.
 LIBC_VERSION=$(port musl version)
-LIBC=$CROSS/sysroot/system/lib/libc.a
 
 stage_python() {
 	local b=$BUILD/python image=$BUILD/python-image
@@ -320,65 +339,101 @@ stage_python() {
 		fi
 	done
 	quiet make.log make -j"$JOBS"
+	quiet install.log make install DESTDIR="$image"
 }
-stage python src_python host_python zlib bzip2 xz zstd mpdecimal expat sqlite openssl +musl \
+stage python src_python host_python zlib bzip2 xz zstd mpdecimal expat sqlite openssl libffi +musl \
 	"$PORTS/python/config.site" "$PORTS/python/architectures/$VEDA_ARCH/config.site" @MISSING_MODULES \
 	@PYTHON_CFLAGS @PYTHON_LDFLAGS @PYTHON_OPTIONS @PYTHON_MODULES @PYTHON_VERSION @LIBC_VERSION @VEDA_CFLAGS @ROOT \
 	@TOOLCHAIN @TARGET
 
-# The interpreter linked again with the C library as it is now (the POSIX
-# layer in it changes more often than Python), then installed: the rest of
-# the build stands.
-stage_python_link() {
-	local b=$BUILD/python image=$BUILD/python-image
-	rm -rf "$b/python" "$image"
-	quiet "$b/link.log" make -C "$b" python
-	quiet "$b/install.log" make -C "$b" install DESTDIR="$image"
-}
-stage python_link python "$LIBC"
-
 # Python as the image installs it: the interpreter, stripped, as python3
 # (the unstripped one stays in the build, for addr2line); the standard
 # library but for what Veda cannot use (IDLE and turtle's examples, on Tk;
-# pty) and its tests, which go apart; no headers, static library or
-# configuration for building C extensions, which Veda cannot load. The
-# library's bytecode is compiled once, at the default optimisation level,
-# and checked against no source (the system image does not change); the
-# names the image shows are /system's.
+# pty) and its tests, which go apart with the extension modules of the
+# tests, stripped (they must be shared libraries: the standard library's
+# own are in the interpreter); its C API, which extension modules are
+# compiled with (its headers, and its pkg-config file), but no static
+# library, Makefile or library to embed Python with. The library's
+# bytecode is compiled once, at the default optimisation level, and
+# checked against no source (the system image does not change); the names
+# the image shows are /system's.
 STDLIB_LEFT_OUT=(idlelib tkinter turtledemo pty.py test)
 stage_python_image() {
 	local image=$BUILD/python-image/system out=$ROOT/python/system tests=$ROOT/tests/system
 	local lib=lib/python$PYTHON_VERSION
 	rm -rf "$ROOT/python" "$ROOT/tests"
-	mkdir -p "$out/bin" "$out/$lib" "$tests/$lib"
+	mkdir -p "$out/bin" "$out/$lib" "$out/include" "$out/lib/pkgconfig" "$tests/$lib/lib-dynload"
 	"$TARGET-strip" --strip-all -o "$out/bin/python3" "$image/bin/python$PYTHON_VERSION"
 	cp -r "$image/$lib/." "$out/$lib/"
 	rm -rf "$out/$lib/config-$PYTHON_VERSION-"*
-	# Where extension modules would be loaded from: Python finds its
-	# platform's files (sys.exec_prefix) by it, and the image keeps no empty
+	cp -r "$image/include/python$PYTHON_VERSION" "$out/include/"
+	cp "$image/lib/pkgconfig/python-$PYTHON_VERSION.pc" "$out/lib/pkgconfig/"
+	local module
+	for module in "$out/$lib/lib-dynload/"*.so; do
+		[ -e "$module" ] || continue
+		"$TARGET-strip" --strip-unneeded -o "$tests/$lib/lib-dynload/${module##*/}" "$module"
+		rm "$module"
+	done
+	# Where extension modules are loaded from: Python finds its platform's
+	# files (sys.exec_prefix) by it, and the image keeps no empty
 	# directory.
 	cat > "$out/$lib/lib-dynload/README.txt" <<-EOF
-	Python on Veda has its extension modules built into the interpreter
-	(/system/bin/python3): Veda links its programs statically, and loads no
-	shared libraries. This directory, where they would be, has none.
+	Python on Veda has the standard library's extension modules built into
+	the interpreter (/system/bin/python3). It loads others, as shared
+	libraries: those of the standard library's tests are here, in images
+	built for testing.
 	EOF
 	for dir in "${STDLIB_LEFT_OUT[@]}"; do
 		rm -rf "${out:?}/$lib/$dir"
 	done
+	# The build's configuration (sysconfig's), which builds of extension
+	# modules read, as Veda has it: its tools by the names Veda's own
+	# toolchain gives them (gcc, ar...), where a cross build names the cross
+	# toolchain's, and no directory of this machine's (nor the flag that
+	# keeps them out of the debugging information; the build's as ".").
+	# Its module and the same in JSON, which must agree.
+	local configuration=("$out/$lib"/_sysconfigdata_*.py)
+	local described
+	for described in "${configuration[@]}" "$out/$lib"/_sysconfig_vars_*.json; do
+		"$HOST/bin/python$PYTHON_VERSION" -I - "$described" "$CROSS/bin/" "$TARGET-" "$PREFIX_MAP" "$ROOT" \
+			"$TOOLCHAIN" <<-'EOF'
+		import re, sys
+		path, tools, prefix, prefix_map, build, toolchain = sys.argv[1:]
+		with open(path, encoding='utf-8') as f:
+		    text = f.read()
+		text = text.replace(tools, '').replace(' ' + prefix_map, '').replace(prefix_map, '')
+		text = re.sub(r'(?<![\w.-])' + re.escape(prefix), '', text).replace(build, '.')
+		if toolchain in text:
+		    sys.exit(f'{path} names the toolchain of the machine that built it')
+		with open(path, 'w', encoding='utf-8') as f:
+		    f.write(text)
+		EOF
+	done
 	# What the image has of the installation, as its build details say
-	# (PEP 739; the build's describe the build machine's extension modules):
-	# the interpreter as /system/bin/python3, no extension modules, and no
-	# C API or library to build with, which the image leaves out.
-	"$HOST/bin/python$PYTHON_VERSION" -I - "$out/$lib/build-details.json" <<-'EOF'
-	import json, sys
-	path = sys.argv[1]
+	# (PEP 739): the interpreter as /system/bin/python3; no library to link
+	# with, which the image leaves out (the interpreter holds it); and the
+	# suffixes of Veda's extension modules, where a cross build writes those
+	# of the Python that runs it (the same release, for this machine): its
+	# suffixes with Veda's ABI tags, from the build's configuration.
+	"$HOST/bin/python$PYTHON_VERSION" -I - "$out/$lib/build-details.json" "${configuration[@]}" <<-'EOF'
+	import importlib.machinery, json, sys, sysconfig
+	path, configuration = sys.argv[1:]
+	veda = {}
+	with open(configuration, encoding='utf-8') as f:
+	    exec(f.read(), veda)
+	veda = veda['build_time_vars']
+	def for_veda(suffix):
+	    for tag in ('SOABI', 'SOABI_PLATFORM'):
+	        suffix = suffix.replace(sysconfig.get_config_var(tag), veda[tag])
+	    return suffix
 	with open(path, encoding='utf-8') as f:
 	    details = json.load(f)
 	details['base_interpreter'] = '/system/bin/python3'
-	details['suffixes']['extensions'] = []
-	details['abi'].pop('stable_abi_suffix', None)
-	for left_out in ('libpython', 'c_api'):
-	    details.pop(left_out, None)
+	details.pop('libpython', None)
+	extensions = [for_veda(suffix) for suffix in importlib.machinery.EXTENSION_SUFFIXES]
+	details['suffixes']['extensions'] = extensions
+	details['abi']['extension_suffix'] = veda['EXT_SUFFIX']
+	details['abi']['stable_abi_suffix'] = next(s for s in extensions if s.startswith('.abi'))
 	with open(path, 'w', encoding='utf-8') as f:
 	    f.write(json.dumps(details, indent=2) + '\n')
 	EOF
@@ -390,7 +445,7 @@ stage_python_image() {
 			--invalidation-mode unchecked-hash -s "$dir" -p /system -x 'bad_coding|badsyntax' "$dir/$lib"
 	done
 }
-stage python_image python_link @STDLIB_LEFT_OUT @PYTHON_VERSION @ROOT
+stage python_image python @STDLIB_LEFT_OUT @PYTHON_VERSION @ROOT
 
 # --- the licences -------------------------------------------------------------------
 
@@ -403,7 +458,7 @@ stage python_image python_link @STDLIB_LEFT_OUT @PYTHON_VERSION @ROOT
 # texts here, but SQLite, which is in the public domain.
 LICENCE_FILES=(
 	python:LICENSE python:Doc/license.rst zlib:LICENSE bzip2:LICENSE xz:COPYING xz:COPYING.0BSD zstd:LICENSE
-	zstd:COPYING mpdecimal:COPYRIGHT.txt expat:COPYING openssl:LICENSE.txt
+	zstd:COPYING mpdecimal:COPYRIGHT.txt expat:COPYING openssl:LICENSE.txt libffi:LICENSE
 )
 LICENCE_FREE=(sqlite)
 

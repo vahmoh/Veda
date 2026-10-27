@@ -369,6 +369,13 @@ pub fn run(console: &Console, run: Run, out: &Output, interrupt: &AtomicBool) ->
         typed.bytes.extend_from_slice(&later);
         typed.end = false;
     }
+    // A program linked dynamically starts with the system's dynamic linker,
+    // which the system image's pages are.
+    let linker = |path: &str| {
+        let (vmo, size) = fs.read_file(path.into()).ok()?.ok()?;
+        Some((vmo, usize::try_from(size).ok()?))
+    };
+    spawn.dynamic_linker = Some(&linker);
     // The program runs from the file's pages where it can.
     let process: Process =
         spawn.start_file(program.image.vmo(), program.size).map_err(|e| spawn_error(&program.path, e))?;

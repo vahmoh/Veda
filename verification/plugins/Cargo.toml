@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "plugins"
+description = "Checks that a dynamically linked program on Rust's standard library loads libraries at run time with libloading, as Veda's port has it"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "plugins"
+path = "source/main.rs"
+test = false
+bench = false
+
+[dependencies]
+libloading = { workspace = true }
+
+[lints]
+workspace = true

@@ -108,16 +108,23 @@ stage_musl_headers() {
 }
 stage musl_headers src_musl @MUSL_ARCH
 
+# GCC's runtime libraries (libgcc, libstdc++, libatomic) are static, for
+# statically linked programs, and shared (libgcc_s.so.1, libstdc++.so.6,
+# libatomic.so.1), for dynamically linked programs and shared libraries,
+# which share them, as on GNU/Linux: a process has one C++ runtime and one
+# unwinder.
 GCC_OPTIONS=(
-	--disable-nls --disable-multilib --disable-shared
+	--disable-nls --disable-multilib --enable-shared
 	--enable-threads=posix --enable-tls --enable-initfini-array
 	--disable-libssp --disable-libquadmath --disable-libgomp
 	--disable-libsanitizer --disable-libvtv --disable-libitm --disable-lto
 	--disable-plugin --disable-libstdcxx-pch --without-isl --without-zstd --disable-bootstrap
 	gcc_cv_libc_provides_ssp=yes
-	# Position-independent libraries (libgcc, libstdc++), as the C library
-	# is, so that -static-pie programs can use them too.
-	"CFLAGS_FOR_TARGET=-g -O2 -fPIE $PREFIX_MAP" "CXXFLAGS_FOR_TARGET=-g -O2 -fPIE $PREFIX_MAP"
+	# Position-independent code in the static libraries too, as in the C
+	# library, so that position-independent programs use them (-static-pie),
+	# and a shared library can hold them (-static-libstdc++: their
+	# thread-local storage, libstdc++'s, then works there).
+	"CFLAGS_FOR_TARGET=-g -O2 -fPIC $PREFIX_MAP" "CXXFLAGS_FOR_TARGET=-g -O2 -fPIC $PREFIX_MAP"
 )
 
 # C and C++: GCC is written in C++, so building the native GCC takes a C++
@@ -129,28 +136,36 @@ stage_gcc_cross() {
 		--with-sysroot="$SYSROOT" --enable-languages=c,c++ "${GCC_OPTIONS[@]}" MAKEINFO=true
 	quiet make-gcc.log make -j"$JOBS" all-gcc MAKEINFO=true
 	quiet install-gcc.log make install-gcc MAKEINFO=true
-	quiet make-libgcc.log make -j"$JOBS" all-target-libgcc MAKEINFO=true
-	quiet install-libgcc.log make install-target-libgcc MAKEINFO=true
+	# libgcc static alone, which the C library is built with: its shared
+	# library is linked with the C library (gcc_runtime_cross). GCC's
+	# Makefile passes no variables to the makes it runs but in MAKE.
+	quiet make-libgcc.log make -j"$JOBS" MAKE="make enable_shared=no" all-target-libgcc MAKEINFO=true
+	quiet install-libgcc.log make MAKE="make enable_shared=no" install-target-libgcc MAKEINFO=true
 }
 stage gcc_cross src_gcc binutils_cross musl_headers @GCC_OPTIONS @ROOT
 
 # Position-independent code, as systems built on musl have it, so that the
 # one libc.a links both fixed-address and position-independent
-# (-static-pie) programs.
+# (-static-pie) programs; and the objects of libc.so, the C library's
+# shared object, which dynamically linked programs and shared libraries
+# stand on and which is their dynamic linker. The POSIX layer is in both,
+# and changes more often than the rest: libc.so is linked with it below
+# (posix_layer), by musl's own rule, as libc.a takes it.
 stage_musl() {
 	local b=$BUILD/musl
 	rm -rf "$b" && mkdir -p "$b" && cd "$b"
 	quiet configure.log env CC=$TARGET-gcc "$SRC/musl/configure" --target=$TARGET --prefix=/system \
-		--syslibdir=/system/lib --disable-shared --enable-static CFLAGS=-fPIE
-	quiet make.log make -j"$JOBS"
-	quiet install.log make DESTDIR="$SYSROOT" install
+		--syslibdir=/system/lib --enable-shared --enable-static CFLAGS=-fPIE
+	quiet make.log make -j"$JOBS" SHARED_LIBS= all obj/ldso/dlstart.lo obj/ldso/dynlink.lo
+	quiet install.log make DESTDIR="$SYSROOT" SHARED_LIBS= install
 }
 stage musl src_musl gcc_cross
 
 # The POSIX layer changes more often than the rest: it is added last, as
 # one object that exports its interface and nothing else (no Rust or
-# compiler-builtins symbol can clash with the C library's).
-# `cargo automation` refreshes it in the same way when it changes.
+# compiler-builtins symbol can clash with the C library's), to libc.a and
+# into libc.so. `cargo automation` refreshes both in the same way when it
+# changes.
 stage_posix_layer() {
 	local b=$BUILD/posix-layer
 	rm -rf "$b" && mkdir -p "$b" && cd "$b"
@@ -163,25 +178,38 @@ stage_posix_layer() {
 	$TARGET-objcopy --strip-debug --remove-section=.llvmbc --remove-section=.llvmcmd "${keep[@]}" \
 		veda-all.o "$BUILD/veda.o"
 	$TARGET-ar rcs "$SYSROOT/system/lib/libc.a" "$BUILD/veda.o"
+	quiet libc.so.log make -C "$BUILD/musl" lib/libc.so VEDA_OBJS="$BUILD/veda.o"
+	cp "$BUILD/musl/lib/libc.so" "$SYSROOT/system/lib/libc.so"
 	# And its header for Veda's own interfaces, <veda/ipc.h>.
 	mkdir -p "$SYSROOT/system/include/veda"
 	cp "$PORTS"/../libraries/posix/include/veda/*.h "$SYSROOT/system/include/veda/"
 }
 stage posix_layer musl "$POSIX_LIB" @POSIX_EXPORTS
 
-# The C++ library checks the C library by linking programs with it, so it
-# comes once the C library is complete (the POSIX layer's content does not
-# matter to it).
-# libstdc++, and libatomic, which has the atomic operations the processor
-# cannot do in one instruction a compiler can emit (16-byte ones, which a
-# web engine's allocator does: without the indirect functions musl has
-# not, it does them under locks).
-stage_libstdcxx_cross() {
+# GCC's runtime libraries, once the C library is complete (the POSIX
+# layer's content does not matter to them): libgcc again, built anew with
+# its shared library, which is linked with the C library's; libstdc++,
+# which checks the C library by linking programs with it; and libatomic,
+# which has the atomic operations the processor cannot do in one
+# instruction a compiler can emit (16-byte ones, which a web engine's
+# allocator does: without the indirect functions musl has not, it does
+# them under locks, one set of them in a process that shares it).
+stage_gcc_runtime_cross() {
 	cd "$BUILD/gcc-cross"
+	rm -rf "$TARGET/libgcc"
+	quiet make-libgcc-shared.log make -j"$JOBS" all-target-libgcc MAKEINFO=true
+	quiet install-libgcc-shared.log make install-target-libgcc MAKEINFO=true
 	quiet make-libstdcxx.log make -j"$JOBS" all-target-libstdc++-v3 all-target-libatomic MAKEINFO=true
 	quiet install-libstdcxx.log make install-target-libstdc++-v3 install-target-libatomic MAKEINFO=true
+	local library
+	for library in libgcc_s.so.1 libstdc++.so.6 libatomic.so.1; do
+		if ! [ -f "$CROSS/$TARGET/lib/$library" ]; then
+			echo "GCC's build made no $library (see $BUILD/gcc-cross)" >&2
+			exit 1
+		fi
+	done
 }
-stage libstdcxx_cross gcc_cross musl
+stage gcc_runtime_cross gcc_cross musl
 
 # --- the media libraries, for mediadec ---------------------------------------
 
@@ -212,9 +240,11 @@ expect_defines() {
 # Both bit depths (10-bit video is common), the assembly (the
 # architecture's assembler: DAV1D_BINARIES), and the tests, for checkasm,
 # which compares each assembly function with the C one: a release build
-# would leave those out (trim_dsp).
+# would leave those out (trim_dsp). Its programs are static and
+# position-independent (the cross file's flags): meson's b_pie would link
+# them dynamically (-pie).
 DAV1D_OPTIONS=(
-	--prefix=/system --libdir=lib --buildtype=release --default-library=static -Db_pie=true
+	--prefix=/system --libdir=lib --buildtype=release --default-library=static -Db_pie=false
 	-Denable_asm=true -Denable_tests=true -Denable_tools=false -Dbitdepths=8,16 -Dtrim_dsp=false
 )
 
@@ -237,7 +267,8 @@ stage_dav1d() {
 	# dav1d defines _GNU_SOURCE itself only on the systems it knows (Linux):
 	# without it, musl's headers under -std=c99 hide clock_gettime and the
 	# rest of POSIX.
-	c_args = ['-D_GNU_SOURCE']
+	c_args = ['-D_GNU_SOURCE', '-fPIE']
+	c_link_args = ['-static-pie']
 	EOF
 	quiet "$b-setup.log" meson setup "$b" "$SRC/dav1d" --cross-file "$BUILD/dav1d.cross" "${DAV1D_OPTIONS[@]}"
 	expect_defines "$b/config.h" "HAVE_ASM 1" "CONFIG_8BPC 1" "CONFIG_16BPC 1"
@@ -366,7 +397,7 @@ stage_gcc_native() {
 	quiet make-gcc.log make -j"$JOBS" all-gcc MAKEINFO=true
 	quiet make-libgcc.log make -j"$JOBS" all-target-libgcc MAKEINFO=true
 }
-stage gcc_native src_gcc host_deps binutils_cross gcc_cross libstdcxx_cross musl @GCC_OPTIONS @PREFIX_MAP @ROOT
+stage gcc_native src_gcc host_deps binutils_cross gcc_cross gcc_runtime_cross musl @GCC_OPTIONS @PREFIX_MAP @ROOT
 
 # /system as the image installs it: the programs (stripped), GCC's own
 # files, the C library and its headers; no documentation, no duplicates.
@@ -403,6 +434,9 @@ stage_native() {
 	version=$(port gcc version)
 	cp -r "$gi/libexec/gcc/$TARGET/$version" "$NATIVE/system/libexec/gcc/$TARGET/"
 	cp -r "$gi/lib/gcc/$TARGET/$version" "$NATIVE/system/lib/gcc/$TARGET/"
+	# libgcc's shared library, and the linker scripts that link it
+	# (libgcc_s.so, libgcc_s_asneeded.so).
+	cp "$gi"/lib/libgcc_s* "$NATIVE/system/lib/"
 	rm -rf "$NATIVE/system/libexec/gcc/$TARGET/$version/install-tools" \
 		"$NATIVE/system/lib/gcc/$TARGET/$version/install-tools" \
 		"$NATIVE/system/lib/gcc/$TARGET/$version/plugin"
