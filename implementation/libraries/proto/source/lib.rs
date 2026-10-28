@@ -35,7 +35,7 @@ pub mod wlan;
 pub use fs::vfs;
 pub use init::{launcher, registry};
 
-use rt::object::Channel;
+use runtime::object::Channel;
 
 /// Connects to a named service through the registry channel the process
 /// received at startup. Returns the client end of a new connection.
@@ -57,14 +57,14 @@ pub enum ServiceError {
     NotFound,
 }
 
-static REGISTRY: rt::sync::Mutex<Option<registry::Client>> = rt::sync::Mutex::new(None);
+static REGISTRY: runtime::sync::Mutex<Option<registry::Client>> = runtime::sync::Mutex::new(None);
 
 /// Runs `f` with this process's registry client. Calls from several threads
 /// are serialised so their replies cannot interleave.
 pub fn with_registry<R>(f: impl FnOnce(&registry::Client) -> R) -> Result<R, ServiceError> {
     let mut slot = REGISTRY.lock();
     if slot.is_none() {
-        let h = rt::env::take_handle(abi::startup::role::REGISTRY).ok_or(ServiceError::Unavailable)?;
+        let h = runtime::env::take_handle(abi::startup::role::REGISTRY).ok_or(ServiceError::Unavailable)?;
         *slot = Some(registry::Client::new(Channel::from_handle(h)));
     }
     Ok(f(slot.as_ref().unwrap()))

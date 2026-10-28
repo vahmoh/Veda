@@ -16,9 +16,9 @@ The rules are in [Coding conventions](CODING.md#language-and-dependencies).
 In Veda's terms:
 
 * **`no_std` where there is no `std`.** Veda's libraries and its programs
-  on `rt` alone are `no_std` with `alloc`. Those programs are built for
-  `x86_64-unknown-linux-musl` but link nothing of Linux's or musl's, so a
-  crate that reaches system calls or the C library through
+  on `runtime` alone are `no_std` with `alloc`. Those programs are built
+  for `x86_64-unknown-linux-musl` but link nothing of Linux's or musl's, so
+  a crate that reaches system calls or the C library through
   `cfg(target_os = "linux")` or `cfg(unix)`, or detects the processor
   through `std`, does not fit them. On the soft-float kernel and loader,
   crates run their portable code. Programs on Rust's standard library, the
@@ -110,7 +110,7 @@ libffi, for `ctypes`), each a port ([Python on Veda](PYTHON.md)).
 | The hypervisor's ACPI tables (`hv`, `acpi::asm`) | acpi_tables 0.2: no GPIO, I2C or SPI descriptors, which the guest's DSDT uses |
 | `iommu`, `gpio`, `hv`'s devices, `initrd`, `bootinfo`, `abi` | No crate drives VT-d or Intel's GPIO pads; linux-loader: needs `std`; cpio, tar: the initrd's files are page-aligned for mapping in place; the rest is Veda's ABI |
 | The kernel's heap, frame allocator, locks and x86 structures | buddy_system_allocator, bitmap-allocator: the frame allocator works before the heap and keeps DMA's address limits; spin 0.12: the locks detect recursion per processor and serve TLB shootdowns while spinning; x86_64 0.15: no EPT, VT-d or VMX |
-| Calendar arithmetic (`rt::time`, the kernel's own) | time 0.3: two short functions (Howard Hinnant's) do |
+| Calendar arithmetic (`runtime::time`, the kernel's own) | time 0.3: two short functions (Howard Hinnant's) do |
 
 ### Networking
 

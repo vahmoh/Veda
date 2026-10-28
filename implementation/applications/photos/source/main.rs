@@ -114,7 +114,7 @@ impl Photos {
             current: 0,
             keyboard_nav: false,
             reveal_selection: false,
-            loader: Loader::start(Budget::for_memory(rt::object::system_info().map_or(0, |i| i.total_memory))),
+            loader: Loader::start(Budget::for_memory(runtime::object::system_info().map_or(0, |i| i.total_memory))),
             shell: ShellLink::start(),
             vfs: proto::connect(vfs::NAME).ok().map(vfs::Client::new),
             pictures: Vec::new(),
@@ -396,7 +396,7 @@ impl Photos {
     }
 
     pub fn show_toast(&mut self, text: &str, icon: Icon) {
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         self.toast = Some(Toast { text: text.to_string(), icon, shown_at: now, until: now + 2_800_000_000 });
     }
 
@@ -535,7 +535,7 @@ impl App for Photos {
 fn main() {
     // `photos [PATH]`: a picture opens in the viewer with its folder in the library; a folder
     // opens in the library.
-    let args = rt::env::args();
+    let args = runtime::env::args();
     let arg = args.get(1).filter(|a| !a.is_empty()).cloned();
     let mut app = Photos::new(catalog::pictures_dir());
     let mut file = None;

@@ -31,9 +31,9 @@ use alloc::sync::Arc;
 use alloc::vec;
 
 use abi::Rights;
-use rt::object::Vmo;
-use rt::sync::Mutex;
-use rt::vm;
+use runtime::object::Vmo;
+use runtime::sync::Mutex;
+use runtime::vm;
 
 use crate::error::{self, SysResult};
 use crate::linux::errno::*;

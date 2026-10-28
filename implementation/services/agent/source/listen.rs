@@ -430,6 +430,6 @@ impl Listener {
 
 impl Drop for Listener {
     fn drop(&mut self) {
-        self.stop(rt::time::now_ns());
+        self.stop(runtime::time::now_ns());
     }
 }

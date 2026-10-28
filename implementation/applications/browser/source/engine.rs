@@ -147,19 +147,19 @@ fn c(s: &str) -> CString {
 pub struct Engine {
     /// What wakes the browser, which the engine signals (its thread holds
     /// a pointer to it, so it never moves).
-    wake: Box<rt::object::Event>,
+    wake: Box<runtime::object::Event>,
 }
 
 unsafe extern "C" fn wake(context: *mut c_void) {
     // SAFETY: the context is the engine's wake event, which lives as long
     // as the engine runs (Engine owns it and stops the engine first).
-    let event = unsafe { &*(context as *const rt::object::Event) };
+    let event = unsafe { &*(context as *const runtime::object::Event) };
     let _ = event.signal();
 }
 
 impl Engine {
     pub fn start(config: &Config) -> Result<Engine, String> {
-        let event = rt::object::Event::create().map_err(|e| format!("an event to wake the browser: {e:?}"))?;
+        let event = runtime::object::Event::create().map_err(|e| format!("an event to wake the browser: {e:?}"))?;
         let wake_event = Box::new(event);
         let (data, cache, application) = (c(config.data_dir), c(config.cache_dir), c(config.application));
         let (downloads, temporary) = (c(config.downloads_dir), c(config.temporary_dir));
@@ -176,7 +176,7 @@ impl Engine {
             refresh_rate: config.refresh_rate,
             scale: config.scale,
             wake: Some(wake),
-            wake_context: &*wake_event as *const rt::object::Event as *mut c_void,
+            wake_context: &*wake_event as *const runtime::object::Event as *mut c_void,
         };
         // SAFETY: the configuration's strings live through the call (the
         // engine copies them), and its wake context as long as the engine.

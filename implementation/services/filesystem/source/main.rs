@@ -119,8 +119,8 @@ use proto::fs::{
     lock_event, lock_kind, open_flags, seek, socket_kind, vfs,
 };
 use proto::init::ClientIdentity;
-use rt::object::{Channel, Handle, Vmo};
-use rt::println;
+use runtime::object::{Channel, Handle, Vmo};
+use runtime::println;
 
 use dev::Dev;
 use filesystem::access::{self, Connections, PACKAGES, PRIVATE};
@@ -135,7 +135,7 @@ use filesystem::{HOME, USER};
 use persist::Store;
 use sockets::Sockets;
 
-rt::entry!(main);
+runtime::entry!(main);
 
 const SYSTEM: &str = "system";
 const DEV: &str = "dev";
@@ -510,7 +510,7 @@ impl Fs {
         if more == 0 {
             return Ok(());
         }
-        let free = rt::object::system_info().map_or(0, |i| i.free_memory);
+        let free = runtime::object::system_info().map_or(0, |i| i.free_memory);
         if (more as u64).saturating_add(MEMORY_RESERVE) > free {
             return Err(FsError::NoSpace);
         }
@@ -520,7 +520,7 @@ impl Fs {
     /// Records a change to the writable file system.
     fn changed(&mut self) {
         if self.store.is_some() {
-            let now = rt::time::now_ns();
+            let now = runtime::time::now_ns();
             let first = self.dirty.map_or(now, |(first, _)| first);
             self.dirty = Some((first, now));
         }
@@ -548,7 +548,7 @@ impl Fs {
         if let Err(e) = r {
             println!("cannot save the home directory: {}", e);
             self.dirty = Some(dirty);
-            self.retry_at = rt::time::now_ns().saturating_add(SAVE_RETRY_NS);
+            self.retry_at = runtime::time::now_ns().saturating_add(SAVE_RETRY_NS);
         }
         r
     }
@@ -1233,7 +1233,7 @@ impl vfs::Server for Session<'_> {
             // left to the rest of the system.
             self.fs.shm.find(&comps)?;
             let bytes = self.fs.shm.bytes();
-            let free = rt::object::system_info().map(|i| i.free_memory).unwrap_or(0);
+            let free = runtime::object::system_info().map(|i| i.free_memory).unwrap_or(0);
             return Ok(Space { total: bytes + free.saturating_sub(MEMORY_RESERVE), used: bytes, persistent: false });
         }
         let t = self.fs.tree(m)?;
@@ -1246,7 +1246,7 @@ impl vfs::Server for Session<'_> {
                 // Kept in memory: as much as the free memory allows, but for
                 // what is left to the rest of the system.
                 let bytes = t.measure(tree::ROOT).bytes as u64;
-                let free = rt::object::system_info().map(|i| i.free_memory).unwrap_or(0);
+                let free = runtime::object::system_info().map(|i| i.free_memory).unwrap_or(0);
                 let room = free.saturating_sub(MEMORY_RESERVE);
                 Space { total: bytes + room, used: bytes, persistent: false }
             }
@@ -1385,8 +1385,8 @@ impl vfs::Server for Session<'_> {
             _ => drop(self.fs.tree(m)?.lookup(&inside)?),
         }
         let mut secret = [0u8; LOAN_SIZE];
-        rt::object::try_random_bytes(&mut secret).map_err(|_| FsError::Io)?;
-        self.fs.loans.lend(self.id, &comps, secret, rt::time::now_ns())?;
+        runtime::object::try_random_bytes(&mut secret).map_err(|_| FsError::Io)?;
+        self.fs.loans.lend(self.id, &comps, secret, runtime::time::now_ns())?;
         Ok(Bytes(secret.to_vec()))
     }
 
@@ -1402,7 +1402,7 @@ impl vfs::Server for Session<'_> {
         {
             return Err(FsError::TooMany);
         }
-        let Some(taken) = self.fs.loans.take(&loan.0, &comps, rt::time::now_ns()) else {
+        let Some(taken) = self.fs.loans.take(&loan.0, &comps, runtime::time::now_ns()) else {
             if self.view.is_none() {
                 return Err(FsError::Denied);
             }
@@ -1516,7 +1516,7 @@ impl vfs::Server for Session<'_> {
             return Ok(Bytes(secret.to_vec()));
         }
         let mut secret = [0u8; LOCK_OWNER_SIZE];
-        rt::object::try_random_bytes(&mut secret).map_err(|_| FsError::Io)?;
+        runtime::object::try_random_bytes(&mut secret).map_err(|_| FsError::Io)?;
         self.fs.owners.add(self.id, koid, secret);
         Ok(Bytes(secret.to_vec()))
     }
@@ -1817,7 +1817,7 @@ impl file::Server for FileSession<'_> {
 
 /// A writable tree with `/tmp` and an empty `/home`.
 fn fresh_ram() -> Tree {
-    let mut ram = Tree::new(false, device::RAM, rt::time::unix_time_ns);
+    let mut ram = Tree::new(false, device::RAM, runtime::time::unix_time_ns);
     let _ = ram.mkdir_all(&[filesystem::TMP]);
     let _ = ram.mkdir_all(&[HOME, USER]);
     ram
@@ -1827,7 +1827,7 @@ fn fresh_ram() -> Tree {
 /// directory from the home disk or, failing that, the samples. A `live`
 /// system keeps the home directory in memory without looking for a disk.
 fn build(archive: &initrd::Archive<'static>, image: SystemImage, live: bool) -> Fs {
-    let mut system = Tree::new(true, device::SYSTEM, rt::time::unix_time_ns);
+    let mut system = Tree::new(true, device::SYSTEM, runtime::time::unix_time_ns);
     for f in archive.files() {
         if let Ok(comps) = tree::components(f.path) {
             let _ = system.add_file(&comps, Data::Static(f.data));
@@ -1883,7 +1883,7 @@ fn build(archive: &initrd::Archive<'static>, image: SystemImage, live: bool) -> 
         orphans: BTreeSet::new(),
         connections: Connections::new(),
         sockets: Sockets::new(),
-        shm: Shm::new(rt::time::unix_time_ns),
+        shm: Shm::new(runtime::time::unix_time_ns),
         loans: Loans::new(),
         home_len: Cell::new(None),
         locks: Locks::new(),
@@ -1899,7 +1899,7 @@ fn build(archive: &initrd::Archive<'static>, image: SystemImage, live: bool) -> 
 }
 
 fn main() -> i32 {
-    let Some(initrd_vmo) = rt::env::take_handle(abi::startup::role::INITRD).map(Vmo::from_handle) else {
+    let Some(initrd_vmo) = runtime::env::take_handle(abi::startup::role::INITRD).map(Vmo::from_handle) else {
         println!("no initrd handle");
         return 1;
     };
@@ -1915,7 +1915,7 @@ fn main() -> i32 {
         return 1;
     };
     let image = SystemImage { vmo: initrd_vmo, bytes };
-    let mut fs = build(&archive, image, rt::env::args().iter().any(|a| a == "live"));
+    let mut fs = build(&archive, image, runtime::env::args().iter().any(|a| a == "live"));
 
     let Ok(listener) = proto::register(vfs::NAME) else {
         println!("cannot register the vfs service");
@@ -2065,7 +2065,7 @@ fn main() -> i32 {
                 next_id += 1;
             }
         }
-        if rt::time::now_ns() >= fs.save_deadline() {
+        if runtime::time::now_ns() >= fs.save_deadline() {
             let _ = fs.save();
         }
     }

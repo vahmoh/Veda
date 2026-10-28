@@ -10,7 +10,7 @@
 
 use abi::Error;
 use abi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE, WRITABLE};
-use rt::object::Socket;
+use runtime::object::Socket;
 
 use crate::linux::errno::{EAGAIN, EINTR, EPIPE, ERESTARTSYS};
 use crate::{error, interrupt, signal, tty};
@@ -24,7 +24,7 @@ pub fn interrupted(deadline: u64) -> isize {
 /// Waits as a blocking read or write of an eventfd or a timer does, until
 /// `handle` has one of `signals`, or a signal is to be acted on
 /// (`ERESTARTSYS`).
-pub fn wait_signal(handle: &rt::object::Handle, signals: u32) -> Result<(), isize> {
+pub fn wait_signal(handle: &runtime::object::Handle, signals: u32) -> Result<(), isize> {
     match interrupt::wait_one(handle, signals, abi::DEADLINE_INFINITE) {
         Ok(_) => Ok(()),
         Err(Error::Interrupted) => Err(ERESTARTSYS),
@@ -115,8 +115,8 @@ impl Stream {
     /// waited for when that is 0 too).
     fn read_timed(&self, buf: &mut [u8], min: u8, time: u8) -> Result<usize, isize> {
         let min = (min as usize).min(buf.len());
-        let interval = rt::time::Duration::from_millis(100 * time as u64);
-        let mut deadline = rt::time::deadline_after(interval);
+        let interval = runtime::time::Duration::from_millis(100 * time as u64);
+        let mut deadline = runtime::time::deadline_after(interval);
         let mut got = 0;
         loop {
             match self.socket.read(&mut buf[got..]) {
@@ -126,7 +126,7 @@ impl Stream {
                         return Ok(got);
                     }
                     // The time between bytes starts again.
-                    deadline = rt::time::deadline_after(interval);
+                    deadline = runtime::time::deadline_after(interval);
                 }
                 Err(Error::PeerClosed) => return Ok(got),
                 Err(Error::ShouldWait) => {}
@@ -203,7 +203,7 @@ impl Stream {
     /// Another handle to the endpoint, for another process, with the
     /// access a descriptor has and no more: the read end of a pipe cannot
     /// be written there either.
-    pub fn shared_handle(&self, readable: bool, writable: bool) -> Result<rt::object::Handle, isize> {
+    pub fn shared_handle(&self, readable: bool, writable: bool) -> Result<runtime::object::Handle, isize> {
         let mut rights = self.socket.0.basic_info().map_err(error::kernel)?.rights;
         if !readable {
             rights &= !abi::Rights::READ.0;

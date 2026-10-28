@@ -7,7 +7,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use proto::fs::{Stat, vfs};
-use rt::sync::Mutex;
+use runtime::sync::Mutex;
 
 use crate::error;
 use crate::fd::{self, Object};
@@ -93,7 +93,7 @@ pub fn stat_resolved(r: &Resolved) -> Result<Stat, isize> {
 }
 
 /// The user and group POSIX programs run as.
-pub const UID: u32 = rt::process::UID;
+pub const UID: u32 = runtime::process::UID;
 
 /// A time of the VFS's (nanoseconds since 1970-01-01 in local time, as Veda
 /// shows times; 0: unknown) as POSIX has it, in UTC, local time being

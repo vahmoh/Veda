@@ -10,8 +10,8 @@ use alloc::vec::Vec;
 
 use gfx::{Canvas, Damage, DrawCache, Rect};
 use proto::display::{self as dp, Cursor, WindowEvent, WindowSpec, WindowState, display};
-use rt::object::{Channel, Vmo};
-use rt::vm::Mapping;
+use runtime::object::{Channel, Vmo};
+use runtime::vm::Mapping;
 
 /// Errors creating or driving a window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -313,7 +313,7 @@ impl Window {
         let index = self.back_index();
         let wire = |r: &Rect| dp::Rect::new(r.x, r.y, r.w as u32, r.h as u32);
         let (rects, overlays) = (damage.iter().map(wire).collect(), overlays.iter().map(wire).collect());
-        self.presented_ns = rt::time::now_ns();
+        self.presented_ns = runtime::time::now_ns();
         self.display
             .present(self.id, index, rects, subsurfaces.to_vec(), overlays)
             .map_err(WindowError::Ipc)?

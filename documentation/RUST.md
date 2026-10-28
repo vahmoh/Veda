@@ -6,7 +6,7 @@
 Veda's programs are written in Rust: the applications, and the services
 that gain from it, on the standard library; what the standard library
 stands on or runs before, what drives hardware and what must answer in
-time, on Veda's own runtime alone (`rt`, `no_std`, built with the
+time, on Veda's own runtime alone (`runtime`, `no_std`, built with the
 development machine's Rust; see
 [Architecture](ARCHITECTURE.md#user-space)). This document covers
 programs on the standard library: writing and building them, how they
@@ -32,18 +32,18 @@ It uses:
 
 - **Veda's libraries**: windows and widgets (`ui`), the services'
   protocols (`proto`), files (`files`), the network (`net`, `tls`,
-  `web`), kernel objects (`rt::object`).
+  `web`), kernel objects (`runtime::object`).
 - **The standard library** for what it does: threads, channels and locks,
   processes, sockets and names (`std::net`), and small files
   (`apps_common::store` reads an application's own within a limit and
   replaces them in one step). A thread sets its own priority with
-  `rt::thread::set_priority`, or `rt::thread::Builder` starts it with
-  one, up to `NORMAL` in an application
-  ([The kernel](ARCHITECTURE.md#the-kernel)). `net` adds what is Veda's
-  own (the network's state, Wi-Fi, sockets a `ui` event loop can wait
-  on), and `files` moves large files, such as pictures and music, in one
-  piece of shared memory, where the standard library's reads and writes
-  take a message every few kilobytes.
+  `runtime::thread::set_priority`, or `runtime::thread::Builder` starts it
+  with one, up to `NORMAL` in an application
+  ([The kernel](ARCHITECTURE.md#the-kernel)). `net` adds what is Veda's own
+  (the network's state, Wi-Fi, sockets a `ui` event loop can wait on), and
+  `files` moves large files, such as pictures and music, in one piece of
+  shared memory, where the standard library's reads and writes take a
+  message every few kilobytes.
 - **Crates that need the standard library**, declared in the workspace
   like any other ([Libraries](DEPENDENCIES.md) has the rules). Most build
   as released. Those they stand on to reach the operating system (`libc`,
@@ -68,14 +68,14 @@ reports as a crash.
 > once (about half an hour).
 
 `cargo automation build` builds every program that
-`automation/source/components.rs` lists as `Program::std` (those on `rt`
-alone are `Program::native`) in `target/std`, with the toolchain's Rust
-and the C toolchain's driver, after bringing the C library's POSIX layer
-up to date. It empties `target/std` when the toolchain's Rust is built
-again (Cargo knows a compiler only by its version), and links the
-programs again when the POSIX layer changes, which Cargo does not see.
-`cargo automation clippy` uses the toolchain's Clippy: the development
-machine's does not know Veda's target.
+`automation/source/components.rs` lists as `Program::std` (those on
+`runtime` alone are `Program::native`) in `target/std`, with the
+toolchain's Rust and the C toolchain's driver, after bringing the C
+library's POSIX layer up to date. It empties `target/std` when the
+toolchain's Rust is built again (Cargo knows a compiler only by its
+version), and links the programs again when the POSIX layer changes, which
+Cargo does not see. `cargo automation clippy` uses the toolchain's Clippy:
+the development machine's does not know Veda's target.
 
 By hand, the toolchain's compiler builds for Veda and the C toolchain's
 driver links:
@@ -148,15 +148,15 @@ Sockets go to the processes a program starts, which share them as in C.
 has `MetadataExt`: the fields of `struct stat`.
 
 **Veda's libraries** (`ui`, `proto`, `files`, ...) are `no_std` and
-build for the target as they are, `rt` fitting itself to it. The
+build for the target as they are, `runtime` fitting itself to it. The
 standard library is the program's runtime (its entry point, panic handler
-and C symbols), and `rt`'s threads are its threads, each setting its own
-priority. The POSIX layer keeps the startup message's descriptors,
+and C symbols), and `runtime`'s threads are its threads, each setting its
+own priority. The POSIX layer keeps the startup message's descriptors,
 terminal and registry, and gives an application the handles of its own
 roles (`veda_startup_handle`) and a registry channel of its own
-(`veda_registry`), through which `proto` reaches services and registers
-the program's. `rt`'s heap stays the global allocator (unless a program
-leaves out `rt`'s `runtime` feature); musl's `malloc` serves the C
+(`veda_registry`), through which `proto` reaches services and registers the
+program's. `runtime`'s heap stays the global allocator (unless a program
+leaves out `runtime`'s `runtime` feature); musl's `malloc` serves the C
 library.
 
 ## Limits

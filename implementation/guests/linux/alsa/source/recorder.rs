@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use abi::{Error, WaitItem, signals};
 use proto::audio::{Ring, ring::flags};
-use rt::object::Event;
-use rt::time::now_ns;
+use runtime::object::Event;
+use runtime::time::now_ns;
 
 use crate::pcm::Pcm;
 use crate::{CHANNELS, RATE};
@@ -121,7 +121,7 @@ impl Recorder {
             } else {
                 let mut items =
                     [WaitItem { handle: input.wake_event.raw(), signals: signals::SIGNALED, ..Default::default() }];
-                match rt::object::wait_many(&mut items, now_ns() + 500_000_000) {
+                match runtime::object::wait_many(&mut items, now_ns() + 500_000_000) {
                     Ok(_) | Err(Error::TimedOut) => {}
                     // The wait was refused (the monitor at its limits):
                     // not at once again.

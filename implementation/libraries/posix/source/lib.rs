@@ -60,7 +60,7 @@
 //! The layer is built as a static library for the architecture's bare-metal
 //! target (`x86_64-unknown-none` on AMD64) and
 //! linked into musl's `libc.a` as one object that exports only these
-//! symbols. Its own memory comes from `rt`'s heap, not from `malloc`.
+//! symbols. Its own memory comes from `runtime`'s heap, not from `malloc`.
 
 #![no_std]
 
@@ -112,8 +112,8 @@ mod vfs;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use abi::startup::role;
-use rt::object::Vmo;
-use rt::sync::Mutex;
+use runtime::object::Vmo;
+use runtime::sync::Mutex;
 
 /// The bootstrap channel the kernel passed the process, stored by `_start`
 /// (by the dynamic linker's, in a dynamically linked program).
@@ -141,19 +141,19 @@ pub extern "C" fn __veda_startup() {
         return;
     }
     let _layer = interrupt::Layer::enter();
-    rt::env::adopt(__veda_bootstrap.swap(0, Ordering::Relaxed));
-    let entries = rt::env::vars();
+    runtime::env::adopt(__veda_bootstrap.swap(0, Ordering::Relaxed));
+    let entries = runtime::env::vars();
     let inherited = inherit::Inherited::parse(entries.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     *INHERITED.lock() = (inherited.ignored, inherited.mask, inherited.nice);
     if let Some((top, size)) = inherited.main_stack {
         thread::set_main_stack(top, size);
     }
-    vfs::set_cwd(rt::env::cwd());
-    if let Some(h) = rt::env::take_handle(role::TERMINAL) {
+    vfs::set_cwd(runtime::env::cwd());
+    if let Some(h) = runtime::env::take_handle(role::TERMINAL) {
         tty::adopt(Vmo::from_handle(h));
     }
-    if let Some(h) = rt::env::take_handle(role::PARENT) {
-        process::adopt_parent(rt::object::Process::from_handle(h));
+    if let Some(h) = runtime::env::take_handle(role::PARENT) {
+        process::adopt_parent(runtime::object::Process::from_handle(h));
     }
     io::adopt_startup_fds(&inherited);
 }
@@ -181,7 +181,7 @@ pub extern "C" fn __veda_init() {
     signal::inherit(ignored, mask);
     sched::inherit(nice);
     #[cfg(target_os = "none")]
-    let _ = rt::sys::call(abi::nr::SIGNAL_ENTRY_SET, [architecture::signal::entry_address(), 0, 0, 0, 0, 0]);
+    let _ = runtime::sys::call(abi::nr::SIGNAL_ENTRY_SET, [architecture::signal::entry_address(), 0, 0, 0, 0, 0]);
 }
 
 /// A Linux system call (from `__veda_syscall`, which passes `caller`: where
@@ -223,12 +223,12 @@ unsafe extern "C" fn syscall_gate(
 /// layer for its memory).
 #[cfg(target_os = "none")]
 #[global_allocator]
-static HEAP: rt::heap::Heap = rt::heap::Heap::new();
+static HEAP: runtime::heap::Heap = runtime::heap::Heap::new();
 
 #[cfg(target_os = "none")]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     // Formatted without allocating, in case the heap is what failed.
-    rt::io::log_without_allocating(format_args!("POSIX layer panic: {info}\n"));
+    runtime::io::log_without_allocating(format_args!("POSIX layer panic: {info}\n"));
     process::exit_by_signal(linux::sig::ABRT)
 }

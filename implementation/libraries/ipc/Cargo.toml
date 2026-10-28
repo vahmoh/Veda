@@ -12,7 +12,7 @@ license.workspace = true
 path = "source/lib.rs"
 
 [dependencies]
-rt = { workspace = true, default-features = false }
+runtime = { workspace = true, default-features = false }
 abi = { workspace = true }
 
 [lints]

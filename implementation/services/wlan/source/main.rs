@@ -65,14 +65,14 @@ use proto::wlan::{
     ConnState, FailReason, LogEntry, MLME_EVENT, MlmeEvent, PhyError, PhyInfo, RADIO_STATE_EVENT, RadioState,
     WLAN_EVENT, WlanCounters, WlanEvent, WlanStatus, wlan, wlanphy,
 };
-use rt::object::Channel;
-use rt::println;
+use runtime::object::Channel;
+use runtime::println;
 
 use conn::{Current, Request};
 use radio::Radio;
 use scan::{Scan, Table};
 
-rt::entry!(main);
+runtime::entry!(main);
 
 /// Lines kept in the connection log.
 const LOG_LINES: usize = 200;
@@ -109,7 +109,7 @@ const KEY_NETDEV_LINK: u64 = 6;
 const KEY_DYNAMIC: u64 = 100;
 
 pub fn now_ms() -> u64 {
-    rt::time::now_ns() / 1_000_000
+    runtime::time::now_ns() / 1_000_000
 }
 
 /// The kernel's random number generator, for nonces and SAE.
@@ -117,7 +117,7 @@ pub struct KernelRandom;
 
 impl ::wlan::crypto::Random for KernelRandom {
     fn fill(&mut self, buf: &mut [u8]) {
-        rt::object::random_bytes(buf);
+        runtime::object::random_bytes(buf);
     }
 }
 

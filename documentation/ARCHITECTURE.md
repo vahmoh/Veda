@@ -213,8 +213,8 @@ the system's logs (see [the driver VM](DRIVERVM.md)).
   left (`dmesg smp`). The wall clock starts from the RTC, in UTC; the `tz=`
   boot option gives local time. Programs read the clocks themselves, with
   no system call: the TSC scaled as the kernel scales it, by values it sets
-  as it starts and never changes (`clock_info`, which `rt::time` asks for
-  once), as programs read the time thousands of times a second.
+  as it starts and never changes (`clock_info`, which `runtime::time` asks
+  for once), as programs read the time thousands of times a second.
 - **Processors and scheduling.** Each processor turns its caches on as it
   starts and, with Intel's hardware P-states, chooses its own speed, up to
   turbo. The scheduler has 32 priorities, round-robin within each, 10 ms
@@ -266,17 +266,17 @@ each is:
 | Kind | Programs | Built |
 |------|----------|-------|
 | On Rust's standard library (`Program::std`) | the applications, and the services that gain from it (the shell, the agent) | for Veda's own Rust target, linked by GCC with the C library: POSIX programs, as C programs are |
-| On `rt` alone (`Program::native`, `#![no_std]`) | what the standard library stands on or runs before (`init`, the file system, the network stack), what drives hardware and what must answer in time (the window system, the sound mixer) | for Linux's musl target (hard-float SSE; the kernel is soft-float), linked by `rust-lld` with nothing of Linux's or musl's: position-independent, `DT_RELR`-packed, marked by a `elf::veda` note |
+| On `runtime` alone (`Program::native`, `#![no_std]`) | what the standard library stands on or runs before (`init`, the file system, the network stack), what drives hardware and what must answer in time (the window system, the sound mixer) | for Linux's musl target (hard-float SSE; the kernel is soft-float), linked by `rust-lld` with nothing of Linux's or musl's: position-independent, `DT_RELR`-packed, marked by a `elf::veda` note |
 
-- **`rt`** (`implementation/libraries/rt`) is Veda's runtime: system
-  calls and kernel objects, the heap (TLSF over private memory, returning
-  pages that stay free to the system), threads with guard pages, futex
-  locks that make no system call uncontended, time, logging and process
-  creation. In
-  a program on the standard library, the standard library is the runtime
-  (entry point, panics, threads) and the POSIX layer holds the startup
-  handles, but `rt`'s heap stays the global allocator.
-- **Process creation** happens in user space (`rt::process::Spawn`):
+- **`runtime`** (`implementation/libraries/runtime`) is Veda's runtime:
+  system calls and kernel objects, the heap (TLSF over private memory,
+  returning pages that stay free to the system), threads with guard pages,
+  futex locks that make no system call uncontended, time, logging and
+  process creation. In a program on the standard library, the standard
+  library is the runtime (entry point, panics, threads) and the POSIX layer
+  holds the startup handles, but `runtime`'s heap stays the global
+  allocator.
+- **Process creation** happens in user space (`runtime::process::Spawn`):
   create a process, map the program's image, and start a thread with a
   bootstrap channel carrying the startup message (arguments, environment,
   working directory, role-tagged handles, where the main thread's stack
@@ -915,7 +915,7 @@ by `cargo automation linux`.
   `proto::gpu::Session` states, which `gl` checks before mapping it: the
   renderer is not trusted with a client's memory.
 - **Waiting.** The renderer waits for its clients and for the GPU in one
-  `poll` of Linux's files: a bridge watch (`rt::guest::Watch`) for
+  `poll` of Linux's files: a bridge watch (`runtime::guest::Watch`) for
   connections and one for each connection's requests, and for each
   context's oldest pending fence the GPU driver's sync_file of it
   (`vr_fence_fd`, from Gallium's `fence_get_fd`), readable once the fence
@@ -1106,7 +1106,7 @@ the actions every `ui` application offers over the `agentapp` protocol
 | `cargo automation script verification/real/...` | by hand: the scripts that need the Internet and a Deepgram key |
 
 - **Host unit tests** cover every library with platform-independent logic,
-  in one Cargo run (`rt`'s in one of its own), and a test of the build
+  in one Cargo run (`runtime`'s in one of its own), and a test of the build
   tool's fails if a crate with tests is left out. The network's check
   802.11 and its cryptography against published vectors, a station against
   an access point, two TCP/IP stacks over a simulated cable, and TLS
@@ -1150,7 +1150,7 @@ crate's in its `source/`), reached through its `architecture` module
 | `implementation/kernel/` | see `architecture` in [The kernel](#the-kernel) |
 | `implementation/libraries/bootinfo` | the address space the loader hands over, and how the kernel is entered |
 | `implementation/libraries/abi` | the calling convention of system calls, the user address space, a virtual processor's registers |
-| `implementation/libraries/rt` | the entry points, the system call instruction, the C runtime's helpers; the driver VM's programs' Linux system calls |
+| `implementation/libraries/runtime` | the entry points, the system call instruction, the C runtime's helpers; the driver VM's programs' Linux system calls |
 | `implementation/libraries/posix` | Linux's system call numbers and the calls only x86-64 has, the thread pointer |
 | `implementation/libraries/elf` | the executables' machine type and relative relocation (on every host, for the tools) |
 | `implementation/libraries/build` | the user programs' target |
@@ -1163,7 +1163,7 @@ crate's in its `source/`), reached through its `architecture` module
 ## Repository layout
 
 Libraries are crates named after their directory
-(`implementation/libraries/rt` is `rt`).
+(`implementation/libraries/runtime` is `runtime`).
 [Libraries](DEPENDENCIES.md) lists the third-party ones Veda builds on.
 
 | Path | Contents |
@@ -1171,7 +1171,7 @@ Libraries are crates named after their directory
 | `implementation/bootloader/` | UEFI loader (`bootloader`) |
 | `implementation/kernel/` | microkernel (`kernel`) |
 | `implementation/libraries/{abi,bootinfo,initrd,elf}` | shared formats and the kernel ABI |
-| `implementation/libraries/{rt,heap,build}` | user runtime, allocator, build helper |
+| `implementation/libraries/{runtime,heap,build}` | user runtime, allocator, build helper |
 | `implementation/libraries/frames` | the searches of the kernel's bitmap of physical memory frames, a word at a time |
 | `implementation/libraries/entropy` | the ChaCha20 random number generator and BLAKE2s entropy pool |
 | `implementation/libraries/posix` | the POSIX layer under the C library |

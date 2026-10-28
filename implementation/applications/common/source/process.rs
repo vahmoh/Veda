@@ -27,7 +27,7 @@ const MAX_DEPTH: usize = 64;
 pub fn list() -> Vec<ProcessInfo> {
     let mut infos = vec![ProcessInfo::default(); 256];
     loop {
-        let n = rt::object::process_list(&mut infos).unwrap_or(0);
+        let n = runtime::object::process_list(&mut infos).unwrap_or(0);
         if n <= infos.len() {
             infos.truncate(n);
             return infos;

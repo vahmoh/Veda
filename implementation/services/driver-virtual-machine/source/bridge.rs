@@ -34,9 +34,9 @@ use driver_virtual_machine::ledger::Ledger;
 use driver_virtual_machine::waits::{self, Pending, Round, Wait};
 use driver_virtual_machine::window::Window;
 use hv::bridge::{self as b, op};
-use rt::object::{Channel, Event, Guest, Handle, Vcpu, Vmo};
-use rt::println;
-use rt::sync::Mutex;
+use runtime::object::{Channel, Event, Guest, Handle, Vcpu, Vmo};
+use runtime::println;
+use runtime::sync::Mutex;
 
 use crate::memory::{GuestMemory, Plain};
 use crate::registry::Registry;
@@ -156,7 +156,7 @@ fn log_read(memory: &GuestMemory, r: &mut b::LogRead) -> Result<(), Error> {
         return Err(Error::Fault);
     }
     let mut data = alloc::vec![0u8; r.len as usize];
-    let (n, next) = rt::object::log_read(r.offset, &mut data)?;
+    let (n, next) = runtime::object::log_read(r.offset, &mut data)?;
     memory.write(r.buffer, &data[..n]);
     (r.len, r.next) = (n as u64, next);
     Ok(())
@@ -172,7 +172,7 @@ fn status(r: Result<(), Error>) -> u32 {
 /// The guest's budget of Veda's memory: a quarter of the PC's, at least
 /// [`MIN_BUDGET`].
 fn budget() -> u64 {
-    let total = rt::object::system_info().map(|i| i.total_memory).unwrap_or(0);
+    let total = runtime::object::system_info().map(|i| i.total_memory).unwrap_or(0);
     (total / 4).max(MIN_BUDGET)
 }
 
@@ -241,7 +241,7 @@ impl Bridge {
             op::VMO_UNMAP => request(memory, gpa, |r: &mut b::VmoMap| r.status = status(self.vmo_unmap(guest, r))),
             op::BOOTSTRAP => request(memory, gpa, |r: &mut b::Bootstrap| r.status = status(self.bootstrap(r))),
             op::CLOCK => request(memory, gpa, |r: &mut b::Clock| {
-                r.status = status(rt::time::clock_info().map(|info| r.info = info));
+                r.status = status(runtime::time::clock_info().map(|info| r.info = info));
             }),
             op::LOG_READ => request(memory, gpa, |r: &mut b::LogRead| r.status = status(log_read(memory, r))),
             _ => hv::platform::error::UNKNOWN,
@@ -519,8 +519,8 @@ impl Bridge {
             items.push(memory.read_obj::<WaitItem>(r.items + i * size).ok_or(Error::Fault)?);
         }
         let mut resolved = self.table.lock().resolve(&items)?;
-        let polled = rt::object::wait_many(&mut resolved, 0);
-        let now = rt::time::now_ns();
+        let polled = runtime::object::wait_many(&mut resolved, 0);
+        let now = runtime::time::now_ns();
         match polled {
             Ok(n) if n > 0 => return finish(memory, r, &resolved, n as u32, b::OK),
             Ok(_) | Err(Error::TimedOut) if r.deadline <= now => {
@@ -556,7 +556,7 @@ impl Bridge {
             let mut failed: Vec<Option<Error>> = alloc::vec![None; snapshot.len()];
             // Finished waits the ring had no room for are posted again
             // soon, as the guest takes others from it.
-            let mut deadline = if unposted { rt::time::now_ns().saturating_add(1_000_000) } else { u64::MAX };
+            let mut deadline = if unposted { runtime::time::now_ns().saturating_add(1_000_000) } else { u64::MAX };
             {
                 let table = self.table.lock();
                 for (i, w) in snapshot.iter().enumerate() {
@@ -575,7 +575,7 @@ impl Bridge {
             }
             // (Admitted, the items fit one wait: `waits::MAX_ITEMS`.)
             let waited = if failed.iter().all(Option::is_none) {
-                rt::object::wait_many(&mut items, deadline)
+                runtime::object::wait_many(&mut items, deadline)
             } else {
                 // A handle closed meanwhile: the waits it ends end now.
                 Ok(0)
@@ -594,7 +594,7 @@ impl Bridge {
                         if failed[i].is_some() {
                             continue;
                         }
-                        match rt::object::wait_many(&mut items[spans[i].clone()], 0) {
+                        match runtime::object::wait_many(&mut items[spans[i].clone()], 0) {
                             Ok(_) | Err(Error::TimedOut) => {}
                             Err(e) => {
                                 failed[i] = Some(e);
@@ -607,11 +607,11 @@ impl Bridge {
                             println!("the bridge's waiter cannot wait ({e}); it tries again");
                             said = true;
                         }
-                        rt::time::sleep(rt::time::Duration::from_millis(10));
+                        runtime::time::sleep(runtime::time::Duration::from_millis(10));
                     }
                 }
             }
-            let now = rt::time::now_ns();
+            let now = runtime::time::now_ns();
             let mut waits = self.waits.lock();
             for mut w in waits.pending.take() {
                 // Its place in the snapshot, if it was in it.

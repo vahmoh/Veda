@@ -27,13 +27,13 @@ gfx = { workspace = true }
 num-traits = { workspace = true }
 splash = { workspace = true }
 
-# On Veda's targets alone: rt, whose runtime (the program's entry point,
-# allocator and panic handler) would clash with std's in the library's
-# tests on the host ("Library crates" in documentation/CODING.md), and gl
-# as it runs in Veda, whose `veda` feature the host tests would otherwise
-# turn on in gl's own.
+# On Veda's targets alone: `runtime`, whose `runtime` feature (the
+# program's entry point, allocator and panic handler) would clash with
+# std's in the library's tests on the host ("Library crates" in
+# documentation/CODING.md), and gl as it runs in Veda, whose `veda` feature
+# the host tests would otherwise turn on in gl's own.
 [target.'cfg(any(target_os = "veda", target_env = "musl"))'.dependencies]
-rt = { workspace = true }
+runtime = { workspace = true }
 gl = { workspace = true, features = ["veda"] }
 
 [build-dependencies]

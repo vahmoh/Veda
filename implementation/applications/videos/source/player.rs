@@ -24,7 +24,7 @@ use gfx::{Align, Bitmap, Color, Filter, Rect};
 use proto::display::modifiers;
 use proto::input::keys;
 use proto::media::{FramePool, MediaInfo, SeekMode, pool as pool_layout};
-use rt::println;
+use runtime::println;
 use ui::{ButtonKind, Cursor, Font, Icon, Ui, WindowState, media};
 use videos_core::layout;
 use videos_core::pacing::{Pacer, Timing};
@@ -563,7 +563,7 @@ impl Player {
             ui.skip_present();
         } else {
             self.look = look;
-            let began = rt::time::now_ns();
+            let began = runtime::time::now_ns();
             let blit = self.draw_picture(ui, stage, frame);
             let phase = self.phase().clone();
             if phase == Phase::Ended {
@@ -594,7 +594,7 @@ impl Player {
             if let Some(t) = &osd {
                 widgets::osd(ui, stage, t);
             }
-            let drawn = rt::time::now_ns() - began;
+            let drawn = runtime::time::now_ns() - began;
             self.pacer.note_draw(drawn);
             self.playback.count_drawn(drawn, blit);
             let generation = self.playback.generation();
@@ -656,7 +656,7 @@ impl Player {
         for bar in bars(stage, r) {
             ui.canvas.fill_rect(bar, black);
         }
-        let began = rt::time::now_ns();
+        let began = runtime::time::now_ns();
         let (w, h) = (p.meta.width.min(pool.width()) as i32, p.meta.height.min(pool.height()) as i32);
         let src = pool.slot_pixels(slot) as *const u32;
         // SAFETY: a slot the window holds: `h` rows of `stride` pixels in the
@@ -668,7 +668,7 @@ impl Player {
                 ui.canvas.draw_raw_scaled(src, pool.stride() as usize, w, h, r, Filter::Bilinear);
             }
         }
-        rt::time::now_ns() - began
+        runtime::time::now_ns() - began
     }
 
     fn draw_controls(&mut self, ui: &mut Ui, stage: Rect, alpha: f32, position: i64, now: u64, full_screen: bool) {

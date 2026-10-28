@@ -23,7 +23,7 @@ use gfx::color::{over, scale};
 use gfx::{Bitmap, Canvas, Color, FillRule, Path, Rect, ShadowTemplate, StrokeStyle, Text};
 use num_traits::Float;
 use proto::display::{self as dp, Cursor, WindowKind, WindowState};
-use rt::vm::Mapping;
+use runtime::vm::Mapping;
 
 use crate::gpu::{Gpu, Slot, Texture, rgba};
 use crate::pixels::{self, Pixels};

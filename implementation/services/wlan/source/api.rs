@@ -13,7 +13,7 @@ use ipc::Bytes;
 use proto::wlan::{
     BssInfo, ConnectRequest, NetworkInfo, SavedNetwork, WlanDiagnostics, WlanError, WlanStatus, ssid_display, wlan,
 };
-use rt::object::Channel;
+use runtime::object::Channel;
 
 use crate::{Rights, Wlan, without_addresses};
 

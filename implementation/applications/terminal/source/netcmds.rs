@@ -100,8 +100,8 @@ fn print_networks(io: &mut Io, nets: &[wifi::NetworkInfo]) {
 fn scan_and_wait(sh: &Shell, io: &mut Io) -> Result<(), i32> {
     let watcher = wifi::Watcher::new().map_err(|e| wifi_err(io, e))?;
     wifi::scan().map_err(|e| wifi_err(io, e))?;
-    let end = rt::time::now_ns() + 8_000_000_000;
-    while rt::time::now_ns() < end {
+    let end = runtime::time::now_ns() + 8_000_000_000;
+    while runtime::time::now_ns() < end {
         if sh.interrupted() {
             return Err(INTERRUPTED);
         }
@@ -163,7 +163,7 @@ pub fn cmd_wifi(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
             }
             io.styled(&format!("Joining {ssid}\u{2026}\n"), Style::DIM);
             // Wait for the outcome.
-            let end = rt::time::now_ns() + 30_000_000_000;
+            let end = runtime::time::now_ns() + 30_000_000_000;
             loop {
                 if sh.interrupted() {
                     return INTERRUPTED;
@@ -182,11 +182,11 @@ pub fn cmd_wifi(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
                     Ok(_) => {}
                     Err(e) => return wifi_err(io, e),
                 }
-                if rt::time::now_ns() > end {
+                if runtime::time::now_ns() > end {
                     return io.error("wifi", "no answer yet; 'wifi status' shows the progress");
                 }
                 if watcher.is_none() {
-                    rt::time::sleep(Duration::from_millis(200));
+                    runtime::time::sleep(Duration::from_millis(200));
                 }
             }
         }

@@ -22,7 +22,7 @@ use std::sync::{Mutex, PoisonError};
 
 use abi::signals;
 use proto::display::{self as dp, SubsurfaceEvent, display};
-use rt::object::{Channel, Handle, Vmo};
+use runtime::object::{Channel, Handle, Vmo};
 
 unsafe extern "C" {
     fn engine_subsurface_shown(subsurface: u32);

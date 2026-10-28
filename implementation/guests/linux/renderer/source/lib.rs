@@ -54,9 +54,9 @@ use abi::{RawHandle, Rights, map_flags, signals};
 use guest_sys::idle;
 use ipc::Bytes;
 use proto::gpu::{GpuError, ResourceSpec, Session, gpu};
-use rt::guest::Watch;
-use rt::object::{Channel, Event, Vmo};
-use rt::vm::Mapping;
+use runtime::guest::Watch;
+use runtime::object::{Channel, Event, Vmo};
+use runtime::vm::Mapping;
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 
 /// A session's memory: its header page (the fence word, first), the
@@ -291,9 +291,9 @@ impl Drop for Context {
 }
 
 /// A handle the program waits for among its files: through a watch of the
-/// bridge's (`rt::guest::Watch`: a file readable while one of the handle's
-/// signals is active), which is made again a while after it fails (the
-/// monitor did not keep its wait, at its limits).
+/// bridge's (`runtime::guest::Watch`: a file readable while one of the
+/// handle's signals is active), which is made again a while after it fails
+/// (the monitor did not keep its wait, at its limits).
 struct Watched {
     handle: RawHandle,
     signals: u32,
@@ -318,7 +318,7 @@ impl Watched {
         let Ok(watch) = &self.watch else { return Ok(None) };
         let taken = watch.take(true);
         if taken.is_err() {
-            self.watch = Err(rt::time::now_ns().saturating_add(WATCH_AGAIN_NS));
+            self.watch = Err(runtime::time::now_ns().saturating_add(WATCH_AGAIN_NS));
         }
         taken
     }
@@ -567,7 +567,7 @@ impl gpu::Server for Serve<'_> {
                 // The GPU's driver takes the memory as a dma-buf, which keeps
                 // it mapped into the guest; what the driver keeps of it
                 // outlives the descriptor and the handle.
-                let fd = rt::guest::dmabuf(memory.raw(), 0, len, drawn).map_err(|_| GpuError::NoMemory)?;
+                let fd = runtime::guest::dmabuf(memory.raw(), 0, len, drawn).map_err(|_| GpuError::NoMemory)?;
                 // SAFETY: a live context, and a dma-buf of the memory.
                 let e = unsafe {
                     ffi::vr_resource_import(ctx.ctx.as_ptr(), &args(&spec), fd.as_raw_fd(), null_mut(), stride, &mut id)
@@ -710,7 +710,7 @@ enum Ready {
 /// fences no file stands for, or to make a failed watch again): what `poll`
 /// found ready.
 fn wait(connections: &mut Watched, clients: &mut [Client]) -> rustix::io::Result<Vec<Ready>> {
-    let now = rt::time::now_ns();
+    let now = runtime::time::now_ns();
     let mut until = connections.renew(now);
     for c in clients.iter_mut() {
         let next = c.requests.renew(now);

@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! `bridgetest` — checks the driver VM's bridge from inside the Linux
-//! guest: Veda's objects, used by a Linux program through `rt` exactly as
-//! a Veda program uses them.
+//! guest: Veda's objects, used by a Linux program through `runtime`
+//! exactly as a Veda program uses them.
 //!
 //! It reads the registry the guest sees, sends a message that carries a
 //! VMO and an event over a channel of its own, maps the VMO and writes into
@@ -16,8 +16,8 @@ use std::time::Instant;
 
 use abi::signals;
 use guest_sys::checks::Checks;
-use rt::object::{Channel, Event, Vmo};
-use rt::vm::Mapping;
+use runtime::object::{Channel, Event, Vmo};
+use runtime::vm::Mapping;
 
 fn main() {
     let mut c = Checks::new("bridgetest");
@@ -77,9 +77,9 @@ fn main() {
     let _ = peer.signal();
     c.check("a signaled event is seen at once", event.wait(signals::SIGNALED, 0).is_ok());
     let _ = event.clear();
-    let started = rt::time::now_ns();
+    let started = runtime::time::now_ns();
     let timed_out = event.wait(signals::SIGNALED, started + 50_000_000);
-    let waited = (rt::time::now_ns() - started) / 1_000_000;
+    let waited = (runtime::time::now_ns() - started) / 1_000_000;
     c.check(
         &format!("a wait ends at its deadline ({waited} ms of 50)"),
         timed_out == Err(abi::Error::TimedOut) && (45..250).contains(&waited),
@@ -131,7 +131,7 @@ fn main() {
     c.check("signals go back and forth between two threads", round_trips == ROUNDS);
 
     // Veda's clock, which the guest reads itself.
-    let (t0, t1) = (rt::time::now_ns(), rt::time::now_ns());
+    let (t0, t1) = (runtime::time::now_ns(), runtime::time::now_ns());
     c.check("Veda's clock runs", t0 > 0 && t1 >= t0);
     c.finish();
 }

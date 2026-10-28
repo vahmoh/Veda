@@ -56,9 +56,9 @@ use proto::display::{Cursor, display};
 use proto::displaydev::{self, DisplayDevError, Link, displaydev as driver_protocol};
 use proto::init::ClientIdentity;
 use proto::input::InputEvent;
-use rt::object::{Channel, Vmo};
-use rt::println;
-use rt::vm::Mapping;
+use runtime::object::{Channel, Vmo};
+use runtime::println;
+use runtime::vm::Mapping;
 
 use decor::Decor;
 use screen::Screen;
@@ -66,7 +66,7 @@ use session::Session;
 use startup::Startup;
 use state::Compositor;
 
-rt::entry!(main);
+runtime::entry!(main);
 
 /// How many requests a client has served at a wake-up before the others,
 /// how many reports an input driver, how many requests a display driver,
@@ -203,8 +203,8 @@ fn serve_input(comp: &mut Compositor, inputs: &BTreeMap<u64, Channel>, key: u64,
 fn main() -> i32 {
     use abi::startup::role;
     let (Some(fb_vmo), Some(info_vmo)) = (
-        rt::env::take_handle(role::FRAMEBUFFER).map(Vmo::from_handle),
-        rt::env::take_handle(role::BOOT_INFO).map(Vmo::from_handle),
+        runtime::env::take_handle(role::FRAMEBUFFER).map(Vmo::from_handle),
+        runtime::env::take_handle(role::BOOT_INFO).map(Vmo::from_handle),
     ) else {
         println!("no framebuffer");
         return 1;
@@ -254,7 +254,7 @@ fn main() -> i32 {
     let driver_listener = proto::register(driver_protocol::NAME).expect("cannot register the display driver service");
     println!("display {}x{} ready", width, height);
 
-    let started = rt::time::now_ns();
+    let started = runtime::time::now_ns();
     let mut comp = Compositor {
         wm: Wm::new(Rect::new(0, 0, width, height)),
         screen: Screen::new(fb, pitch, info.framebuffer_format == 2, width, height, started),
@@ -278,14 +278,14 @@ fn main() -> i32 {
     // With the lock screen installed, the window system starts locked, at
     // system start and after a crash alike: the lock service unlocks it
     // (at once, if no password is set).
-    if rt::env::args().iter().any(|a| a == "locked") {
+    if runtime::env::args().iter().any(|a| a == "locked") {
         comp.wm.lock_at_start();
         comp.told_locked = true;
     }
     // At system start (not after a restart), the screen stays black until
     // the display is up, then the splash fades in, comes to life and
     // dissolves into the desktop once it has drawn itself.
-    if rt::env::args().iter().any(|a| a == "splash") {
+    if runtime::env::args().iter().any(|a| a == "splash") {
         let fonts = (title_font, regular_font);
         comp.startup = Some(Startup::new(width, height, &mut comp.decor.text, fonts, started));
     }
@@ -313,7 +313,7 @@ fn main() -> i32 {
     // kernel, so that a wait costs what is ready, however many clients.
     let mut ws = WaitSet::new();
     loop {
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         comp.screen.check(now);
         // A driver that flips gives pictures the GPU may draw into: it is
         // set up for them (once for each driver's), and no longer for the
@@ -382,7 +382,7 @@ fn main() -> i32 {
         let mut ready = ws.wait(deadline).unwrap_or_default();
         // The input drivers first: what they report is served first.
         ready.sort_by_key(|&(key, _)| key & INPUT_BASE == 0);
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         for (key, observed) in ready {
             match key {
                 DISPLAY_KEY => {
@@ -488,13 +488,13 @@ fn main() -> i32 {
                     }
                     // A frame due is composed before the next client is
                     // served.
-                    if comp.frame_due(rt::time::now_ns()) {
+                    if comp.frame_due(runtime::time::now_ns()) {
                         comp.composite();
                     }
                 }
             }
         }
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         comp.wm.repeat(now);
         if comp.wm.liveness_deadline().is_some_and(|t| now >= t) {
             comp.wm.check_liveness(now);

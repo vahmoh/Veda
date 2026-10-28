@@ -17,7 +17,7 @@ use abi::RawHandle;
 use gfx::Bitmap;
 use image::Format;
 use paint_core::codec::{self, Opened};
-use rt::object::Event;
+use runtime::object::Event;
 
 /// The largest file opened (bytes).
 const MAX_FILE: usize = 256 << 20;
@@ -57,7 +57,7 @@ impl Files {
             .stack_size(512 * 1024)
             .spawn(move || {
                 // Behind the window, which draws as it works.
-                let _ = rt::thread::set_priority(abi::priority::NORMAL - 1);
+                let _ = runtime::thread::set_priority(abi::priority::NORMAL - 1);
                 let fs = files::Fs::connect();
                 for job in todo {
                     if finished.send(work(&fs, job)).is_err() {

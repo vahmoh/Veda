@@ -363,7 +363,7 @@ fn page_list(ui: &mut Ui, title: &str, query: &mut String, rows: &[(String, Stri
 }
 
 fn history(b: &mut Browser, ui: &mut Ui, mut query: String) -> Option<Modal> {
-    let now = rt::time::unix_time_ns() / 1_000_000_000;
+    let now = runtime::time::unix_time_ns() / 1_000_000_000;
     let q = query.trim().to_lowercase();
     let rows: Vec<(String, String, String)> = b
         .store

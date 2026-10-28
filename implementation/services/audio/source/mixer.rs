@@ -45,7 +45,7 @@ use audio::resample::Resampler;
 use proto::audio::{
     AudioError, AudioStatus, DeviceFormat, DeviceLink, Ring, RingError, Role, StreamHandle, StreamSpec, ring,
 };
-use rt::object::{Event, Vmo};
+use runtime::object::{Event, Vmo};
 
 /// Format of the null output (and the default for streams before a device
 /// appears).
@@ -234,7 +234,7 @@ impl Mixer {
         let max = MAX_BLOCK * 2;
         Mixer {
             streams: BTreeMap::new(),
-            output: Output::Null { started_ns: rt::time::now_ns(), consumed: 0 },
+            output: Output::Null { started_ns: runtime::time::now_ns(), consumed: 0 },
             rate: NULL_RATE,
             channels: NULL_CHANNELS,
             written: 0,
@@ -299,7 +299,7 @@ impl Mixer {
 
     /// The driver went away: continue with the null output.
     pub fn detach(&mut self) {
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         self.output = Output::Null { started_ns: now, consumed: 0 };
         if self.rate != NULL_RATE || self.channels != NULL_CHANNELS {
             self.set_format(NULL_RATE, NULL_CHANNELS);
@@ -425,7 +425,7 @@ impl Mixer {
             marks: VecDeque::new(),
             prev_mark: (0, 0),
             played: 0,
-            last_active_ns: rt::time::now_ns(),
+            last_active_ns: runtime::time::now_ns(),
             tail_flushed: false,
         };
         s.reset_positions(self.written);
@@ -441,7 +441,7 @@ impl Mixer {
     pub fn close(&mut self, owner: u64, id: u32) -> Result<(), AudioError> {
         self.stream(owner, id)?;
         if let Some(s) = self.streams.remove(&id) {
-            rt::println!("stream {} \"{}\" closed ({} underruns)", id, s.name, s.underruns);
+            runtime::println!("stream {} \"{}\" closed ({} underruns)", id, s.name, s.underruns);
         }
         Ok(())
     }
@@ -461,7 +461,7 @@ impl Mixer {
             self.duckers.push(owner);
         }
         if had != !self.duckers.is_empty() {
-            rt::println!("{} the other sound", if on { "ducking" } else { "no longer ducking" });
+            runtime::println!("{} the other sound", if on { "ducking" } else { "no longer ducking" });
         }
     }
 
@@ -476,7 +476,7 @@ impl Mixer {
             s.paused = false;
             s.fading_out = false;
             s.ring.set_consumer_flags(0);
-            s.last_active_ns = rt::time::now_ns();
+            s.last_active_ns = runtime::time::now_ns();
         }
         let _ = s.event.signal();
         Ok(())

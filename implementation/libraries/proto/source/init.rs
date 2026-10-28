@@ -6,7 +6,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use ipc::{enumeration, message, protocol, union};
-use rt::object::Channel;
+use runtime::object::Channel;
 
 enumeration! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]

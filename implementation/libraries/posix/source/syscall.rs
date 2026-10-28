@@ -77,8 +77,9 @@ static REPORTED: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
 
 fn unsupported(n: usize) -> SysResult {
     if n < 512 && REPORTED[n / 64].fetch_or(1 << (n % 64), Ordering::Relaxed) & (1 << (n % 64)) == 0 {
-        let name = rt::object::process_self_info().map(|i| alloc::string::String::from(i.name())).unwrap_or_default();
-        rt::println!("{}: system call {} is not supported", name, n);
+        let name =
+            runtime::object::process_self_info().map(|i| alloc::string::String::from(i.name())).unwrap_or_default();
+        runtime::println!("{}: system call {} is not supported", name, n);
     }
     Err(ENOSYS)
 }
@@ -243,7 +244,7 @@ unsafe fn generic(n: usize, a: [usize; 6]) -> SysResult {
             nr::MEMFD_CREATE => memfd::memfd_create(a[0], a[1] as u32),
             nr::PIDFD_OPEN => process::pidfd_open(fd0, a[1] as u32),
             nr::SCHED_YIELD => {
-                rt::thread::yield_now();
+                runtime::thread::yield_now();
                 Ok(0)
             }
             nr::DUP => io::dup(fd0),

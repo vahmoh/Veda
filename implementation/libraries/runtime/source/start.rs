@@ -86,7 +86,7 @@ unsafe extern "Rust" {
 pub(crate) fn start(bootstrap: RawHandle) -> ! {
     core::hint::black_box(&PROGRAM_NOTE);
     crate::env::adopt(bootstrap);
-    // SAFETY: provided by the program through `rt::entry!`.
+    // SAFETY: provided by the program through `runtime::entry!`.
     let code = unsafe { __rt_main() };
     crate::sys::process_exit(code as i64)
 }
@@ -96,8 +96,8 @@ pub(crate) fn start(bootstrap: RawHandle) -> ! {
 /// ```ignore
 /// #![no_std]
 /// #![no_main]
-/// rt::entry!(main);
-/// fn main() { rt::println!("hello"); }
+/// runtime::entry!(main);
+/// fn main() { runtime::println!("hello"); }
 /// ```
 #[macro_export]
 macro_rules! entry {

@@ -10,7 +10,7 @@
 use alloc::vec::Vec;
 
 use abi::irq_flags;
-use rt::object::{Handle, Interrupt, IoPorts, Resource};
+use runtime::object::{Handle, Interrupt, IoPorts, Resource};
 
 use proto::startup::driver_virtual_machine::{I8042_COMMAND, I8042_DATA, I8042_KEYBOARD, I8042_MOUSE};
 

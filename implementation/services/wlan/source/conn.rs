@@ -327,7 +327,7 @@ impl Wlan {
 
     /// Records a successful connection in the saved networks.
     fn remember(&mut self, req: &Request, security: Security, sae: bool) {
-        let unix_s = rt::time::unix_time_ns() / 1_000_000_000;
+        let unix_s = runtime::time::unix_time_ns() / 1_000_000_000;
         let changed = if let Some(p) = self.profiles.iter_mut().find(|p| p.ssid == req.ssid) {
             p.last_connected = unix_s;
             if let Some(pass) = &req.passphrase {

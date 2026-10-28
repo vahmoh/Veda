@@ -9,8 +9,8 @@
 //! bridge (`/dev/veda`, `hv::bridge`), the rest with Linux's own
 //! (`architecture::linux`; time from the processor's clock counter, which
 //! the guest reads as Veda does; futexes; sleeping). So the
-//! program uses `rt`, and everything built on it (`ipc`, `proto`), as a
-//! Veda program does. What makes no sense in the guest (processes,
+//! program uses `runtime`, and everything built on it (`ipc`, `proto`), as
+//! a Veda program does. What makes no sense in the guest (processes,
 //! hardware, virtual machines) is `NotSupported`.
 
 use core::sync::atomic::{AtomicI32, Ordering};

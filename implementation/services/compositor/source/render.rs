@@ -15,8 +15,8 @@ use compositor::Wm;
 use compositor::window::AnimKind;
 use gfx::{Canvas, Damage, Rect};
 use proto::display::WindowEvent;
-use rt::println;
-use rt::vm::Mapping;
+use runtime::println;
+use runtime::vm::Mapping;
 
 use crate::decor::{self, Layer, LayerTexture, Look, Window};
 use crate::gpu::{Gpu, Slot};
@@ -96,7 +96,7 @@ impl Compositor {
 
     /// Composes a frame: what changed, as it is when the frame is seen.
     pub(crate) fn composite(&mut self) {
-        let real = rt::time::now_ns();
+        let real = runtime::time::now_ns();
         // Animations as they are when the frame is seen.
         let now = self.screen.frame_time(real);
         self.wm.advance(now);
@@ -261,7 +261,7 @@ impl Compositor {
         }
         let clip = region.rects().iter().fold(Rect::default(), |a, r| if a.is_empty() { *r } else { a.union(r) });
         let desktop = startup.is_none_or(|(revealing, _, _)| revealing);
-        let started = rt::time::now_ns();
+        let started = runtime::time::now_ns();
         // What the frame draws again (all of `clip`, where the desktop is
         // drawn) is not copied first: a full-screen game changes all of the
         // screen every frame, which would be copied whole, then drawn over.
@@ -285,7 +285,7 @@ impl Compositor {
         let fence = g.end();
         // The GPU's driver takes a frame in a millisecond or two: say when
         // it takes much longer (the first few times, then now and then).
-        let took = rt::time::now_ns() - started;
+        let took = runtime::time::now_ns() - started;
         if took >= SLOW_FRAME_NS {
             let n = SLOW_FRAMES.fetch_add(1, Ordering::Relaxed);
             if n < 3 || n.is_multiple_of(100) {

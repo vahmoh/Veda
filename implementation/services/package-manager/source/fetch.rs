@@ -15,7 +15,7 @@ use std::io::Read;
 use packages::config::Url;
 use packages::index::Offer;
 use packages::{Digest, index, limits};
-use rt::time::Duration;
+use runtime::time::Duration;
 
 /// The time a web server has to send an index.
 const INDEX_TIME: Duration = Duration::from_secs(60);

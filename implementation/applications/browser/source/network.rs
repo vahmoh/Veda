@@ -8,7 +8,7 @@
 
 use abi::RawHandle;
 use proto::net::{Connectivity, NetEvent};
-use rt::object::Channel;
+use runtime::object::Channel;
 
 /// How long after the network service went away to watch it again (ns).
 const REWATCH_NS: u64 = 5_000_000_000;

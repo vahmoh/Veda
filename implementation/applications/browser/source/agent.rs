@@ -103,7 +103,7 @@ fn tab_index(b: &Browser, index: Option<i64>) -> Result<usize, String> {
 /// Runs `script` in the shown page and waits for its value (as JSON).
 fn script(b: &mut Browser, script: &str) -> Result<String, String> {
     let n = b.run_script(script).ok_or("the shown tab has no page")?;
-    let deadline = rt::time::now_ns() + SCRIPT_TIMEOUT_NS;
+    let deadline = runtime::time::now_ns() + SCRIPT_TIMEOUT_NS;
     loop {
         b.engine_events();
         if let Some(Script::Done(result)) = b.scripts.get(&n) {
@@ -120,7 +120,7 @@ fn script(b: &mut Browser, script: &str) -> Result<String, String> {
 
 /// Waits until the shown page has loaded, or for `timeout_ns`.
 fn wait_loaded(b: &mut Browser, timeout_ns: u64) {
-    let deadline = rt::time::now_ns() + timeout_ns;
+    let deadline = runtime::time::now_ns() + timeout_ns;
     b.engine_events();
     while b.current().is_some_and(|t| t.loading) && wait_engine(b, deadline) {
         b.engine_events();
@@ -130,13 +130,13 @@ fn wait_loaded(b: &mut Browser, timeout_ns: u64) {
 /// Waits a little for the engine's events (until `deadline` at the
 /// latest); false once the deadline has passed.
 fn wait_engine(b: &Browser, deadline: u64) -> bool {
-    let now = rt::time::now_ns();
+    let now = runtime::time::now_ns();
     if now >= deadline {
         return false;
     }
     let mut item =
         [abi::WaitItem { handle: b.engine.wake_handle(), signals: abi::signals::SIGNALED, ..Default::default() }];
-    let _ = rt::object::wait_many(&mut item, deadline.min(now + 100_000_000));
+    let _ = runtime::object::wait_many(&mut item, deadline.min(now + 100_000_000));
     true
 }
 
@@ -217,7 +217,7 @@ pub fn invoke(b: &mut Browser, action: &str, args: &Value) -> Result<Value, Stri
                 t.found = None;
             }
             b.find(text, false);
-            let deadline = rt::time::now_ns() + SCRIPT_TIMEOUT_NS;
+            let deadline = runtime::time::now_ns() + SCRIPT_TIMEOUT_NS;
             b.engine_events();
             while b.current().is_some_and(|t| t.found.is_none()) && wait_engine(b, deadline) {
                 b.engine_events();

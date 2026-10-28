@@ -16,8 +16,8 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use bootinfo::variables::{Name, Variables};
 use hv::platform::{Variable, error, variable};
-use rt::object::Vmo;
-use rt::println;
+use runtime::object::Vmo;
+use runtime::println;
 
 use crate::memory::GuestMemory;
 

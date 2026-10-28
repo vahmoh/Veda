@@ -7,8 +7,8 @@
 //! would do, for `poll` and for reads and writes that wait.
 
 use abi::signals::{SIGNALED, USER_0};
-use rt::object::Event;
-use rt::sync::Mutex;
+use runtime::object::Event;
+use runtime::sync::Mutex;
 
 use crate::error::{self, SysResult};
 use crate::fd::{self, Description, Object};

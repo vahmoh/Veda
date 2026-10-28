@@ -23,7 +23,7 @@ use alloc::vec::Vec;
 use ipc::Bytes;
 use proto::block::{self as blk, block};
 use proto::fs::FsError;
-use rt::println;
+use runtime::println;
 
 use filesystem::snapshot::{self, Samples, Sink, Source};
 use filesystem::tree::Tree;
@@ -70,16 +70,16 @@ impl Store {
     /// Returns `None` if there is no usable home disk.
     pub fn connect() -> Option<Store> {
         let name = blk::service_name(HOME_DISK_SERIAL);
-        let start = rt::time::now_ns();
+        let start = runtime::time::now_ns();
         loop {
             let names = proto::with_registry(|r| r.list()).ok().and_then(|r| r.ok()).unwrap_or_default();
             if names.contains(&name) {
                 break;
             }
-            if rt::time::now_ns() - start > ATTACH_TIMEOUT_NS {
+            if runtime::time::now_ns() - start > ATTACH_TIMEOUT_NS {
                 return None;
             }
-            rt::time::sleep(rt::time::Duration::from_millis(20));
+            runtime::time::sleep(runtime::time::Duration::from_millis(20));
         }
         let disk = block::Client::new(proto::connect(&name).ok()?);
         disk.set_timeout(DISK_TIMEOUT_NS);

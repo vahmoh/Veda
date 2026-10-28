@@ -9,7 +9,7 @@
 //!   target, below);
 //! * the loader, the kernel and the POSIX layer, for their freestanding
 //!   targets;
-//! * the programs on `rt` alone, for the user target;
+//! * the programs on `runtime` alone, for the user target;
 //! * the programs on the standard library, for Veda's own target, with the
 //!   toolchain's Clippy, which knows it (the build machine's does not).
 //!
@@ -18,7 +18,7 @@
 //! out: their build scripts, which Clippy runs too, need it.
 //!
 //! Clippy checks the workspace's crates a program builds with as well, as
-//! they build for it: a library used both by programs on `rt` and by
+//! they build for it: a library used both by programs on `runtime` and by
 //! programs on the standard library is checked as each has it.
 
 use crate::architecture::{BARE_TARGET, KERNEL_TARGET, STD_TARGET, UEFI_TARGET, USER_TARGET};
@@ -37,8 +37,8 @@ pub fn command(args: &[String]) -> Result {
     }
     util::status("Checking", "the crates with host tests, and their tests");
     // A program's package among them (a service's, with its library) has
-    // `rt` on Veda's targets alone: its library and tests are checked here,
-    // its program below.
+    // `runtime` on Veda's targets alone: its library and tests are checked
+    // here, its program below.
     let program = |package: &str| PROGRAMS.iter().any(|p| p.package == package);
     util::run(runner::host_crates(&["clippy", "--quiet", "--all-targets"], |p| !program(p)).args(DENY_WARNINGS))?;
     util::run(runner::host_crates(&["clippy", "--quiet", "--lib", "--tests"], program).args(DENY_WARNINGS))?;
@@ -59,7 +59,7 @@ pub fn command(args: &[String]) -> Result {
     }
     let (on_std, native): (Vec<&Program>, Vec<&Program>) =
         PROGRAMS.iter().filter(|p| web || !p.web).partition(|p| p.std);
-    util::status("Checking", format!("{} programs on rt ({USER_TARGET})", native.len()));
+    util::status("Checking", format!("{} programs on Veda's runtime ({USER_TARGET})", native.len()));
     let mut cmd = util::cargo();
     cmd.args(["clippy", "--quiet", "--target", USER_TARGET]);
     for p in &native {

@@ -31,11 +31,12 @@ net = { workspace = true }
 files = { workspace = true }
 audio = { workspace = true }
 
-# rt on Veda's targets alone: its runtime (the program's entry point,
-# allocator and panic handler) would clash with std's in the library's
-# tests on the host ("Library crates" in documentation/CODING.md).
+# `runtime` on Veda's targets alone: its `runtime` feature (the program's
+# entry point, allocator and panic handler) would clash with std's in the
+# library's tests on the host ("Library crates" in
+# documentation/CODING.md).
 [target.'cfg(any(target_os = "veda", target_env = "musl"))'.dependencies]
-rt = { workspace = true }
+runtime = { workspace = true }
 
 [lints]
 workspace = true

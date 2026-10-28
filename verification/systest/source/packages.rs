@@ -22,9 +22,9 @@ use proto::fs::FsError;
 use proto::init::{AppInfo, LaunchError};
 use proto::launcher;
 use proto::packages::{Action, Failure, PackageError, Plan, RepositoryChange, Request, packages};
-use rt::object::Vmo;
-use rt::println;
-use rt::time::Duration;
+use runtime::object::Vmo;
+use runtime::println;
+use runtime::time::Duration;
 
 use crate::{TestResult, check, vfs_client};
 
@@ -85,16 +85,16 @@ fn test_key() -> Result<Option<String>, String> {
 
 /// The launcher's applications once `listed` holds of them.
 fn applications(l: &launcher::Client, listed: impl Fn(&[AppInfo]) -> bool) -> Result<Vec<AppInfo>, String> {
-    let deadline = rt::time::deadline_after(Duration::from_secs(LISTED_SECONDS));
+    let deadline = runtime::time::deadline_after(Duration::from_secs(LISTED_SECONDS));
     loop {
         let apps = l.apps().map_err(err)?;
         if listed(&apps) {
             return Ok(apps);
         }
-        if rt::time::now_ns() >= deadline {
+        if runtime::time::now_ns() >= deadline {
             return Err("the launcher does not list what the change did".into());
         }
-        rt::time::sleep(Duration::from_millis(100));
+        runtime::time::sleep(Duration::from_millis(100));
     }
 }
 

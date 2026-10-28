@@ -11,8 +11,8 @@
 //! with the process's first timer, sleeps until the next timer expires and
 //! signals it. Whoever looks at a timer (a read, `poll`, `timerfd_gettime`)
 //! counts the expirations due first, so none waits on that thread to see
-//! one. The thread runs only the layer's code, on `rt`'s heap and locks,
-//! never the C library's.
+//! one. The thread runs only the layer's code, on `runtime`'s heap and
+//! locks, never the C library's.
 //!
 //! Every clock's timer counts down on the monotonic clock: an absolute
 //! time of `CLOCK_REALTIME` is taken as the time from now until then when
@@ -23,8 +23,8 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 
 use abi::signals::SIGNALED;
-use rt::object::Event;
-use rt::sync::Mutex;
+use runtime::object::Event;
+use runtime::sync::Mutex;
 
 use crate::error::{self, SysResult};
 use crate::fd::{self, Description, Object};
@@ -140,7 +140,7 @@ fn wake_timers() -> Result<(), isize> {
     }
     let event = Event::create().map_err(error::kernel)?;
     let theirs = Event::from_handle(event.0.duplicate(None).map_err(error::kernel)?);
-    rt::thread::Builder::new().name("timerfd").spawn(move || timers_thread(theirs)).map_err(|_| ENOMEM)?;
+    runtime::thread::Builder::new().name("timerfd").spawn(move || timers_thread(theirs)).map_err(|_| ENOMEM)?;
     *wake = Some(event);
     Ok(())
 }

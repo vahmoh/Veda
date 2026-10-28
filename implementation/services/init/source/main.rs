@@ -47,10 +47,10 @@ use proto::init::{
     AppInfo, ClientIdentity, LISTENER_CONNECT, LaunchError, RegistryError, TASK_EVENT, TaskEvent, TaskInfo, launcher,
     registry,
 };
-use rt::object::{Channel, Handle, Process, Resource, Vmo};
-use rt::println;
+use runtime::object::{Channel, Handle, Process, Resource, Vmo};
+use runtime::println;
 
-rt::entry!(main);
+runtime::entry!(main);
 
 /// What a channel served by init speaks.
 enum ConnKind {
@@ -235,7 +235,7 @@ impl Init {
         image: Image,
     ) -> Result<u64, LaunchError> {
         let registry = self.new_registry_channel(0, None).ok_or(LaunchError::NoMemory)?;
-        let mut spawn = rt::process::Spawn::new(name).path(path).handle(role::REGISTRY, registry.into_handle());
+        let mut spawn = runtime::process::Spawn::new(name).path(path).handle(role::REGISTRY, registry.into_handle());
         for a in args {
             spawn = spawn.arg(a);
         }
@@ -272,12 +272,12 @@ impl Init {
         let process = started.map_err(|e| {
             println!("failed to start {}: {}", path, e);
             match e {
-                rt::process::SpawnError::NotExecutable
-                | rt::process::SpawnError::BadElf(_)
-                | rt::process::SpawnError::Incompatible
-                | rt::process::SpawnError::OtherDynamicLinker
-                | rt::process::SpawnError::NoDynamicLinker => LaunchError::BadImage,
-                rt::process::SpawnError::Kernel(abi::Error::NoMemory) => LaunchError::NoMemory,
+                runtime::process::SpawnError::NotExecutable
+                | runtime::process::SpawnError::BadElf(_)
+                | runtime::process::SpawnError::Incompatible
+                | runtime::process::SpawnError::OtherDynamicLinker
+                | runtime::process::SpawnError::NoDynamicLinker => LaunchError::BadImage,
+                runtime::process::SpawnError::Kernel(abi::Error::NoMemory) => LaunchError::NoMemory,
                 _ => LaunchError::Failed,
             }
         })?;
@@ -309,7 +309,7 @@ impl Init {
         let process = match self.children.get(&koid) {
             Some(child) => &child.process,
             None => {
-                opened = rt::object::process_open(&processes, koid).map_err(|_| LaunchError::NotFound)?;
+                opened = runtime::object::process_open(&processes, koid).map_err(|_| LaunchError::NotFound)?;
                 &opened
             }
         };
@@ -334,7 +334,7 @@ impl Init {
             if parent == 0 || parent == self.koid {
                 return false;
             }
-            let Ok(info) = rt::object::process_open(processes, parent).and_then(|p| p.info()) else {
+            let Ok(info) = runtime::object::process_open(processes, parent).and_then(|p| p.info()) else {
                 return false;
             };
             (koid, parent) = (info.koid, info.parent_koid);
@@ -390,7 +390,7 @@ impl Init {
         }
     }
 
-    fn handle_registry(&mut self, key: u64, msg: rt::Message) {
+    fn handle_registry(&mut self, key: u64, msg: runtime::Message) {
         struct Reg<'a> {
             init: &'a mut Init,
             key: u64,
@@ -485,7 +485,7 @@ impl Init {
         }
     }
 
-    fn handle_launcher(&mut self, key: u64, msg: rt::Message) {
+    fn handle_launcher(&mut self, key: u64, msg: runtime::Message) {
         let Some(Conn { kind: ConnKind::Launcher { who }, .. }) = self.conns.get(&key) else { return };
         let who = who.clone();
         // Starting an application is answered apart: an installed
@@ -518,7 +518,7 @@ impl Init {
                 // were there, if they were more than the room it had.
                 let mut infos = alloc::vec![abi::ProcessInfo::default(); 256];
                 let n = loop {
-                    let n = rt::object::process_list(&mut infos).unwrap_or(0);
+                    let n = runtime::object::process_list(&mut infos).unwrap_or(0);
                     if n <= infos.len() {
                         break n;
                     }
@@ -551,7 +551,7 @@ impl Init {
                 }
                 println!("power action {} for {}", action, self.who.name);
                 let res = self.init.root.create(resource_kind::POWER, 0, 0).map_err(|_| LaunchError::Denied)?;
-                rt::object::power(&res, action as usize).map_err(|_| LaunchError::Failed)
+                runtime::object::power(&res, action as usize).map_err(|_| LaunchError::Failed)
             }
 
             /// For system services (the shell tells the user of crashes) and
@@ -629,7 +629,7 @@ impl Init {
             println!("warning: system service {} is no longer running", name);
             return;
         }
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         let history = self.restarts.entry(name.to_string()).or_default();
         history.retain(|&t| now - t < WINDOW_NS);
         if history.len() >= MAX_RESTARTS {
@@ -691,8 +691,8 @@ impl Init {
 
 fn main() -> i32 {
     println!("starting Veda {}", env!("CARGO_PKG_VERSION"));
-    let root = Resource::from_handle(rt::env::take_handle(role::ROOT_RESOURCE).expect("init: no root resource"));
-    let initrd_vmo = Vmo::from_handle(rt::env::take_handle(role::INITRD).expect("init: no initrd"));
+    let root = Resource::from_handle(runtime::env::take_handle(role::ROOT_RESOURCE).expect("init: no root resource"));
+    let initrd_vmo = Vmo::from_handle(runtime::env::take_handle(role::INITRD).expect("init: no initrd"));
     let size = initrd_vmo.size().expect("init: initrd size");
     let addr = initrd_vmo.map(0, size, abi::map_flags::READ).expect("init: cannot map the initrd");
     // SAFETY: the read-only mapping lives for the rest of init's life.
@@ -700,13 +700,13 @@ fn main() -> i32 {
     let archive = initrd::Archive::open(bytes).expect("init: the initrd is corrupt");
 
     let mut init = Init {
-        koid: rt::object::process_self_info().map_or(0, |i| i.koid),
+        koid: runtime::object::process_self_info().map_or(0, |i| i.koid),
         root,
         initrd: archive,
         initrd_vmo,
-        framebuffer: rt::env::take_handle(role::FRAMEBUFFER).map(Vmo::from_handle),
-        boot_info: rt::env::take_handle(role::BOOT_INFO).map(Vmo::from_handle),
-        firmware_variables: rt::env::take_handle(role::FIRMWARE_VARIABLES).map(Vmo::from_handle),
+        framebuffer: runtime::env::take_handle(role::FRAMEBUFFER).map(Vmo::from_handle),
+        boot_info: runtime::env::take_handle(role::BOOT_INFO).map(Vmo::from_handle),
+        firmware_variables: runtime::env::take_handle(role::FIRMWARE_VARIABLES).map(Vmo::from_handle),
         services: BTreeMap::new(),
         reserved: BTreeSet::new(),
         pending: BTreeMap::new(),

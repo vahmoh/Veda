@@ -14,7 +14,7 @@
 use gfx::{Align, Rect};
 use net::FirewallQuestion;
 use proto::display::{WindowKind, WindowSpec};
-use rt::println;
+use runtime::println;
 use ui::window::Display;
 use ui::{Font, Host, Icon, Ui};
 
@@ -226,7 +226,7 @@ impl Notifications {
                     hovered: false,
                     clicked: false,
                     approval: None,
-                    question: Some((q.clone(), false, rt::time::now_ns() + firewall::ARM_NS)),
+                    question: Some((q.clone(), false, runtime::time::now_ns() + firewall::ARM_NS)),
                 };
                 self.notes.push(Note { host, view, expires: u64::MAX, height });
             }
@@ -281,7 +281,7 @@ impl Notifications {
                     approval: None,
                     question: None,
                 };
-                self.notes.push(Note { host, view, expires: rt::time::now_ns() + LIFETIME_NS, height: HEIGHT });
+                self.notes.push(Note { host, view, expires: runtime::time::now_ns() + LIFETIME_NS, height: HEIGHT });
             }
             Err(e) => println!("cannot show a notification: {:?}", e),
         }
@@ -301,7 +301,7 @@ impl Notifications {
     }
 
     pub fn pump(&mut self, m: &mut Model) {
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         for n in &mut self.notes {
             n.host.pump(|ui| n.view.update(ui, m));
             if n.view.hovered {

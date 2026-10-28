@@ -37,8 +37,8 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use abi::signals::SIGNALED;
 use abi::{PortPacket, RawHandle};
-use rt::object::{self, Event, Port};
-use rt::sync::Mutex;
+use runtime::object::{self, Event, Port};
+use runtime::sync::Mutex;
 
 use crate::error::{self, SysResult};
 use crate::fd::{self, Description, Object};

@@ -31,7 +31,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use proto::agent::{AgentConfig, AgentError, AgentStatus, MemoryItem, ModelCatalog, ModelChoice, Permission, agent};
-use rt::object::Event;
+use runtime::object::Event;
 use ui::{Align, ButtonKind, Color, Font, Icon, Rect, Ui};
 
 enum Request {
@@ -556,11 +556,11 @@ impl AgentPage {
     /// Waits (until `deadline`) for the changes sent to be confirmed: the
     /// window is about to close, and the thread sending them with it.
     pub fn finish(&mut self, deadline: u64) {
-        while self.saving > 0 && rt::time::now_ns() < deadline {
+        while self.saving > 0 && runtime::time::now_ns() < deadline {
             if let Some(l) = &self.link {
                 let _ = l.event.wait(abi::signals::SIGNALED, deadline);
             }
-            self.poll(rt::time::now_ns());
+            self.poll(runtime::time::now_ns());
         }
     }
 

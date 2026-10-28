@@ -25,9 +25,9 @@ use abi::RawHandle;
 use agent::deepgram::{self, ServerMessage};
 use agent::presence::Presence;
 use net::NetError;
-use rt::object::Event;
-use rt::sync::Mutex;
-use rt::time::Duration;
+use runtime::object::Event;
+use runtime::sync::Mutex;
+use runtime::time::Duration;
 use serde_json::Value;
 use web::ws::{Message, WebSocket};
 use web::{Conn, WebError};
@@ -78,11 +78,11 @@ impl Connector {
         let signal = Event::from_handle(event.0.duplicate(None).ok()?);
         let result = Arc::new(Mutex::new(None));
         let slot = result.clone();
-        rt::thread::Builder::new()
+        runtime::thread::Builder::new()
             .name("connect")
             .spawn(move || {
                 let auth = format!("Token {key}");
-                let first = rt::time::now_ns();
+                let first = runtime::time::now_ns();
                 let mut waited = false;
                 let r = loop {
                     let r = WebSocket::connect(&url, &[("Authorization", &auth)], CONNECT_TIMEOUT);
@@ -94,7 +94,7 @@ impl Connector {
                                 println!("cannot reach Deepgram yet ({e}): the network is still coming up");
                                 waited = true;
                             }
-                            rt::time::sleep(NETWORK_RETRY);
+                            runtime::time::sleep(NETWORK_RETRY);
                         }
                         _ => break r,
                     }
@@ -144,7 +144,7 @@ fn coming_up(e: &WebError, first: u64) -> bool {
                 | NetError::Unavailable
         )
     );
-    let now = rt::time::now_ns();
+    let now = runtime::time::now_ns();
     if !early || now - first >= NETWORK_SETTLE_NS {
         return false;
     }
@@ -247,7 +247,7 @@ impl Session {
 
     /// Sends a JSON message.
     pub fn send(&mut self, v: &Value) -> Result<(), WebError> {
-        self.last_sent_ns = rt::time::now_ns();
+        self.last_sent_ns = runtime::time::now_ns();
         self.ws.send_text(&v.to_string())
     }
 
@@ -266,7 +266,7 @@ impl Session {
         for s in pcm {
             bytes.extend_from_slice(&s.to_le_bytes());
         }
-        self.last_sent_ns = rt::time::now_ns();
+        self.last_sent_ns = runtime::time::now_ns();
         self.ws.send_binary(&bytes)
     }
 

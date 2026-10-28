@@ -18,8 +18,8 @@ use alloc::vec::Vec;
 
 use abi::signals;
 use ipc::{Bytes, WaitSet, enumeration, message, protocol};
-use rt::object::Channel;
-use rt::println;
+use runtime::object::Channel;
+use runtime::println;
 
 use crate::init::ClientIdentity;
 

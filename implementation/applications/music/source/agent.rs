@@ -212,7 +212,7 @@ impl Player {
     /// (the window's copy is updated once a frame), unless a song the
     /// player asked for is still loading or a seek is not done yet.
     fn position_ms(&self) -> u64 {
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         let engine = self.shared.status();
         let seeked = self.seeking.is_none_or(|id| engine.seek_id == id);
         if self.requested.is_none() && seeked && engine.path == self.status.path {

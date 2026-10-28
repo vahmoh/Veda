@@ -12,7 +12,7 @@ use proto::wlan::{
     Band, ChannelInfo, KeyKind, PhyError, PhyInfo, PhyStats, RadioState, channel_flags, phy_caps, wlanmlme_ctl,
     wlanphy_ctl,
 };
-use rt::object::Channel;
+use runtime::object::Channel;
 use wlan::frame::Mac;
 
 /// How long a control call to the driver may take before the radio is

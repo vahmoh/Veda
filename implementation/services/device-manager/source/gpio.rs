@@ -31,8 +31,8 @@ use acpi::name::Path;
 use acpi::resource::{Gpio as Connection, Resource as AcpiResource};
 use gpio::{Change, Layout, Pads, Registers, Trigger};
 use proto::pci::PciError;
-use rt::object::{Event, Interrupt, Resource, Vmo};
-use rt::println;
+use runtime::object::{Event, Interrupt, Resource, Vmo};
+use runtime::println;
 
 use crate::acpi::Acpi;
 

@@ -459,7 +459,7 @@ impl Files {
     /// operations' thread finished: the operation's outcome, or `None` while
     /// it goes on.
     fn await_job(&mut self, id: u64) -> Option<Finished> {
-        let done = self.worker.as_ref().is_some_and(|w| w.wait_for(id, rt::time::now_ns() + OPERATION_WAIT_NS));
+        let done = self.worker.as_ref().is_some_and(|w| w.wait_for(id, runtime::time::now_ns() + OPERATION_WAIT_NS));
         let finished = self.collect_jobs();
         if !done {
             return None;

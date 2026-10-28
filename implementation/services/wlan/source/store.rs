@@ -16,7 +16,7 @@
 use alloc::vec::Vec;
 
 use files::fs::{Error, Fs, FsError};
-use rt::println;
+use runtime::println;
 use wlan::profile::{self, Profile};
 
 const DIR: &str = "/home/.private/wlan";

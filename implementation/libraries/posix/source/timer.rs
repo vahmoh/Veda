@@ -8,7 +8,7 @@
 //! process (`SIGALRM`, `SIGVTALRM`, `SIGPROF`, or a POSIX timer's own), or
 //! to a thread of it (`SIGEV_THREAD_ID`: musl's `SIGEV_THREAD` timers have
 //! a thread of their own wait for the signal of each expiration). The
-//! thread runs only the layer's code, on `rt`'s heap and locks.
+//! thread runs only the layer's code, on `runtime`'s heap and locks.
 //!
 //! Real-time timers count down on the monotonic clock: an absolute time of
 //! `CLOCK_REALTIME` is the time from now until then when it is set (Veda's
@@ -24,8 +24,8 @@
 use alloc::collections::BTreeMap;
 
 use abi::signals::SIGNALED;
-use rt::object::Event;
-use rt::sync::Mutex;
+use runtime::object::Event;
+use runtime::sync::Mutex;
 
 use crate::error::{self, SysResult};
 use crate::linux::errno::{EAGAIN, EINVAL, ENOMEM};
@@ -58,7 +58,7 @@ impl Clock {
     fn now(self) -> u64 {
         match self {
             Clock::Monotonic => time::monotonic_ns(),
-            Clock::Process => rt::object::process_self_info().map_or(0, |i| i.cpu_time_ns),
+            Clock::Process => runtime::object::process_self_info().map_or(0, |i| i.cpu_time_ns),
             Clock::Thread(tid) => crate::thread::cpu_time_ns(tid).unwrap_or(0),
         }
     }
@@ -153,7 +153,7 @@ fn wake_timers() -> Result<(), isize> {
     }
     let event = Event::create().map_err(error::kernel)?;
     let theirs = Event::from_handle(event.0.duplicate(None).map_err(error::kernel)?);
-    rt::thread::Builder::new().name("timers").spawn(move || timers_thread(theirs)).map_err(|_| ENOMEM)?;
+    runtime::thread::Builder::new().name("timers").spawn(move || timers_thread(theirs)).map_err(|_| ENOMEM)?;
     *wake = Some(event);
     Ok(())
 }

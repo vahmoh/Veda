@@ -62,9 +62,9 @@ use hv::acpi::{self, Function, GpioController};
 use hv::pci::{ConfigSpace, HostBridge, Write};
 use hv::platform::{error, gpio};
 use proto::pci::{DeviceInfo, pcidev};
-use rt::object::{Channel, Guest, Interrupt, Vcpu};
-use rt::println;
-use rt::sync::Mutex;
+use runtime::object::{Channel, Guest, Interrupt, Vcpu};
+use runtime::println;
+use runtime::sync::Mutex;
 
 use crate::gpio::{Owner, Pins};
 use crate::lines::Lines;

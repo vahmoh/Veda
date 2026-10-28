@@ -361,7 +361,7 @@ impl App for About {
     fn update(&mut self, ui: &mut Ui) {
         let now = ui.now();
         if now - self.last_refresh > 1_000_000_000 {
-            if let Ok(i) = rt::object::system_info() {
+            if let Ok(i) = runtime::object::system_info() {
                 self.info = i;
             }
             self.last_refresh = now;

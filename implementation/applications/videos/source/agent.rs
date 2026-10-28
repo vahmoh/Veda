@@ -82,7 +82,7 @@ fn playback(p: &Player) -> String {
 
 /// The video open as the agent sees it.
 fn now_playing(p: &Player) -> Value {
-    let now = rt::time::now_ns();
+    let now = runtime::time::now_ns();
     let at = p.position_us(now).max(0) as u64 / 1000;
     let mut v = json!({
         "title": p.title(),
@@ -153,7 +153,7 @@ impl Videos {
     /// What the engine said of the video open since the last frame (it
     /// may have opened, or failed).
     fn agent_sync(&mut self) -> Result<(), String> {
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         let Some(p) = &mut self.player else { return Ok(()) };
         p.sync(now);
         match p.phase() {
@@ -194,7 +194,7 @@ impl Videos {
         if !self.listed {
             self.reload();
         }
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         match action {
             "play" => {
                 if let Some(why) = &self.unavailable {

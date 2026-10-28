@@ -289,7 +289,7 @@ from this machine.
 
 | Source | Installed as |
 |--------|--------------|
-| The programs in `PROGRAMS` (`automation/source/components.rs`), without the symbols that `target/x86_64-unknown-linux-musl/` (on `rt` alone), `target/std/x86_64-unknown-veda/` (on the standard library) and `target/std/dynamic/x86_64-unknown-veda/` (on it, linked dynamically) keep | `/system/bin/<name>` |
+| The programs in `PROGRAMS` (`automation/source/components.rs`), without the symbols that `target/x86_64-unknown-linux-musl/` (on `runtime` alone), `target/std/x86_64-unknown-veda/` (on the standard library) and `target/std/dynamic/x86_64-unknown-veda/` (on it, linked dynamically) keep | `/system/bin/<name>` |
 | `LICENSE` (the GPL, version 3) | `/system/LICENSE.txt` |
 | The licence texts of what the image has of others' (as each part's release has them: the toolchain's, the driver VM's and the web engine's `licences` stages, the firmware lists' licences, the crates' packages), each port's `SOURCE`, and `README`, the list of the parts that About Veda shows (`automation/source/notices.rs`) | `/system/licences/` |
 | The fonts and their licence, `implementation/ports/fonts/` | `/system/fonts/` |
@@ -328,7 +328,7 @@ libraries ([Rust on Veda](RUST.md)).
 1. Create a crate in `implementation/applications/<name>`, and add it to
    the workspace's `members` in `Cargo.toml` and to `PROGRAMS` in
    `automation/source/components.rs`, as `Program::std("<name>")`.
-2. Its `Cargo.toml` depends on `rt`, `abi`, `ui` and others as needed.
+2. Its `Cargo.toml` depends on `runtime`, `abi`, `ui` and others as needed.
    Its program is in `source/`, where Cargo does not look unless told:
 
    ```toml
@@ -408,9 +408,9 @@ libraries ([Rust on Veda](RUST.md)).
   `ui.set_window_state` (maximise, minimise, full screen), `ui.activate()`
   (to the front), `ui.close_window()`.
 * **Long-running work** must not block `update`: give it to a
-  `std::thread` (which sets its priority with `rt::thread::set_priority`)
-  through a `std::sync::mpsc` channel, and have it signal an `Event` the
-  window waits on (`App::wait_handles`), as
+  `std::thread` (which sets its priority with
+  `runtime::thread::set_priority`) through a `std::sync::mpsc` channel, and
+  have it signal an `Event` the window waits on (`App::wait_handles`), as
   `implementation/applications/paint/source/files.rs` does.
 * **Files.** Small ones of the application's own (settings, state) go
   through `std::fs` and `apps_common::store` (reads within a limit,
@@ -429,16 +429,16 @@ libraries ([Rust on Veda](RUST.md)).
   after `triple_buffer()`, a frame may be drawn while the last is still on
   its way, and presented once `can_draw()` says so.
 
-### Programs on `rt` alone
+### Programs on `runtime` alone
 
 Services and drivers that the standard library stands on, that drive
-hardware or that must answer in time are `no_std` programs on `rt`
+hardware or that must answer in time are `no_std` programs on `runtime`
 (`Program::native`). Their `Cargo.toml` has `build` as a build
 dependency and a `[[bin]]` whose `path` is `source/main.rs`, `build.rs`
 is `fn main() { build::user_program(); }`, and `source/main.rs` starts with
-`#![no_std]`, `#![no_main]`, `extern crate alloc;` and `rt::entry!(main);`
-(a `main` returning `()`, an `i32` or a `Result`). They log with
-`rt::println!`.
+`#![no_std]`, `#![no_main]`, `extern crate alloc;` and
+`runtime::entry!(main);` (a `main` returning `()`, an `i32` or a `Result`).
+They log with `runtime::println!`.
 
 ### Programs in C and on Rust's standard library
 

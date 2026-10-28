@@ -23,7 +23,7 @@
 use ::audio::wav::{self, WavInfo};
 use proto::audio::{OutputStream, StreamSpec, audio, ring};
 use proto::vfs;
-use rt::println;
+use runtime::println;
 
 const PATH: &str = "/system/sounds/startup.wav";
 /// How often to look for a sound card.

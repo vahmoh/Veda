@@ -72,5 +72,5 @@ impl Instance {
 
 fn peer_closed(channel: &Channel) -> bool {
     let mut item = [abi::WaitItem { handle: channel.raw(), signals: signals::PEER_CLOSED, ..Default::default() }];
-    rt::object::wait_many(&mut item, 0).is_ok() && item[0].observed & signals::PEER_CLOSED != 0
+    runtime::object::wait_many(&mut item, 0).is_ok() && item[0].observed & signals::PEER_CLOSED != 0
 }

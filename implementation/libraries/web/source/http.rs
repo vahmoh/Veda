@@ -16,7 +16,7 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use rt::time::Duration;
+use runtime::time::Duration;
 
 use crate::{Connection, Url, WebError};
 
@@ -70,7 +70,7 @@ pub(crate) struct Deadline {
 impl Deadline {
     /// `timeout` from now on the system's clock.
     fn after(timeout: Duration) -> Deadline {
-        Deadline { at: rt::time::deadline_after(timeout), clock: rt::time::now_ns }
+        Deadline { at: runtime::time::deadline_after(timeout), clock: runtime::time::now_ns }
     }
 
     /// The time left, or `TimedOut`.

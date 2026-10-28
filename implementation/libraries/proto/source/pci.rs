@@ -28,8 +28,8 @@ use core::ptr::{read_volatile, write_volatile};
 
 use abi::{PAGE_SIZE, map_flags};
 use ipc::{IpcError, enumeration, message, protocol, union};
-use rt::object::{Interrupt, Resource, Vmo};
-use rt::vm::Mapping;
+use runtime::object::{Interrupt, Resource, Vmo};
+use runtime::vm::Mapping;
 
 message! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]

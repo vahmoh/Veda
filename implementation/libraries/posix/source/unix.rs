@@ -25,13 +25,13 @@
 //!
 //! **Sockets travel** to the processes a program starts and over sockets
 //! ([`Unix::travelling`]): a socket's channels are made shared
-//! (`rt::object::Channel::create_shared`), so that a copy of the handle
-//! that carries it — its connection's kernel socket or channel, else its
-//! inbox — goes, and what the handle does not say (its names, its peer, its
-//! options) with it. Several processes then hold one socket, as on Linux:
-//! a listening socket's connections, and a datagram socket's datagrams, go
-//! to whichever of them takes them first (`accept`, a read), and the socket
-//! is closed once all of them have closed it.
+//! (`runtime::object::Channel::create_shared`), so that a copy of the
+//! handle that carries it — its connection's kernel socket or channel,
+//! else its inbox — goes, and what the handle does not say (its names, its
+//! peer, its options) with it. Several processes then hold one socket, as
+//! on Linux: a listening socket's connections, and a datagram socket's
+//! datagrams, go to whichever of them takes them first (`accept`, a read),
+//! and the socket is closed once all of them have closed it.
 //!
 //! A datagram or seqpacket message looked at without being taken
 //! (`MSG_PEEK`, `FIONREAD`) is held here, in front of what the channel
@@ -69,8 +69,8 @@ use proto::fs::{
     FsError, MAX_DATAGRAM, MAX_SOCKET_NAME, SocketAddress, SocketConnection, SocketDatagram, SocketPeer, socket_event,
     socket_kind,
 };
-use rt::object::{Channel, Handle, Socket};
-use rt::sync::{Mutex, MutexGuard};
+use runtime::object::{Channel, Handle, Socket};
+use runtime::sync::{Mutex, MutexGuard};
 
 use crate::carry::Rights;
 use crate::error::{self, SysResult};
@@ -919,7 +919,7 @@ impl Unix {
             return Ok(0);
         }
         let mut random = [0u8; 4];
-        rt::object::random_bytes(&mut random);
+        runtime::object::random_bytes(&mut random);
         let start = u32::from_le_bytes(random);
         for k in 0..AUTOBIND_NAMES {
             let n = start.wrapping_add(k) % AUTOBIND_NAMES;

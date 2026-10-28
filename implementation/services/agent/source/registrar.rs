@@ -22,8 +22,8 @@ use std::sync::Arc;
 use agent::policy::RegistrationLimit;
 use proto::agent::{AgentError, agentapp};
 use proto::init::ClientIdentity;
-use rt::object::Channel;
-use rt::sync::{Condvar, Mutex};
+use runtime::object::Channel;
+use runtime::sync::{Condvar, Mutex};
 
 use crate::shared::Shared;
 use crate::worker::{self, Links, NewLink};
@@ -56,7 +56,7 @@ impl Registrar {
             wake: Condvar::new(),
         });
         let r = Registrar(inner.clone());
-        rt::thread::Builder::new()
+        runtime::thread::Builder::new()
             .name("registrar")
             .spawn(move || describe_registrations(&inner, &shared, &links))
             .ok()?;
@@ -70,7 +70,7 @@ impl Registrar {
             return Err(AgentError::Denied);
         }
         let mut s = self.0.state.lock();
-        if s.waiting.len() >= MAX_WAITING || !s.limit.admit(who.koid, rt::time::now_ns()) {
+        if s.waiting.len() >= MAX_WAITING || !s.limit.admit(who.koid, runtime::time::now_ns()) {
             println!("{} registers too often; refused", who.name);
             return Err(AgentError::Busy);
         }

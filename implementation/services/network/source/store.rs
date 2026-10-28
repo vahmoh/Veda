@@ -19,7 +19,7 @@ use abi::signals::{PEER_CLOSED, READABLE};
 use files::fs::Fs;
 use ipc::{Decode, Decoder, Encode, Encoder};
 use proto::net::FirewallConfig;
-use rt::object::Channel;
+use runtime::object::Channel;
 
 const DIR: &str = "/home/.private/network";
 const PATH: &str = "/home/.private/network/firewall";
@@ -45,7 +45,7 @@ impl Store {
     /// Starts the store's thread, which reads the settings at once.
     pub fn start() -> Option<Store> {
         let (ours, theirs) = Channel::create().ok()?;
-        rt::thread::Builder::new().name("firewall-store").spawn(move || serve(theirs)).ok()?;
+        runtime::thread::Builder::new().name("firewall-store").spawn(move || serve(theirs)).ok()?;
         Some(Store { channel: ours })
     }
 
@@ -70,7 +70,7 @@ impl Store {
         let mut e = Encoder::new();
         config.clone().encode(&mut e);
         if self.channel.write(&e.bytes, Vec::new()).is_err() {
-            rt::println!("firewall: the settings could not be handed to the store");
+            runtime::println!("firewall: the settings could not be handed to the store");
         }
     }
 }
@@ -106,7 +106,7 @@ fn serve(channel: Channel) {
         if let Some(config) = latest
             && !save(&fs, &config)
         {
-            rt::println!("firewall: the settings could not be saved");
+            runtime::println!("firewall: the settings could not be saved");
         }
     }
 }

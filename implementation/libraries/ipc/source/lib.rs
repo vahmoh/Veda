@@ -38,8 +38,8 @@ use core::fmt;
 pub use abi::DEADLINE_INFINITE;
 use abi::{Error, RawHandle, WaitItem};
 pub use codec::{Bytes, Decode, DecodeError, Decoder, Encode, Encoder};
-pub use rt::object::{Channel, Handle, Message, Port};
-pub use rt::time::now_ns;
+pub use runtime::object::{Channel, Handle, Message, Port};
+pub use runtime::time::now_ns;
 
 /// Size of the message header.
 pub const HEADER_LEN: usize = 12;
@@ -458,10 +458,10 @@ impl WaitSet {
         let plan = registry.plan(&wanted);
         for (handle, kernel_key) in plan.cancel {
             // A handle closed took its registrations with it.
-            let _ = rt::object::wait_async_cancel(handle, port, kernel_key);
+            let _ = runtime::object::wait_async_cancel(handle, port, kernel_key);
         }
         for (w, kernel_key) in plan.register {
-            rt::object::wait_async(w.handle, port, kernel_key, w.signals)?;
+            runtime::object::wait_async(w.handle, port, kernel_key, w.signals)?;
             registry.armed(kernel_key);
         }
         let mut packets = [abi::PortPacket::default(); abi::PORT_WAIT_MAX];
@@ -484,27 +484,27 @@ impl WaitSet {
     /// them in calls of as many as it takes).
     fn wait_many(&mut self, deadline: u64) -> Result<Vec<(u64, u32)>, Error> {
         if self.items.is_empty() {
-            rt::time::sleep_until(deadline);
+            runtime::time::sleep_until(deadline);
             return Ok(Vec::new());
         }
         let max = abi::WAIT_MANY_MAX;
         if self.items.len() <= max {
-            match rt::object::wait_many(&mut self.items, deadline) {
+            match runtime::object::wait_many(&mut self.items, deadline) {
                 Ok(_) | Err(Error::TimedOut) => {}
                 Err(e) => return Err(e),
             }
             return Ok(self.ready(self.items.len()));
         }
         for chunk in self.items.chunks_mut(max) {
-            let _ = rt::object::wait_many(chunk, 0);
+            let _ = runtime::object::wait_many(chunk, 0);
         }
         let ready = self.ready(self.items.len());
         if !ready.is_empty() {
             return Ok(ready);
         }
         // Nothing ready among many handles: block on a short timeout.
-        let short = rt::time::now_ns().saturating_add(2_000_000).min(deadline);
-        let _ = rt::object::wait_many(&mut self.items[..max], short);
+        let short = runtime::time::now_ns().saturating_add(2_000_000).min(deadline);
+        let _ = runtime::object::wait_many(&mut self.items[..max], short);
         Ok(self.ready(max))
     }
 

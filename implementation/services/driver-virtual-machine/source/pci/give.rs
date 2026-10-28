@@ -18,8 +18,8 @@ use abi::map_flags;
 use driver_virtual_machine::functions::{Windows, messages};
 use hv::pci::{Bar, HostBridge};
 use proto::pci::{DeviceInfo, cap, find_capability, pcidev};
-use rt::object::Guest;
-use rt::println;
+use runtime::object::Guest;
+use runtime::println;
 
 const PAGE: u64 = 4096;
 

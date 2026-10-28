@@ -43,17 +43,17 @@ mod session;
 mod sound;
 
 use proto::media;
-use rt::object::Channel;
-use rt::println;
+use runtime::object::Channel;
+use runtime::println;
 
 use crate::session::Session;
 
-rt::entry!(main);
+runtime::entry!(main);
 
 /// Answers the player and decodes until the player closes the control
 /// channel (as `mediadec_main` does).
 fn main() -> i32 {
-    let Some(control) = rt::env::take_handle(media::CONTROL_ROLE) else {
+    let Some(control) = runtime::env::take_handle(media::CONTROL_ROLE) else {
         println!("started without a control channel");
         return 1;
     };
@@ -62,12 +62,12 @@ fn main() -> i32 {
     // not.
     let handle = control.raw();
     let watchdog =
-        rt::thread::Builder::new().name("watchdog").stack_size(16 << 10).spawn(move || media::watchdog(handle));
+        runtime::thread::Builder::new().name("watchdog").stack_size(16 << 10).spawn(move || media::watchdog(handle));
     if watchdog.is_err() {
         println!("cannot start its watchdog");
     }
     // As `mediadec` does, before reading anything.
-    if let Err(e) = rt::process::restrict(abi::restrict::ALL) {
+    if let Err(e) = runtime::process::restrict(abi::restrict::ALL) {
         println!("cannot give up what it does without ({e:?})");
         return 1;
     }

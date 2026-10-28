@@ -14,7 +14,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use abi::{RawHandle, signals};
-use rt::object::Channel;
+use runtime::object::Channel;
 
 ipc::protocol! {
     /// The running instance of an application, to which another hands what
@@ -132,16 +132,16 @@ mod tests {
     use super::*;
     use alloc::vec;
 
-    fn request(path: &str) -> rt::Message {
+    fn request(path: &str) -> runtime::Message {
         let mut e = ipc::Encoder::with_header(1, 5, ipc::FLAG_REQUEST);
         ipc::Encode::encode(path, &mut e);
-        rt::Message { bytes: e.bytes, handles: vec![] }
+        runtime::Message { bytes: e.bytes, handles: vec![] }
     }
 
     fn answer(accept: &impl Fn(&str) -> bool, path: &str) -> (bool, Vec<String>) {
         let mut files = Vec::new();
         let reply = instance::dispatch(&mut Handler { accept, files: &mut files }, request(path)).unwrap();
-        let mut msg = rt::Message { bytes: reply.bytes, handles: vec![] };
+        let mut msg = runtime::Message { bytes: reply.bytes, handles: vec![] };
         let (_, mut d) = ipc::open(&mut msg).unwrap();
         (<bool as ipc::Decode>::decode(&mut d).unwrap(), files)
     }

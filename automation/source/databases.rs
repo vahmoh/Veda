@@ -19,8 +19,8 @@ use crate::util::{self, Result};
 pub const PORT: &str = "iana-etc";
 
 /// Veda's one user: its name (the Terminal's `USER`), its user and group id
-/// (`rt::process::UID`, which the POSIX layer's `getuid` and `getgid` say)
-/// and its home (`files::path::HOME`).
+/// (`runtime::process::UID`, which the POSIX layer's `getuid` and `getgid`
+/// say) and its home (`files::path::HOME`).
 const USER: &str = "user";
 const ID: u32 = 1000;
 const HOME: &str = "/home/user";

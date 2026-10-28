@@ -22,7 +22,7 @@ use proto::display::modifiers;
 use proto::fs::FsError;
 use proto::input::keys;
 use proto::vfs;
-use rt::object::Vmo;
+use runtime::object::Vmo;
 use text::highlight::Language;
 use text::{Document, Pos};
 use ui::{App, FileDialog, FileDialogResult, Font, Icon, Menu, MenuItem, Ui, WindowSpec};
@@ -1091,7 +1091,7 @@ fn selected_chars(doc: &Document) -> usize {
 }
 
 fn main() {
-    let args = rt::env::args();
+    let args = runtime::env::args();
     let editor = Editor::new(args.get(1..).unwrap_or(&[]));
     let mut spec = WindowSpec::new("Text Editor", 980, 680);
     spec.min_width = 480;

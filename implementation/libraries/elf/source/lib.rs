@@ -75,12 +75,13 @@ pub const NATIVE: Machine = amd64::MACHINE;
 /// program cannot have another run in its place.
 pub const INTERPRETER: &str = "/system/lib/libc.so";
 
-/// The note that marks a Veda program, one built on Veda's runtime (`rt`,
-/// which carries it): its loader relocates it, makes its RELRO read-only,
-/// and starts it with Veda's startup message (`abi::startup`). POSIX
-/// programs have none. Its descriptor is the version of these conventions
-/// the program follows ([`VERSION`](veda::VERSION), little-endian), so that
-/// a loader refuses a program of others ([`Kind`]).
+/// The note that marks a Veda program, one built on Veda's runtime
+/// (`runtime`, which carries it): its loader relocates it, makes its RELRO
+/// read-only, and starts it with Veda's startup message (`abi::startup`).
+/// POSIX programs have none. Its descriptor is the version of these
+/// conventions the program follows ([`VERSION`](veda::VERSION),
+/// little-endian), so that a loader refuses a program of others
+/// ([`Kind`]).
 pub mod veda {
     /// The note's owner (`n_name`, without its terminating NUL).
     pub const NOTE_NAME: &[u8] = b"Veda";

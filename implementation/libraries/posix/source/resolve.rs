@@ -20,8 +20,8 @@ use core::net::IpAddr;
 
 use ipc::IpcError;
 use proto::net::{AddrFamily, NetError, ResolveResult};
-use rt::object::Channel;
-use rt::time::Duration;
+use runtime::object::Channel;
+use runtime::time::Duration;
 
 use crate::linux::sock::{AF_INET, AF_INET6, AF_UNSPEC};
 use crate::network;
@@ -96,7 +96,7 @@ fn lookup(name: &str, family: AddrFamily) -> Result<(Vec<IpAddr>, String), NetEr
         let (ours, theirs) = Channel::create().map_err(IpcError::Kernel)?;
         Ok(c.resolve(name.clone(), family, theirs)?.map(|()| ours))
     })??;
-    let message = reply.read_blocking(rt::time::deadline_after(LOOKUP_TIMEOUT)).map_err(|e| match e {
+    let message = reply.read_blocking(runtime::time::deadline_after(LOOKUP_TIMEOUT)).map_err(|e| match e {
         abi::Error::TimedOut => NetError::TimedOut,
         _ => NetError::Unavailable,
     })?;

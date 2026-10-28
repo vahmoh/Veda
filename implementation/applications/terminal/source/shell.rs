@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use proto::fs::{FsError, MAX_IO, Stat, file, open_flags};
 use proto::init::{AppInfo, launcher};
-use rt::object::Channel;
+use runtime::object::Channel;
 use terminal_core::classify::{self, Effect, Lookup};
 use terminal_core::edit;
 use terminal_core::screen::{Cell, Style, cells, color};

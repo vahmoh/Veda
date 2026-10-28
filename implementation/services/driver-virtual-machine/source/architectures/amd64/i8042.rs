@@ -12,9 +12,9 @@
 //! controls among them) the guest does not reach.
 
 use driver_virtual_machine::architecture::i8042_commands::Controller;
-use rt::object::IoPorts;
-use rt::println;
-use rt::sync::Mutex;
+use runtime::object::IoPorts;
+use runtime::println;
+use runtime::sync::Mutex;
 
 /// The controller's data port, and its status and command port; the
 /// keyboard's and the mouse's interrupt lines.

@@ -344,10 +344,10 @@ pub fn channel_create(out: usize, flags: u32) -> SysResult {
 
 /// Queues a message on a channel. Its handles are the kernel's as soon as
 /// their list has been read, whatever happens next: a write that fails
-/// closes them (as Zircon's does, and as `rt`'s `Channel::write` expects),
-/// so no failure leaves them in the caller's table without an owner.
-/// Neither endpoint of the channel may travel on it, nor any channel or
-/// socket that could reach it through what is queued
+/// closes them (as Zircon's does, and as `runtime`'s `Channel::write`
+/// expects), so no failure leaves them in the caller's table without an
+/// owner. Neither endpoint of the channel may travel on it, nor any
+/// channel or socket that could reach it through what is queued
 /// ([`crate::ipc::would_cycle`]): `NotSupported`.
 pub fn channel_write(raw: RawHandle, bytes: usize, n_bytes: usize, handles_ptr: usize, n_handles: usize) -> SysResult {
     let ch = get_channel(raw, Rights::WRITE);

@@ -10,8 +10,8 @@
 use alloc::sync::Arc;
 
 use proto::tty::{self, Tty};
-use rt::object::Vmo;
-use rt::sync::Mutex;
+use runtime::object::Vmo;
+use runtime::sync::Mutex;
 
 use crate::fd::{self, Object};
 use crate::linux::errno::{EINVAL, ENOTTY};

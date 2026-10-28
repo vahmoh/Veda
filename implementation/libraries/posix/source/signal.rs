@@ -40,7 +40,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use abi::ThreadState as Registers;
-use rt::sync::Mutex;
+use runtime::sync::Mutex;
 
 use crate::architecture::signal as arch;
 use crate::error::SysResult;
@@ -545,7 +545,7 @@ pub fn raise(s: u32) {
 pub fn take_incoming() {
     interrupt::taking_incoming();
     let mut sent = abi::SentSignals::default();
-    let taken = rt::sys::call(abi::nr::SIGNAL_TAKE, [&raw mut sent as usize, 0, 0, 0, 0, 0]);
+    let taken = runtime::sys::call(abi::nr::SIGNAL_TAKE, [&raw mut sent as usize, 0, 0, 0, 0, 0]);
     if !matches!(taken, Ok(n) if n > 0) {
         return;
     }

@@ -14,8 +14,8 @@ use proto::agent::{
     AgentConfig, AgentError, AgentEvent, AgentStatus, MemoryItem, ModelCatalog, Permission, UiLink, agent,
 };
 use proto::init::ClientIdentity;
-use rt::object::Channel;
-use rt::println;
+use runtime::object::Channel;
+use runtime::println;
 
 use crate::Agent;
 use crate::ui::Ui;

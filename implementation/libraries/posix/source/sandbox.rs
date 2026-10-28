@@ -213,7 +213,7 @@ pub unsafe extern "C" fn veda_confine_services(names: *const *const c_char, coun
 #[unsafe(no_mangle)]
 pub extern "C" fn veda_process_restrict(flags: c_uint) -> c_int {
     let _layer = crate::interrupt::Layer::enter();
-    match rt::process::restrict(flags as usize) {
+    match runtime::process::restrict(flags as usize) {
         Ok(()) => 0,
         Err(e) => error::kernel(e) as c_int,
     }

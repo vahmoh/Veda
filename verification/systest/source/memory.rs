@@ -10,9 +10,9 @@ use alloc::format;
 use alloc::string::{String, ToString};
 
 use abi::{Error, map_flags, memory_class, process_state};
-use rt::object::Process;
-use rt::time::Duration;
-use rt::vm;
+use runtime::object::Process;
+use runtime::time::Duration;
+use runtime::vm;
 
 use crate::posix::start_copy_with;
 use crate::{TestResult, check};
@@ -31,7 +31,7 @@ fn s<E: core::fmt::Display>(e: E) -> String {
 
 /// Memory programs may still take, beyond the kernel's reserve.
 fn left() -> usize {
-    rt::object::system_info().map_or(0, |i| i.free_memory as usize)
+    runtime::object::system_info().map_or(0, |i| i.free_memory as usize)
 }
 
 /// Touches `len` bytes of new private memory, writing to each page a byte
@@ -55,12 +55,12 @@ fn intact(at: usize, len: usize, seed: u8) -> bool {
 
 /// Waits until `done`, looking every 50 ms, for `secs` at most.
 fn until(secs: u64, what: &str, mut done: impl FnMut() -> bool) -> TestResult {
-    let deadline = rt::time::deadline_after(Duration::from_secs(secs));
+    let deadline = runtime::time::deadline_after(Duration::from_secs(secs));
     while !done() {
-        if rt::time::now_ns() >= deadline {
+        if runtime::time::now_ns() >= deadline {
             return Err(format!("{what} not within {secs} s"));
         }
-        rt::time::sleep(Duration::from_millis(50));
+        runtime::time::sleep(Duration::from_millis(50));
     }
     Ok(())
 }
@@ -77,7 +77,7 @@ fn state(p: &Process) -> u32 {
 /// application holding the most goes, never this one, which holds less.
 /// Each is ended for memory, and what this process wrote is intact.
 pub fn test_memory_runs_out() -> TestResult {
-    let me = rt::object::process_self_info().map_err(s)?;
+    let me = runtime::object::process_self_info().map_err(s)?;
     check(
         me.memory_class as usize == memory_class::APPLICATION,
         "a program the kernel command line asked for is an application's memory class",
@@ -93,10 +93,13 @@ pub fn test_memory_runs_out() -> TestResult {
         })
     })?;
     check(
-        rt::process::set_memory_class(Some(&held), memory_class::APPLICATION) == Err(Error::AccessDenied),
+        runtime::process::set_memory_class(Some(&held), memory_class::APPLICATION) == Err(Error::AccessDenied),
         "a process is not moved back from the expendable class",
     )?;
-    check(rt::process::set_memory_class(Some(&held), 3) == Err(Error::InvalidArgs), "an unknown class is refused")?;
+    check(
+        runtime::process::set_memory_class(Some(&held), 3) == Err(Error::InvalidArgs),
+        "an unknown class is refused",
+    )?;
     let left_mib = LEFT_MIB.to_string();
     let filler = start_copy_with(&["fill", &left_mib])?;
     let result = (|| {
@@ -125,10 +128,10 @@ pub fn test_memory_runs_out() -> TestResult {
 /// `systest hold MIB [expendable]`: moves itself to the expendable class
 /// if asked, touches MIB of memory, then waits to be ended.
 pub fn hold() -> i32 {
-    let args = rt::env::args();
+    let args = runtime::env::args();
     let Some(mib) = args.get(2).and_then(|a| a.parse::<usize>().ok()) else { return 2 };
     if args.get(3).is_some_and(|a| a == "expendable")
-        && rt::process::set_memory_class(None, memory_class::EXPENDABLE).is_err()
+        && runtime::process::set_memory_class(None, memory_class::EXPENDABLE).is_err()
     {
         return 3;
     }
@@ -136,7 +139,7 @@ pub fn hold() -> i32 {
         return 4;
     }
     loop {
-        rt::time::sleep(Duration::from_secs(60));
+        runtime::time::sleep(Duration::from_secs(60));
     }
 }
 
@@ -145,7 +148,7 @@ pub fn hold() -> i32 {
 /// own accesses end no one.
 pub fn fill() -> i32 {
     const STEP: usize = 16 * MIB;
-    let Some(mib) = rt::env::args().get(2).and_then(|a| a.parse::<usize>().ok()) else { return 2 };
+    let Some(mib) = runtime::env::args().get(2).and_then(|a| a.parse::<usize>().ok()) else { return 2 };
     let target = mib * MIB;
     loop {
         let spare = left().saturating_sub(target);
@@ -160,6 +163,6 @@ pub fn fill() -> i32 {
         }
     }
     loop {
-        rt::time::sleep(Duration::from_secs(60));
+        runtime::time::sleep(Duration::from_secs(60));
     }
 }

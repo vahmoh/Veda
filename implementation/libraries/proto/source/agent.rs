@@ -27,7 +27,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use ipc::{enumeration, message, protocol, union};
-use rt::object::{Channel, Vmo};
+use runtime::object::{Channel, Vmo};
 
 enumeration! {
     /// How much an action can affect the user, which decides whether the

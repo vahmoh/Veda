@@ -47,10 +47,10 @@ use compositor::buffers::Buffers;
 use gfx::{Bitmap, Rect};
 use num_traits::Float;
 use proto::gpu::gpu;
-use rt::object::{Event, Vmo};
-use rt::sync::Mutex;
-use rt::time::{Duration, now_ns};
-use rt::vm::Mapping;
+use runtime::object::{Event, Vmo};
+use runtime::sync::Mutex;
+use runtime::time::{Duration, now_ns};
+use runtime::vm::Mapping;
 
 use crate::pixels::Pixels;
 use crate::screen::Screen;
@@ -437,7 +437,7 @@ impl Pending {
             *slot.lock() = Some(r);
             let _ = theirs.signal();
         };
-        rt::thread::Builder::new().name("gpu-setup").spawn(body).ok()?;
+        runtime::thread::Builder::new().name("gpu-setup").spawn(body).ok()?;
         Some(Pending { done, result })
     }
 
@@ -494,7 +494,7 @@ fn setup(p: Pictures) -> Result<Gpu, String> {
         if now_ns() >= until {
             return Err(String::from("there is no GPU service"));
         }
-        rt::time::sleep(SERVICE_POLL);
+        runtime::time::sleep(SERVICE_POLL);
     }
     let t = GpuTransport::connect_to(gpu::NAME, CALL_NS).map_err(|e| e.to_string())?;
     let renderer = t.renderer().to_string();
@@ -1071,7 +1071,10 @@ impl Gpu {
                     let texture = Texture { id, w, h };
                     self.sampled.insert(serial, Sampled { texture, drawn: frame });
                     if !core::mem::replace(&mut self.said, true) {
-                        rt::println!("{} samples subsurfaces in place: their frames are never copied", self.renderer);
+                        runtime::println!(
+                            "{} samples subsurfaces in place: their frames are never copied",
+                            self.renderer
+                        );
                     }
                     return Some(texture);
                 }
@@ -1084,7 +1087,7 @@ impl Gpu {
                 _ => {
                     gl.delete_textures(&[id]);
                     self.samples = false;
-                    rt::println!("{} cannot sample subsurfaces in place: their frames are copied", self.renderer);
+                    runtime::println!("{} cannot sample subsurfaces in place: their frames are copied", self.renderer);
                     return None;
                 }
             }

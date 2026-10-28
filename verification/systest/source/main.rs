@@ -25,9 +25,9 @@ use ipc::Bytes;
 use proto::fs::{FsError, open_flags, vfs};
 use proto::init::TaskEvent;
 use proto::launcher;
-use rt::object::{Channel, Event, Interrupt, Vmo};
-use rt::println;
-use rt::sync::{Condvar, Mutex};
+use runtime::object::{Channel, Event, Interrupt, Vmo};
+use runtime::println;
+use runtime::sync::{Condvar, Mutex};
 
 #[cfg(target_arch = "x86_64")]
 #[path = "architectures/amd64/mod.rs"]
@@ -39,7 +39,7 @@ mod policy;
 mod ports;
 mod posix;
 
-rt::entry!(main);
+runtime::entry!(main);
 
 type TestResult = Result<(), String>;
 
@@ -143,11 +143,11 @@ fn test_service_restart() -> TestResult {
         let names = proto::with_registry(|r| r.list()).ok().and_then(|r| r.ok()).unwrap_or_default();
         names.iter().any(|n| n == "shell")
     };
-    let wait = || rt::time::sleep(rt::time::Duration::from_millis(200));
+    let wait = || runtime::time::sleep(runtime::time::Duration::from_millis(200));
     // The compositor goes with the desktop on the screen, as in use. (With
     // hardware virtualisation, systest gets here before the shell has made
     // its windows.)
-    let start = rt::time::Instant::now();
+    let start = runtime::time::Instant::now();
     while !shell_up() {
         if start.elapsed().as_millis() > 40_000 {
             return Err("the desktop shell did not start".into());
@@ -157,7 +157,7 @@ fn test_service_restart() -> TestResult {
     let shell_before = koid_of(&l, "shell")?;
     let old = koid_of(&l, "compositor")?.ok_or("the compositor is not running")?;
     l.kill(old).map_err(|e| e.to_string())?.map_err(|e| alloc::format!("kill: {e:?}"))?;
-    let start = rt::time::Instant::now();
+    let start = runtime::time::Instant::now();
     loop {
         if start.elapsed().as_millis() > 20_000 {
             return Err("the compositor was not restarted".into());
@@ -205,7 +205,7 @@ fn test_crash_report() -> TestResult {
         .launch("/system/bin/systest".into(), alloc::vec!["crash".into()])
         .map_err(|e| e.to_string())?
         .map_err(|e| alloc::format!("launch: {e:?}"))?;
-    let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(10));
+    let deadline = runtime::time::deadline_after(runtime::time::Duration::from_secs(10));
     // News that the installed applications changed may come first.
     let event = loop {
         let msg = events.read_blocking(deadline).map_err(|e| alloc::format!("no crash report: {e}"))?;
@@ -228,7 +228,7 @@ fn test_threads_and_locks() -> TestResult {
     let mut handles = Vec::new();
     for _ in 0..4 {
         let c = counter.clone();
-        handles.push(rt::thread::spawn(move || {
+        handles.push(runtime::thread::spawn(move || {
             for _ in 0..2000 {
                 *c.lock() += 1;
             }
@@ -242,8 +242,8 @@ fn test_threads_and_locks() -> TestResult {
     // Condition variable handshake between two threads.
     let state = Arc::new((Mutex::new(false), Condvar::new()));
     let s2 = state.clone();
-    let waker = rt::thread::spawn(move || {
-        rt::time::sleep(rt::time::Duration::from_millis(20));
+    let waker = runtime::thread::spawn(move || {
+        runtime::time::sleep(runtime::time::Duration::from_millis(20));
         *s2.0.lock() = true;
         s2.1.notify_all();
     });
@@ -260,8 +260,8 @@ fn test_threads_and_locks() -> TestResult {
     let (set, done) =
         (Arc::new(Event::create().map_err(|e| e.to_string())?), Event::create().map_err(|e| e.to_string())?);
     let (theirs, finish) = (set.clone(), Event::from_handle(done.0.duplicate(None).map_err(|e| e.to_string())?));
-    let thread = rt::thread::spawn(move || {
-        let r = rt::thread::set_priority(wanted);
+    let thread = runtime::thread::spawn(move || {
+        let r = runtime::thread::set_priority(wanted);
         let _ = theirs.signal();
         let _ = finish.wait(abi::signals::SIGNALED, abi::DEADLINE_INFINITE);
         r
@@ -288,7 +288,7 @@ fn priority_limits() -> TestResult {
     // Its thread holds it, never started: ended, it lets go.
     low.kill().map_err(err)?;
     held?;
-    let own = rt::object::process_self_info().map_err(err)?.max_priority;
+    let own = runtime::object::process_self_info().map_err(err)?.max_priority;
     let inherited = bare_process(0).and_then(|p| p.info()).map_err(err)?.max_priority;
     check(inherited == own, "a process made without one has its creator's")?;
     check(bare_process(REALTIME + 1).err() == Some(abi::Error::InvalidArgs), "none is above REALTIME")
@@ -296,15 +296,17 @@ fn priority_limits() -> TestResult {
 
 /// A thread made in `process`, whose maximum priority is `max`, below
 /// `NORMAL`: it starts at `max`, is not raised above it, and goes lower.
-fn thread_below(process: &rt::object::Process, max: usize) -> TestResult {
+fn thread_below(process: &runtime::object::Process, max: usize) -> TestResult {
     let err = |e: abi::Error| e.to_string();
     check(process.info().map_err(err)?.max_priority == max as u32, "a process's maximum priority, as given")?;
     let name = "main";
-    let created =
-        rt::sys::call(abi::nr::THREAD_CREATE, [process.raw() as usize, name.as_ptr() as usize, name.len(), 0, 0, 0]);
+    let created = runtime::sys::call(
+        abi::nr::THREAD_CREATE,
+        [process.raw() as usize, name.as_ptr() as usize, name.len(), 0, 0, 0],
+    );
     // SAFETY: a fresh handle from the kernel.
-    let thread = rt::object::Thread(unsafe { rt::object::Handle::from_raw(created.map_err(err)? as u32) });
-    let set = |p: usize| rt::sys::call(abi::nr::THREAD_SET_PRIORITY, [thread.raw() as usize, p, 0, 0, 0, 0]);
+    let thread = runtime::object::Thread(unsafe { runtime::object::Handle::from_raw(created.map_err(err)? as u32) });
+    let set = |p: usize| runtime::sys::call(abi::nr::THREAD_SET_PRIORITY, [thread.raw() as usize, p, 0, 0, 0, 0]);
     let at = || thread.info().map(|i| i.priority as usize).map_err(err);
     check(at()? == max, "its threads start at it, below NORMAL")?;
     check(set(max + 1).err() == Some(abi::Error::AccessDenied), "none is raised above it")?;
@@ -313,11 +315,11 @@ fn thread_below(process: &rt::object::Process, max: usize) -> TestResult {
 
 /// A process whose threads may run at `max_priority` at most (0: as high as
 /// systest's): the kernel object alone, which nothing starts.
-pub fn bare_process(max_priority: usize) -> Result<rt::object::Process, abi::Error> {
+pub fn bare_process(max_priority: usize) -> Result<runtime::object::Process, abi::Error> {
     let name = "bare";
-    let h = rt::sys::call(abi::nr::PROCESS_CREATE, [name.as_ptr() as usize, name.len(), max_priority, 0, 0, 0])?;
+    let h = runtime::sys::call(abi::nr::PROCESS_CREATE, [name.as_ptr() as usize, name.len(), max_priority, 0, 0, 0])?;
     // SAFETY: a fresh handle from the kernel.
-    Ok(rt::object::Process(unsafe { rt::object::Handle::from_raw(h as u32) }))
+    Ok(runtime::object::Process(unsafe { runtime::object::Handle::from_raw(h as u32) }))
 }
 
 /// No ready thread waits for ever, nor does whoever waits for it: a thread
@@ -334,7 +336,7 @@ fn test_starved_threads_run() -> TestResult {
     let (held, go, stop) =
         (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
     let (l, h, g) = (lock.clone(), held.clone(), go.clone());
-    let holder = rt::thread::Builder::new()
+    let holder = runtime::thread::Builder::new()
         .name("holder")
         .priority(abi::priority::NORMAL - 2)
         .spawn(move || {
@@ -348,12 +350,12 @@ fn test_starved_threads_run() -> TestResult {
         })
         .map_err(err)?;
     while !held.load(Ordering::Acquire) {
-        rt::time::sleep(rt::time::Duration::from_millis(1));
+        runtime::time::sleep(runtime::time::Duration::from_millis(1));
     }
-    let spinners: Vec<_> = (0..rt::pool::cpus())
+    let spinners: Vec<_> = (0..runtime::pool::cpus())
         .map(|_| {
             let stop = stop.clone();
-            rt::thread::Builder::new().name("spinner").spawn(move || {
+            runtime::thread::Builder::new().name("spinner").spawn(move || {
                 while !stop.load(Ordering::Relaxed) {
                     core::hint::spin_loop();
                 }
@@ -362,17 +364,17 @@ fn test_starved_threads_run() -> TestResult {
         .collect::<Result<_, _>>()
         .map_err(err)?;
     // The holder loses its processor to the spinners before it sees this.
-    rt::time::sleep(rt::time::Duration::from_millis(50));
+    runtime::time::sleep(runtime::time::Duration::from_millis(50));
     go.store(true, Ordering::Release);
-    let start = rt::time::now_ns();
+    let start = runtime::time::now_ns();
     let deadline = start + 5_000_000_000;
     let mut waited = None;
-    while rt::time::now_ns() < deadline {
+    while runtime::time::now_ns() < deadline {
         if lock.try_lock().is_some() {
-            waited = Some(rt::time::now_ns() - start);
+            waited = Some(runtime::time::now_ns() - start);
             break;
         }
-        rt::time::sleep(rt::time::Duration::from_millis(5));
+        runtime::time::sleep(runtime::time::Duration::from_millis(5));
     }
     stop.store(true, Ordering::Relaxed);
     for s in spinners {
@@ -407,19 +409,22 @@ fn test_ipc_primitives() -> TestResult {
     let ev = Arc::new(Event::create().map_err(|e| e.to_string())?);
     let hits = Arc::new(AtomicU32::new(0));
     let (ev2, hits2) = (ev.clone(), hits.clone());
-    let t = rt::thread::spawn(move || {
-        if ev2.wait(abi::signals::SIGNALED, rt::time::deadline_after(rt::time::Duration::from_secs(5))).is_ok() {
+    let t = runtime::thread::spawn(move || {
+        if ev2
+            .wait(abi::signals::SIGNALED, runtime::time::deadline_after(runtime::time::Duration::from_secs(5)))
+            .is_ok()
+        {
             hits2.fetch_add(1, Ordering::SeqCst);
         }
     });
-    rt::time::sleep(rt::time::Duration::from_millis(10));
+    runtime::time::sleep(runtime::time::Duration::from_millis(10));
     ev.signal().map_err(|e| e.to_string())?;
     t.join().map_err(|e| e.to_string())?;
     check(hits.load(Ordering::SeqCst) == 1, "event woke the waiter")?;
 
     // Timeouts expire.
-    let start = rt::time::Instant::now();
-    let r = ev.0.wait(abi::signals::USER_0, rt::time::deadline_after(rt::time::Duration::from_millis(30)));
+    let start = runtime::time::Instant::now();
+    let r = ev.0.wait(abi::signals::USER_0, runtime::time::deadline_after(runtime::time::Duration::from_millis(30)));
     check(r == Err(abi::Error::TimedOut) && start.elapsed().as_millis() >= 25, "wait timeout")
 }
 
@@ -431,15 +436,15 @@ fn test_ipc_primitives() -> TestResult {
 /// threads still starting elsewhere do not hold up.
 fn test_short_sleeps() -> TestResult {
     const SLEEP: u64 = 20_000;
-    let sleeper = rt::thread::Builder::new()
+    let sleeper = runtime::thread::Builder::new()
         .name("sleeper")
         .priority(abi::priority::HIGH)
         .spawn(|| {
             (0..100)
                 .map(|_| {
-                    let start = rt::time::now_ns();
-                    rt::time::sleep(rt::time::Duration::from_nanos(SLEEP));
-                    rt::time::now_ns() - start
+                    let start = runtime::time::now_ns();
+                    runtime::time::sleep(runtime::time::Duration::from_nanos(SLEEP));
+                    runtime::time::now_ns() - start
                 })
                 .collect::<Vec<u64>>()
         })
@@ -463,25 +468,28 @@ fn test_short_sleeps() -> TestResult {
 /// processors there are.
 fn test_deadlines_interrupt_one_processor() -> TestResult {
     const SLEEPS: u64 = 200;
-    let interrupts = || rt::object::system_info().map(|i| i.timer_interrupts).map_err(|e| e.to_string());
+    let interrupts = || runtime::object::system_info().map(|i| i.timer_interrupts).map_err(|e| e.to_string());
     let before = interrupts()?;
     for _ in 0..SLEEPS {
-        rt::time::sleep(rt::time::Duration::from_millis(1));
+        runtime::time::sleep(runtime::time::Duration::from_millis(1));
     }
     let taken = interrupts()? - before;
     check(
         taken < SLEEPS * 3 / 2,
-        &alloc::format!("{SLEEPS} sleeps of 1 ms took {taken} timer interrupts on {} processors", rt::pool::cpus()),
+        &alloc::format!(
+            "{SLEEPS} sleeps of 1 ms took {taken} timer interrupts on {} processors",
+            runtime::pool::cpus()
+        ),
     )
 }
 
 /// A thread on every processor at `priority` that never waits nor makes a
 /// system call, until `stop` is set.
-fn spinners(priority: usize, stop: &Arc<AtomicBool>) -> Result<Vec<rt::thread::JoinHandle<()>>, String> {
-    (0..rt::pool::cpus())
+fn spinners(priority: usize, stop: &Arc<AtomicBool>) -> Result<Vec<runtime::thread::JoinHandle<()>>, String> {
+    (0..runtime::pool::cpus())
         .map(|_| {
             let stop = stop.clone();
-            rt::thread::Builder::new()
+            runtime::thread::Builder::new()
                 .name("spinner")
                 .priority(priority)
                 .spawn(move || {
@@ -510,7 +518,7 @@ fn test_waking_preempts_elsewhere() -> TestResult {
         // When the woken thread last ran (0: not since it was woken).
         let ran = Arc::new(AtomicU64::new(0));
         let (theirs, ran_at) = (event.clone(), ran.clone());
-        let woken = rt::thread::Builder::new()
+        let woken = runtime::thread::Builder::new()
             .name("woken")
             .priority(abi::priority::HIGH)
             .spawn(move || {
@@ -519,19 +527,19 @@ fn test_waking_preempts_elsewhere() -> TestResult {
                         return;
                     }
                     let _ = theirs.clear();
-                    ran_at.store(rt::time::now_ns(), Ordering::Release);
+                    ran_at.store(runtime::time::now_ns(), Ordering::Release);
                 }
             })
             .map_err(|e| e.to_string())?;
-        let waker = rt::thread::Builder::new()
+        let waker = runtime::thread::Builder::new()
             .name("waker")
             .priority(abi::priority::HIGH)
             .spawn(move || {
                 (0..ROUNDS)
                     .map(|_| {
-                        rt::time::sleep(rt::time::Duration::from_millis(1));
+                        runtime::time::sleep(runtime::time::Duration::from_millis(1));
                         ran.store(0, Ordering::Release);
-                        let start = rt::time::now_ns();
+                        let start = runtime::time::now_ns();
                         let _ = event.signal();
                         // No system call: this processor stays this thread's.
                         loop {
@@ -573,10 +581,10 @@ fn test_waking_preempts_elsewhere() -> TestResult {
 /// a fifth of the time, where without the budget it would not run at all.
 fn test_elevated_budget() -> TestResult {
     const SPIN: u64 = 400_000_000;
-    let start = rt::time::now_ns();
-    let spinning: Vec<_> = (0..rt::pool::cpus())
+    let start = runtime::time::now_ns();
+    let spinning: Vec<_> = (0..runtime::pool::cpus())
         .map(|_| {
-            rt::thread::Builder::new()
+            runtime::thread::Builder::new()
                 .name("spinner")
                 .priority(abi::priority::HIGH)
                 .spawn(move || {
@@ -584,7 +592,7 @@ fn test_elevated_budget() -> TestResult {
                     loop {
                         n = n.wrapping_add(1);
                         // A system call now and then, to see the time.
-                        if n.is_multiple_of(4096) && rt::time::now_ns() >= start + SPIN {
+                        if n.is_multiple_of(4096) && runtime::time::now_ns() >= start + SPIN {
                             break;
                         }
                         core::hint::spin_loop();
@@ -595,9 +603,9 @@ fn test_elevated_budget() -> TestResult {
         .collect::<Result<_, _>>()?;
     // The time this thread ran: the gaps between its readings of the clock
     // that are too short for another thread to have run in between.
-    let (mut ran, mut last) = (0, rt::time::now_ns());
+    let (mut ran, mut last) = (0, runtime::time::now_ns());
     while last < start + SPIN {
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         if now - last < 50_000 {
             ran += now - last;
         }
@@ -646,20 +654,20 @@ fn test_cpu_time_while_running() -> TestResult {
     let err = |e: abi::Error| e.to_string();
     let shared = Arc::new(Shared::default());
     let theirs = shared.clone();
-    let start = rt::object::process_self_info().map_err(err)?.cpu_time_ns;
-    let spinner = rt::thread::Builder::new()
+    let start = runtime::object::process_self_info().map_err(err)?.cpu_time_ns;
+    let spinner = runtime::thread::Builder::new()
         .name("spinner")
         .spawn(move || -> Result<Vec<Reading>, abi::Error> {
-            let own = rt::sys::call(abi::nr::THREAD_SELF, [0; 6])?;
+            let own = runtime::sys::call(abi::nr::THREAD_SELF, [0; 6])?;
             // SAFETY: a fresh handle from the kernel.
-            let own = rt::object::Thread(unsafe { rt::object::Handle::from_raw(own as u32) });
+            let own = runtime::object::Thread(unsafe { runtime::object::Handle::from_raw(own as u32) });
             // Room for every reading kept, so that none asks for memory.
             let mut readings = Vec::with_capacity(ROUNDS + 1);
             loop {
-                let before = rt::time::now_ns();
+                let before = runtime::time::now_ns();
                 let thread = own.info()?.cpu_time_ns;
-                let process = rt::object::process_self_info()?.cpu_time_ns;
-                let after = rt::time::now_ns();
+                let process = runtime::object::process_self_info()?.cpu_time_ns;
+                let after = runtime::time::now_ns();
                 theirs.thread.store(thread, Ordering::Release);
                 theirs.process.store(process, Ordering::Release);
                 if readings.len() <= ROUNDS {
@@ -668,24 +676,24 @@ fn test_cpu_time_while_running() -> TestResult {
                 } else if theirs.stop.load(Ordering::Acquire) {
                     return Ok(readings);
                 }
-                while rt::time::now_ns() < after + 1_000_000 {
+                while runtime::time::now_ns() < after + 1_000_000 {
                     core::hint::spin_loop();
                 }
             }
         })
         .map_err(err)?;
-    let watched = rt::object::Thread(spinner.thread().0.duplicate(None).map_err(err)?);
+    let watched = runtime::object::Thread(spinner.thread().0.duplicate(None).map_err(err)?);
     // This thread reads them every millisecond, until the spinner has kept
     // all its readings, each after it has seen what the spinner last read.
     let crossed = (|| {
-        let deadline = rt::time::now_ns() + 10_000_000_000;
+        let deadline = runtime::time::now_ns() + 10_000_000_000;
         loop {
-            rt::time::sleep(rt::time::Duration::from_millis(1));
+            runtime::time::sleep(runtime::time::Duration::from_millis(1));
             let done = shared.kept.load(Ordering::Acquire) as usize > ROUNDS;
             let (thread_seen, process_seen) =
                 (shared.thread.load(Ordering::Acquire), shared.process.load(Ordering::Acquire));
             let thread = watched.info().map_err(err)?.cpu_time_ns;
-            let process = rt::object::process_self_info().map_err(err)?.cpu_time_ns;
+            let process = runtime::object::process_self_info().map_err(err)?.cpu_time_ns;
             check(
                 thread >= thread_seen && process >= process_seen,
                 &alloc::format!(
@@ -696,7 +704,7 @@ fn test_cpu_time_while_running() -> TestResult {
             if done {
                 return Ok(());
             }
-            if rt::time::now_ns() > deadline {
+            if runtime::time::now_ns() > deadline {
                 return Err(alloc::format!(
                     "the spinning thread did not read its CPU time {} times in 10 s",
                     ROUNDS + 1
@@ -728,7 +736,7 @@ fn test_cpu_time_while_running() -> TestResult {
     }
     crossed?;
     let used = watched.info().map_err(err)?.cpu_time_ns;
-    let grew = rt::object::process_self_info().map_err(err)?.cpu_time_ns.saturating_sub(start);
+    let grew = runtime::object::process_self_info().map_err(err)?.cpu_time_ns.saturating_sub(start);
     check(
         grew >= used,
         &alloc::format!("a process's CPU time grew by {grew} ns while a thread of its, now ended, used {used} ns"),
@@ -746,7 +754,7 @@ fn test_write_combining_memory() -> TestResult {
     let word = |i: usize| 0x5eda_0000_0000_0000 | i as u64;
     let vmo = Vmo::create_with(4 * PAGE, vmo_flags::WRITE_COMBINING).map_err(err)?;
     let mapped = Vmo::from_handle(vmo.0.duplicate(None).map_err(err)?);
-    let map = rt::vm::Mapping::new(mapped, 4 * PAGE, map_flags::READ | map_flags::WRITE).map_err(err)?;
+    let map = runtime::vm::Mapping::new(mapped, 4 * PAGE, map_flags::READ | map_flags::WRITE).map_err(err)?;
     // The first page through the mapping (which commits it), the second
     // through the kernel.
     for i in 0..PAGE / 8 {
@@ -812,13 +820,13 @@ fn test_software_interrupts() -> TestResult {
 type Test = (&'static str, fn() -> TestResult);
 
 fn main() -> i32 {
-    match rt::env::args().get(1).map(|a| a.as_str()) {
+    match runtime::env::args().get(1).map(|a| a.as_str()) {
         Some("crash") => crash(),
         Some("hold") => return memory::hold(),
         Some("fill") => return memory::fill(),
-        Some("limits") => return policy::limits(rt::env::args().get(2)),
+        Some("limits") => return policy::limits(runtime::env::args().get(2)),
         Some("job") => return posix::job(),
-        Some("end") => return posix::end(rt::env::args().get(2)),
+        Some("end") => return posix::end(runtime::env::args().get(2)),
         Some("restricted") => return posix::restricted(),
         Some("unmapped") => return posix::unmapped(),
         Some("wait") => {

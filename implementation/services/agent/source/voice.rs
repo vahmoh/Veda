@@ -240,7 +240,7 @@ impl Voice {
                     println!("the voice ran dry mid-answer; gathering {} ms before playing now", self.prebuffer_ms);
                 }
             }
-            self.gathering_since = Some(rt::time::now_ns());
+            self.gathering_since = Some(runtime::time::now_ns());
             self.complete = false;
         }
         self.queue.extend(pcm.iter().copied());
@@ -263,7 +263,7 @@ impl Voice {
             let frames = (self.prebuffer_ms * (VOICE_RATE / 1000)) as usize;
             let wait_ns = (self.prebuffer_ms + PREBUFFER_GRACE_MS) as u64 * 1_000_000;
             let enough =
-                self.queue.len() >= frames || self.complete || rt::time::now_ns().saturating_sub(since) >= wait_ns;
+                self.queue.len() >= frames || self.complete || runtime::time::now_ns().saturating_sub(since) >= wait_ns;
             if !enough {
                 return;
             }

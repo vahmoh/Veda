@@ -78,7 +78,7 @@ fn main() {
     // Pages composited on the GPU if there is one and the memory for it;
     // painted on the CPU otherwise, which takes a fraction of the processor
     // that compositing them in software would.
-    let memory = rt::object::system_info().map_or(0, |i| i.total_memory);
+    let memory = runtime::object::system_info().map_or(0, |i| i.total_memory);
     let enough = memory >= COMPOSITING_MEMORY;
     let gpu = if store.settings.acceleration && enough { egl::gpu_renderer() } else { None };
     match &gpu {

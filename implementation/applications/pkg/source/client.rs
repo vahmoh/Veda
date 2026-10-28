@@ -14,7 +14,7 @@ use ipc::Bytes;
 use proto::packages::{
     Action, Failure, PAGE, PROGRESS, PackageSummary, Plan, Progress, RepositoryChange, Request, Scope, Stage, packages,
 };
-use rt::object::Channel;
+use runtime::object::Channel;
 
 use ::packages::count;
 

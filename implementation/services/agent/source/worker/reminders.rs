@@ -22,7 +22,7 @@ impl Ctx {
 
     /// `timer`: set, list and cancel timers.
     pub(super) fn timer(&self, args: &Value) -> Result<Value, String> {
-        let now = rt::time::unix_time_ns() / 1_000_000_000;
+        let now = runtime::time::unix_time_ns() / 1_000_000_000;
         let mut sh = self.shared.lock();
         match args["operation"].as_str().unwrap_or("list") {
             "set" => {

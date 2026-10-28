@@ -53,9 +53,9 @@ use ::agent::deepgram;
 use ::agent::gate::EchoGate;
 use abi::{WaitItem, signals};
 use proto::agent::{AgentEvent, AgentState, AgentStatus, agent};
-use rt::object::Channel;
-use rt::println;
-use rt::sync::Mutex;
+use runtime::object::Channel;
+use runtime::println;
+use runtime::sync::Mutex;
 
 use admin::SettingsServer;
 use approvals::Approval;
@@ -203,7 +203,7 @@ impl Agent {
         // The window system tells the lock.
         const LOCK: u64 = 7;
         const CONN: u64 = 1 << 32;
-        self.check_lock(rt::time::now_ns());
+        self.check_lock(runtime::time::now_ns());
         self.rest();
         if self.wake_at_start {
             self.wake("start-up option", true);
@@ -211,7 +211,7 @@ impl Agent {
         // Deepgram's messages are waiting beyond what one pass handled.
         let mut backlog = false;
         loop {
-            let now = rt::time::now_ns();
+            let now = runtime::time::now_ns();
             let mut items: Vec<WaitItem> = Vec::new();
             let mut keys: Vec<u64> = Vec::new();
             let mut add = |h, s, k| {
@@ -259,7 +259,7 @@ impl Agent {
             if backlog {
                 deadline = now;
             }
-            let _ = rt::object::wait_many(&mut items, deadline);
+            let _ = runtime::object::wait_many(&mut items, deadline);
             let mut closed = Vec::new();
             for (it, &k) in items.iter().zip(&keys) {
                 if it.observed == 0 {
@@ -312,7 +312,7 @@ impl Agent {
             }
             backlog = self.session.is_some() && !self.poll_session();
             if let Some(l) = &mut self.listener
-                && let Some(said) = l.poll(rt::time::now_ns())
+                && let Some(said) = l.poll(runtime::time::now_ns())
             {
                 // What woke it is the first thing the user said.
                 self.on_wake.push(said);
@@ -326,7 +326,7 @@ impl Agent {
             if let Some(v) = &mut self.voice {
                 v.pump();
             }
-            let now = rt::time::now_ns();
+            let now = runtime::time::now_ns();
             self.check_lock(now);
             self.housekeeping(now);
             self.check_timers();
@@ -350,7 +350,7 @@ fn run() -> i32 {
     let mut endpoint = String::from(deepgram::AGENT_URL);
     let mut wake_at_start = false;
     let mut listen_endpoint = None;
-    for a in rt::env::args().iter().skip(1) {
+    for a in runtime::env::args().iter().skip(1) {
         wake_at_start |= a == "agent.wake";
         if let Some(e) = a.strip_prefix("agent.listen=")
             && (e.starts_with("ws://") || e.starts_with("wss://"))
@@ -445,7 +445,7 @@ fn run() -> i32 {
         listener: None,
         listen_endpoint,
         listen_retry_at: 0,
-        budget: listen::budget(rt::time::now_ns()),
+        budget: listen::budget(runtime::time::now_ns()),
         rest_at: None,
         locked: true,
         lock_watch: LockWatch::default(),

@@ -109,7 +109,7 @@ use alloc::vec::Vec;
 use core::net::{IpAddr, SocketAddr};
 
 use ipc::{Bytes, enumeration, message, protocol, union};
-use rt::object::{Channel, Socket};
+use runtime::object::{Channel, Socket};
 
 use crate::netring::LinkEndpoints;
 

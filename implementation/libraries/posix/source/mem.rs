@@ -22,8 +22,8 @@
 //! which `mprotect` cannot make writable either, private or not.
 
 use abi::{Error, Rights, map_flags};
-use rt::object::Vmo;
-use rt::vm;
+use runtime::object::Vmo;
+use runtime::vm;
 
 use crate::error::{self, SysResult};
 use crate::fd::{self, Object};

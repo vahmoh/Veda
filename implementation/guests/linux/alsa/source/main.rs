@@ -48,8 +48,8 @@ use std::time::Duration;
 use abi::signals;
 use guest_sys::retry::{self, Ended};
 use proto::audio::{DeviceFormat, Ring, Role, audiodev};
-use rt::guest::Watch;
-use rt::object::{Channel, Event};
+use runtime::guest::Watch;
+use runtime::object::{Channel, Event};
 use rustix::event::{PollFd, PollFlags, poll};
 
 use cards::Card;

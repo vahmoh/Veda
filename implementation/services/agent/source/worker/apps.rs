@@ -18,7 +18,7 @@ use agent::tools::{self, names};
 use ipc::IpcError;
 use proto::agent::{AppAgentInfo, agentapp};
 use proto::init::AppInfo;
-use rt::time::{DateTime, Duration};
+use runtime::time::{DateTime, Duration};
 use serde_json::{Value, json};
 
 use super::{Ctx, Outcome, Pending, launcher, show};
@@ -52,7 +52,7 @@ pub(super) struct AppLink {
 impl AppLink {
     fn alive(&self) -> bool {
         let mut item = abi::WaitItem { handle: self.channel, signals: abi::signals::PEER_CLOSED, ..Default::default() };
-        let _ = rt::object::wait_many(core::slice::from_mut(&mut item), 0);
+        let _ = runtime::object::wait_many(core::slice::from_mut(&mut item), 0);
         item.observed & abi::signals::PEER_CLOSED == 0
     }
 }
@@ -117,9 +117,9 @@ impl Ctx {
             }
             self.note_use(&app.id);
         }
-        let end = rt::time::deadline_after(START_TIMEOUT);
-        while rt::time::now_ns() < end {
-            rt::time::sleep(Duration::from_millis(50));
+        let end = runtime::time::deadline_after(START_TIMEOUT);
+        while runtime::time::now_ns() < end {
+            runtime::time::sleep(Duration::from_millis(50));
             self.take_links();
             if self.link(&app.id).is_some() {
                 return Ok(());
@@ -133,7 +133,7 @@ impl Ctx {
     pub(super) fn note_use(&self, app: &str) {
         let t = DateTime::now();
         let mut s = self.shared.lock();
-        s.memory.note_app_use(app, rt::time::unix_time_ns() / 1_000_000_000, t.hour as u32);
+        s.memory.note_app_use(app, runtime::time::unix_time_ns() / 1_000_000_000, t.hour as u32);
         s.save_memory();
     }
 

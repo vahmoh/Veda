@@ -6,7 +6,7 @@
 //! for `openat`, `pipe` for `pipe2`, ...), and `arch_prctl`.
 
 use abi::nr as veda;
-use rt::sys::call;
+use runtime::sys::call;
 
 use super::linux::{arch_prctl as prctl, nr};
 use crate::error::{self, SysResult};

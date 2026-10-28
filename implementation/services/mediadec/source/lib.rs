@@ -28,8 +28,8 @@
 //! Its Rust and the C library each keep their own: this half is made one
 //! object that exports nothing but [`mediadec_main`] (as the POSIX layer is),
 //! allocates with musl's `malloc`, and creates its one thread of its own,
-//! the watchdog, with the C library's `pthread_create` (a thread of `rt`'s
-//! would have no C thread state).
+//! the watchdog, with the C library's `pthread_create` (a thread of
+//! `runtime`'s would have no C thread state).
 
 #![no_std]
 
@@ -51,8 +51,8 @@ mod program {
 
     use abi::RawHandle;
     use proto::media;
-    use rt::object::{Channel, Handle};
-    use rt::println;
+    use runtime::object::{Channel, Handle};
+    use runtime::println;
 
     use crate::session::{MAX_ALLOC, Session};
 
@@ -149,8 +149,8 @@ mod program {
     #[panic_handler]
     fn panic(info: &core::panic::PanicInfo) -> ! {
         // Formatted without allocating, in case the heap is what failed.
-        rt::io::log_without_allocating(format_args!("panic: {info}\n"));
-        rt::sys::process_exit(abi::EXIT_CODE_PANICKED)
+        runtime::io::log_without_allocating(format_args!("panic: {info}\n"));
+        runtime::sys::process_exit(abi::EXIT_CODE_PANICKED)
     }
 
     /// The program, from the shim's `main()`: answers the player and decodes
@@ -175,7 +175,7 @@ mod program {
         }
         // Before any input is read: no kernel log, no processes, no new
         // executable memory, whatever a damaged file makes of the decoder.
-        if let Err(e) = rt::process::restrict(abi::restrict::ALL) {
+        if let Err(e) = runtime::process::restrict(abi::restrict::ALL) {
             println!("cannot give up what it does without ({e:?})");
             return 1;
         }

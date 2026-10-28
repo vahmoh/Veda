@@ -98,7 +98,7 @@ fn new_tab_page(b: &mut Browser, ui: &mut Ui, area: Rect) {
         Align::Center,
     );
     y += 56;
-    let now = rt::time::unix_time_ns() / 1_000_000_000;
+    let now = runtime::time::unix_time_ns() / 1_000_000_000;
     let sites: Vec<(String, String)> =
         b.store.history.top(now, 8).iter().map(|e| (e.url.clone(), e.title.clone())).collect();
     if sites.is_empty() {

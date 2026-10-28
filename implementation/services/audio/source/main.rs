@@ -50,13 +50,13 @@ use proto::audio::{
     audio, audiodev,
 };
 use proto::init::ClientIdentity;
-use rt::object::Channel;
-use rt::println;
+use runtime::object::Channel;
+use runtime::println;
 
 use capture::Capture;
 use mixer::Mixer;
 
-rt::entry!(main);
+runtime::entry!(main);
 
 /// Wait-set keys.
 const KEY_AUDIO_LISTENER: u64 = 1;
@@ -365,7 +365,7 @@ impl Service {
 
     fn run(&mut self, audio_listener: Channel, dev_listener: Channel) -> ! {
         loop {
-            let now = rt::time::now_ns();
+            let now = runtime::time::now_ns();
             self.items.clear();
             self.keys.clear();
             self.add(audio_listener.raw(), signals::READABLE, KEY_AUDIO_LISTENER);
@@ -386,7 +386,7 @@ impl Service {
                 });
                 self.keys.push(k);
             }
-            let _ = rt::object::wait_many(&mut self.items, self.mixer.deadline(now));
+            let _ = runtime::object::wait_many(&mut self.items, self.mixer.deadline(now));
             self.closed.clear();
             for i in 0..self.items.len() {
                 let (observed, key) = (self.items[i].observed, self.keys[i]);
@@ -417,7 +417,7 @@ impl Service {
                 let k = self.closed[i];
                 self.disconnect(k);
             }
-            let now = rt::time::now_ns();
+            let now = runtime::time::now_ns();
             self.mixer.run(now);
             self.capture.run(&self.mixer, now);
         }
@@ -441,7 +441,7 @@ fn main() -> i32 {
     };
     println!("ready (mixing at {} Hz until a device attaches)", mixer::NULL_RATE);
     // Mixing is time-critical: run above normal applications.
-    let worker = rt::thread::Builder::new().name("mixer").priority(abi::priority::HIGH).spawn(move || -> () {
+    let worker = runtime::thread::Builder::new().name("mixer").priority(abi::priority::HIGH).spawn(move || -> () {
         let mut svc = Service {
             mixer: Mixer::new(),
             capture: Capture::new(),

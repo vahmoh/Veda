@@ -33,10 +33,10 @@ memory and their devices.
    lose what Veda's protocols carry (audio clocks, flip timestamps, Wi-Fi
    state); Linux's user-space APIs would tie Veda's services to Linux.
 2. **The bridge carries Veda's system calls into the guest.** A guest
-   program uses `rt` built with `--cfg veda_guest`: its calls on Veda's
-   objects become operations on `/dev/veda`, which the guest's kernel
-   turns into hypercalls that the monitor carries out on the guest's own
-   handle table. So `ipc` and `proto` work unchanged, and the guest
+   program uses `runtime` built with `--cfg veda_guest`: its calls on
+   Veda's objects become operations on `/dev/veda`, which the guest's
+   kernel turns into hypercalls that the monitor carries out on the guest's
+   own handle table. So `ipc` and `proto` work unchanged, and the guest
    reaches only the objects it was given.
 3. **The guest is fully paravirtualized.** There is no emulated hardware
    (no PIC, PIT, I/O APIC, RTC, serial port or firmware code): processor
@@ -83,7 +83,7 @@ memory and their devices.
 | Monitor | `implementation/services/driver-virtual-machine` | The machine, its hypercalls and PCI functions, the bridge, the narrowed registry |
 | The monitor's library | `implementation/services/driver-virtual-machine/source/lib.rs` | The monitor's decisions that touch no object: the bridge's books, the guest's budget and window, where functions and BARs go, the keyboard controller's commands |
 | Guest kernel | `implementation/ports/linux` | Linux with `veda.patch` (`hvc_veda.c`, `drivers/virt/veda/bridge.c` and `efi.c`, `gpio-veda.c`, an i915 change) and `architectures/amd64/veda.patch` (`arch/x86/kernel/cpu/veda.c`, `arch/x86/pci/veda.c`) |
-| Guest runtime | `implementation/libraries/rt/source/guest.rs` | `rt`'s system calls through `/dev/veda`; watches |
+| Guest runtime | `implementation/libraries/runtime/source/guest.rs` | `runtime`'s system calls through `/dev/veda`; watches |
 | Guest programs | `implementation/guests/linux` | `init`; the drivers `input`, `alsa`, `net`, `wifi`, `kms` and `renderer`; `logkeeper`; the tests `bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `timertest`, `kmspause`; shared code (`sys`, `netlink`) |
 | Build | `automation/source/linux.rs`, `implementation/ports/linux/build.sh` | [`cargo automation linux`](#building) |
 
@@ -303,7 +303,7 @@ against Linux's device interfaces. The guest's `init` starts those its
 devices need (by PCI class; `input` always), and again when one ends: a
 second after, twice as long after each end soon after a start, up to a
 minute. A driver polls Linux's files and Veda's handles together through
-*watches* (`rt::guest::Watch`: files readable while a handle's signals
+*watches* (`runtime::guest::Watch`: files readable while a handle's signals
 are). When a watch fails (the monitor's limits, or the handle gone) or
 the service goes away, the driver ends its session and attaches again,
 later after each failure in a row (`guest_sys::retry`).
@@ -409,9 +409,9 @@ eight latest starts.
 | `Channel::write(bytes, handles)` | `VEDA_IOC_CHANNEL_WRITE`: copies the buffers in, checks the file holds the handles | Moves the handles out of the guest's table, writes the message |
 | `wait_many(items, deadline)` | `VEDA_IOC_WAIT`: finished at once, or sleeps until the ring says | Polls, or keeps the wait for its waiter thread, which writes the result to the ring and raises the callback vector |
 | `Mapping::new(vmo)` | `VEDA_IOC_VMO_MAP`, then `mmap` | Maps the VMO into the guest-physical window |
-| `rt::guest::Watch::new(handle, signals)` | `VEDA_IOC_WATCH`: a file whose `poll` makes a wait and reads its result | An ordinary wait, cancelled when the file closes |
-| `rt::guest::dmabuf(vmo, offset, len, writable)` | `VEDA_IOC_VMO_DMABUF`: a dma-buf of the window range, for devices or the processor; one not writable is a device's to read alone (an importer that maps every buffer both ways, as i915 does, still has it: the IOMMU refuses its writes) | Maps the VMO into the window until the dma-buf goes |
-| `rt::object::log_read(offset, buf)` | `VEDA_IOC_LOG_READ` | Reads Veda's log |
+| `runtime::guest::Watch::new(handle, signals)` | `VEDA_IOC_WATCH`: a file whose `poll` makes a wait and reads its result | An ordinary wait, cancelled when the file closes |
+| `runtime::guest::dmabuf(vmo, offset, len, writable)` | `VEDA_IOC_VMO_DMABUF`: a dma-buf of the window range, for devices or the processor; one not writable is a device's to read alone (an importer that maps every buffer both ways, as i915 does, still has it: the IOMMU refuses its writes) | Maps the VMO into the window until the dma-buf goes |
+| `runtime::object::log_read(offset, buf)` | `VEDA_IOC_LOG_READ` | Reads Veda's log |
 
 The guest's kernel lets a file use only the handles it made or received,
 and closes them when the file closes. The guest's registry

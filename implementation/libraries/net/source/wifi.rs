@@ -34,8 +34,8 @@ pub use proto::wlan::{
 
 use ipc::{Bytes, IpcError};
 use proto::wlan::{ConnectRequest, WLAN_EVENT, wlan};
-use rt::object::Channel;
-use rt::sync::Mutex;
+use runtime::object::Channel;
+use runtime::sync::Mutex;
 
 use crate::Duration;
 
@@ -181,13 +181,13 @@ pub fn diagnostics() -> Result<WlanDiagnostics, WifiError> {
 /// Waits until [`status`] satisfies `done` or `timeout` passes; returns
 /// the last status.
 pub fn wait_for(timeout: Duration, mut done: impl FnMut(&WlanStatus) -> bool) -> Result<WlanStatus, WifiError> {
-    let end = rt::time::deadline_after(timeout);
+    let end = runtime::time::deadline_after(timeout);
     loop {
         let s = status()?;
-        if done(&s) || rt::time::now_ns() >= end {
+        if done(&s) || runtime::time::now_ns() >= end {
             return Ok(s);
         }
-        rt::time::sleep(Duration::from_millis(100));
+        runtime::time::sleep(Duration::from_millis(100));
     }
 }
 
@@ -228,7 +228,7 @@ impl Watcher {
 
     /// Waits up to `timeout` for the next event.
     pub fn next(&self, timeout: Duration) -> Result<Option<WlanEvent>, WifiError> {
-        let deadline = rt::time::deadline_after(timeout);
+        let deadline = runtime::time::deadline_after(timeout);
         loop {
             if let Some(ev) = self.try_next()? {
                 return Ok(Some(ev));

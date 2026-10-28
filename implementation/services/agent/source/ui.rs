@@ -6,8 +6,8 @@
 //! voice levels that the shell's animation reads every frame.
 
 use proto::agent::{AGENT_EVENT, AgentError, AgentEvent, Live, UiLink};
-use rt::object::{Channel, Vmo};
-use rt::vm::Mapping;
+use runtime::object::{Channel, Vmo};
+use runtime::vm::Mapping;
 
 /// The link to the shell's interface of the agent.
 pub struct Ui {

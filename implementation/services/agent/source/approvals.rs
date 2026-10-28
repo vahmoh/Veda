@@ -17,7 +17,7 @@ use agent::deepgram;
 use agent::notice::Notice;
 use agent::tools::{self, Risk};
 use proto::agent::{AgentError, AgentEvent, AgentState, ApprovalRequest};
-use rt::println;
+use runtime::println;
 use serde_json::{Value, json};
 
 use crate::Agent;
@@ -91,7 +91,7 @@ impl Agent {
             Outcome::Result(r) => r,
             Outcome::End => {
                 if let Some(s) = &mut self.session {
-                    s.request_end(rt::time::now_ns());
+                    s.request_end(runtime::time::now_ns());
                 }
                 tools::ok(Value::Null)
             }
@@ -133,7 +133,7 @@ impl Agent {
         self.next_approval += 1;
         let label = p.action.clone();
         println!("approval {} requested: {} ({})", id, label, p.detail);
-        let approval = Approval { id, pending: p, created: rt::time::now_ns() };
+        let approval = Approval { id, pending: p, created: runtime::time::now_ns() };
         let request = approval.request();
         self.approvals.push(approval);
         if let Some(ui) = &self.ui

@@ -47,8 +47,8 @@ use abi::{RawHandle, signals};
 use gfx::ShadowTemplate;
 use proto::fs::vfs;
 use proto::instance::{self, Instance};
-use rt::object::Vmo;
-use rt::println;
+use runtime::object::Vmo;
+use runtime::println;
 use ui::{App, FileDialog, FileDialogResult, Ui, WindowSpec, WindowState};
 use videos_core::playback::{EnginePhase, Phase};
 use videos_core::store;
@@ -232,7 +232,7 @@ impl Videos {
 
     /// Plays `path` (from where it was left, or the start).
     pub(crate) fn open_path(&mut self, path: String, at: OpenAt) {
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         if let Some(p) = &mut self.player
             && p.path == path
             && !matches!(p.phase(), Phase::Failed(_))
@@ -290,7 +290,7 @@ impl Videos {
     /// Closes the video open, remembering where it was.
     fn close_player(&mut self) {
         let Some(mut p) = self.player.take() else { return };
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         p.remember(now);
         self.take_requests(&mut p, None, now);
         self.engine.send(engine::Command::Close);
@@ -319,7 +319,7 @@ impl Videos {
                 },
                 Request::Remember { position_ms, duration_ms } => {
                     let (size, modified) = self.open_file;
-                    let now_s = rt::time::unix_time_ns() / 1_000_000_000;
+                    let now_s = runtime::time::unix_time_ns() / 1_000_000_000;
                     if self.state.remember(&p.path, position_ms, duration_ms, size, modified, now_s) {
                         self.save_soon(now);
                     }
@@ -355,7 +355,7 @@ impl Videos {
         }
         self.volume = v;
         self.muted = false;
-        self.note_volume(rt::time::now_ns());
+        self.note_volume(runtime::time::now_ns());
     }
 
     pub(crate) fn set_muted(&mut self, muted: bool) {
@@ -368,7 +368,7 @@ impl Videos {
             }
         }
         self.muted = muted;
-        self.note_volume(rt::time::now_ns());
+        self.note_volume(runtime::time::now_ns());
     }
 
     fn apply_volume(&self) {
@@ -645,7 +645,7 @@ fn main() {
 
 /// Runs the program; its exit code.
 fn run() -> i32 {
-    let args = rt::env::args();
+    let args = runtime::env::args();
     let mut decoder = String::from(engine::DECODER);
     let mut file = None;
     let mut it = args.iter().skip(1);

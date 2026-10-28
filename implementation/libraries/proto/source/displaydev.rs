@@ -73,8 +73,8 @@ use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use abi::Error;
 use ipc::{enumeration, message, protocol};
-use rt::object::{Event, Vmo};
-use rt::vm::Mapping;
+use runtime::object::{Event, Vmo};
+use runtime::vm::Mapping;
 
 enumeration! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -56,8 +56,8 @@ use proto::display::{WindowEvent, WindowInfo, WindowKind, WindowSpec, WindowStat
 use proto::init::{AppInfo, ClientIdentity, TaskEvent, launcher};
 use proto::shell::{ShellError, shell};
 use proto::vfs;
-use rt::object::{Channel, Message, Vmo};
-use rt::println;
+use runtime::object::{Channel, Message, Vmo};
+use runtime::println;
 use shell_common::wallpaper::{self, Loader, Wallpaper};
 use ui::window::Display;
 use ui::{Host, Icon, Ui};
@@ -594,7 +594,7 @@ impl Shell {
 
     /// Attaches the agent's interface and takes its events.
     fn check_agent(&mut self) {
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         if self.agent.is_none() && now >= self.next_agent_try {
             self.next_agent_try = now + 2_000_000_000;
             self.agent = agent::AgentLink::connect();
@@ -672,7 +672,7 @@ impl Shell {
     /// Looks at the wired network, and (re)connects to the Wi-Fi service's
     /// events if needed. Runs every few seconds.
     fn poll_network(&mut self) {
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         if now < self.next_net_poll {
             return;
         }
@@ -835,7 +835,8 @@ impl Shell {
     /// Shows, replaces or hides the taskbar tooltip.
     fn update_tooltip(&mut self) {
         let popup_open = self.popup.is_some();
-        let due = self.model.tip.as_ref().filter(|t| !popup_open && rt::time::now_ns() >= t.since + tooltip::DELAY_NS);
+        let due =
+            self.model.tip.as_ref().filter(|t| !popup_open && runtime::time::now_ns() >= t.since + tooltip::DELAY_NS);
         match due {
             Some(tip) => {
                 if self.tooltip.as_ref().map(|t| t.label()) != Some(tip.label.as_str()) {
@@ -853,7 +854,7 @@ impl Shell {
 
     /// Lets every surface process its events and draw.
     fn pump(&mut self) {
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         let Shell { model, desktop_host, desktop, taskbar_host, taskbar, popup, notes, .. } = self;
         let desktop_events = desktop_host.pump(|ui| desktop.update(ui, model));
         let appearing = desktop_events.iter().any(|e| matches!(e, WindowEvent::Appearing {}));
@@ -1027,7 +1028,7 @@ impl Shell {
     /// changed (Files, the Terminal and the agent change them too), unless
     /// an icon is being dragged or a menu is open.
     fn poll_desktop(&mut self) {
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         if now < self.next_desktop_poll {
             return;
         }
@@ -1122,7 +1123,7 @@ impl Shell {
         for w in &self.model.windows {
             let _ = self.display.close_window(w.id);
         }
-        self.power = Some(power::PowerOff::new(what, rt::time::now_ns()));
+        self.power = Some(power::PowerOff::new(what, runtime::time::now_ns()));
     }
 
     /// Follows a restart or shutdown that waits for the applications: on
@@ -1133,7 +1134,7 @@ impl Shell {
         if self.model.windows.is_empty() {
             return self.power_off(what);
         }
-        match p.pump(&self.display, &self.model, rt::time::now_ns()) {
+        match p.pump(&self.display, &self.model, runtime::time::now_ns()) {
             Some(power::Choice::Force) => self.power_off(what),
             Some(power::Choice::Cancel) => self.power = None,
             None => {}
@@ -1266,7 +1267,7 @@ impl Shell {
                 items.push(WaitItem { handle: a.events_handle(), signals: readable, ..Default::default() });
                 // The tray's orb moves while the agent talks or listens.
                 if self.model.agent.active() {
-                    deadline = deadline.min(rt::time::now_ns() + 33_000_000);
+                    deadline = deadline.min(runtime::time::now_ns() + 33_000_000);
                 }
             }
             None => deadline = deadline.min(self.next_agent_try),
@@ -1279,7 +1280,7 @@ impl Shell {
         if !self.model.actions.is_empty() {
             deadline = 0;
         }
-        let _ = rt::object::wait_many(&mut items, deadline);
+        let _ = runtime::object::wait_many(&mut items, deadline);
         // The clients to read: those with something to read.
         for (c, it) in self.clients.iter().zip(items.iter().skip(first_client)) {
             if it.observed & it.signals != 0 {
@@ -1324,7 +1325,7 @@ impl Shell {
             self.refresh_audio();
         }
         if let Some(s) = &mut self.startup {
-            if s.poll(self.audio.as_ref(), self.vfs.as_ref(), rt::time::now_ns()) {
+            if s.poll(self.audio.as_ref(), self.vfs.as_ref(), runtime::time::now_ns()) {
                 self.desktop_may_appear();
             }
             if self.startup.as_ref().is_some_and(|s| s.done()) {
@@ -1366,7 +1367,7 @@ impl shell::Server for Shell {
     /// A process posts at most [`NOTES_PER_PERIOD`] in a period.
     fn notify(&mut self, title: String, body: String, icon: String) {
         let who = self.caller.clone();
-        if !self.note_allowed(who.koid, rt::time::now_ns()) {
+        if !self.note_allowed(who.koid, runtime::time::now_ns()) {
             println!("{} posts too many notifications; one left out", who.name);
             return;
         }
@@ -1543,7 +1544,10 @@ fn run() -> i32 {
         agent_win: None,
         next_agent_try: 0,
         // Started with the system: the startup sound as the desktop appears.
-        startup: rt::env::args().iter().any(|a| a == "startup").then(|| startup::StartupSound::new(rt::time::now_ns())),
+        startup: runtime::env::args()
+            .iter()
+            .any(|a| a == "startup")
+            .then(|| startup::StartupSound::new(runtime::time::now_ns())),
         task_events,
         hidden_by_show_desktop: Vec::new(),
     };

@@ -30,7 +30,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use ipc::{Bytes, enumeration, message, protocol, union};
-use rt::object::Channel;
+use runtime::object::Channel;
 
 /// The most entries a page of [`packages::Client::find`] or
 /// [`packages::Client::files`] holds.

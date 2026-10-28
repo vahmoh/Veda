@@ -65,18 +65,18 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use proto::startup::driver_virtual_machine as roles;
-use rt::object::{Channel, Resource, Vmo};
-use rt::println;
+use runtime::object::{Channel, Resource, Vmo};
+use runtime::println;
 
 use lines::Lines;
 use machine::{Config, Machine, Pc};
 use variables::FirmwareVariables;
 
-rt::entry!(main);
+runtime::entry!(main);
 
 /// Maps the system image (the initrd), where the guest's kernel is.
 fn system_image() -> Option<initrd::Archive<'static>> {
-    let vmo = Vmo::from_handle(rt::env::take_handle(abi::startup::role::INITRD)?);
+    let vmo = Vmo::from_handle(runtime::env::take_handle(abi::startup::role::INITRD)?);
     let size = vmo.size().ok()?;
     let addr = vmo.map(0, size, abi::map_flags::READ).ok()?;
     // SAFETY: a read-only mapping that lives as long as the process.
@@ -86,7 +86,7 @@ fn system_image() -> Option<initrd::Archive<'static>> {
 
 fn config() -> Config {
     let mut c = Config::default();
-    for arg in rt::env::args() {
+    for arg in runtime::env::args() {
         match arg.split_once('=') {
             Some(("memory", v)) => c.memory_mib = v.parse().unwrap_or(c.memory_mib),
             Some(("cpus", v)) => c.cpus = v.parse().unwrap_or(c.cpus),
@@ -102,7 +102,7 @@ fn config() -> Config {
 }
 
 fn main() -> i32 {
-    let Some(hypervisor) = rt::env::take_handle(roles::HYPERVISOR_RESOURCE).map(Resource::from_handle) else {
+    let Some(hypervisor) = runtime::env::take_handle(roles::HYPERVISOR_RESOURCE).map(Resource::from_handle) else {
         println!("no hypervisor resource");
         return 1;
     };
@@ -116,11 +116,13 @@ fn main() -> i32 {
     };
     let config = config();
     let devices: Vec<Channel> =
-        core::iter::from_fn(|| rt::env::take_handle(roles::DEVICE)).map(Channel::from_handle).collect();
+        core::iter::from_fn(|| runtime::env::take_handle(roles::DEVICE)).map(Channel::from_handle).collect();
     let mut lines = Lines::default();
     let platform = architecture::platform::Platform::take(&mut lines);
-    let variables =
-        rt::env::take_handle(roles::VARIABLES).map(Vmo::from_handle).map(FirmwareVariables::map).unwrap_or_default();
+    let variables = runtime::env::take_handle(roles::VARIABLES)
+        .map(Vmo::from_handle)
+        .map(FirmwareVariables::map)
+        .unwrap_or_default();
     let pc = Pc { devices, platform, lines, variables };
     match Machine::start(&hypervisor, kernel.data, initramfs.data, pc, &config) {
         Ok(machine) => machine.wait(),

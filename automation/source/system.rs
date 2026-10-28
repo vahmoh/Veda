@@ -113,7 +113,7 @@ pub fn build(o: &Options) -> Result<System> {
     let mut calculator = None;
     for (program, path) in &artifacts.programs {
         // A program on the standard library is a POSIX program, which the C
-        // library starts; one on `rt` alone carries its note.
+        // library starts; one on `runtime` alone carries its note.
         let kind = if program.std { elf::Kind::Posix } else { elf::Kind::Veda };
         let file = shipped(path, Some(kind))?;
         if program.binary == "calculator" {
@@ -279,7 +279,7 @@ fn add_all(initrd: &mut initrd::builder::Builder, licensed: &mut BTreeSet<String
 }
 
 /// The executable at `path` as the system ships it, checked: of `kind`, if
-/// given (a Veda program has `rt`'s note, a POSIX program none), and
+/// given (a Veda program has `runtime`'s note, a POSIX program none), and
 /// without its symbols and section headers (`elf::strip`), which the
 /// build's own copy keeps for debugging.
 fn shipped(path: &Path, kind: Option<elf::Kind>) -> Result<Vec<u8>> {
@@ -288,11 +288,11 @@ fn shipped(path: &Path, kind: Option<elf::Kind>) -> Result<Vec<u8>> {
     let found = elf::Elf::parse_for(&file, architecture::MACHINE).map_err(invalid)?.kind();
     match kind {
         Some(elf::Kind::Veda) if found != elf::Kind::Veda => {
-            return Err(format!("{}: not a Veda program (it lacks the note `rt` gives one)", path.display()));
+            return Err(format!("{}: not a Veda program (it lacks the note `runtime` gives one)", path.display()));
         }
         Some(elf::Kind::Posix) if found != elf::Kind::Posix => {
             return Err(format!(
-                "{}: a program on the standard library, but marked as a Veda program (by `rt`'s runtime)",
+                "{}: a program on the standard library, but marked as a Veda program (by `runtime`'s note)",
                 path.display()
             ));
         }

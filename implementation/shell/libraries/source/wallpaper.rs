@@ -22,8 +22,8 @@ use gfx::Bitmap;
 #[allow(unused_imports)]
 use num_traits::Float;
 use proto::shell::ShellError;
-use rt::object::Event;
-use rt::sync::{Condvar, Mutex};
+use runtime::object::Event;
+use runtime::sync::{Condvar, Mutex};
 
 /// Name of the built-in procedural wallpaper (used in place of a path).
 pub const PROCEDURAL: &str = "procedural";
@@ -228,7 +228,7 @@ impl Loader {
             done: Mutex::new(Vec::new()),
         });
         let worker = shared.clone();
-        rt::thread::Builder::new()
+        runtime::thread::Builder::new()
             .name("wallpaper")
             .stack_size(256 * 1024)
             .spawn(move || work(&worker, &theirs))

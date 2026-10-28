@@ -45,8 +45,8 @@ use proto::packages::{
     self as protocol, Failure, Outcome, PackageError, PackageInfo, PackageSummary, Plan, Refreshed, Report,
     RepositoryChange, RepositoryInfo, Request, Scope, Status, packages,
 };
-use rt::object::{Channel, Message};
-use rt::println;
+use runtime::object::{Channel, Message};
+use runtime::println;
 
 use crate::state::{State, failure};
 use crate::worker::{Done, Job, Worker};

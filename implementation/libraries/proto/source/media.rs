@@ -54,8 +54,8 @@ use core::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 
 use abi::{RawHandle, WaitItem, signals};
 use ipc::{enumeration, message, protocol};
-use rt::object::{Channel, Event, Vmo};
-use rt::vm::Mapping;
+use runtime::object::{Channel, Event, Vmo};
+use runtime::vm::Mapping;
 
 /// The protocol's version, which [`media::Client::hello`] checks.
 pub const VERSION: u32 = 2;
@@ -547,7 +547,7 @@ pub fn serve(control: &Channel, session: &mut impl Work) -> i32 {
                         }
                     }
                     Err(e) => {
-                        rt::println!("a request it cannot read ({e:?}): stopping");
+                        runtime::println!("a request it cannot read ({e:?}): stopping");
                         return 1;
                     }
                 },
@@ -569,12 +569,12 @@ pub fn serve(control: &Channel, session: &mut impl Work) -> i32 {
             items.push(WaitItem { handle: wake, signals: signals::SIGNALED, ..Default::default() });
         }
         // Idle, it still beats now and then.
-        match rt::object::wait_many(&mut items, rt::time::now_ns() + BEAT_NS) {
+        match runtime::object::wait_many(&mut items, runtime::time::now_ns() + BEAT_NS) {
             Ok(_) | Err(abi::Error::TimedOut) => {}
             // A handle it cannot wait on (the application sent something
             // that is not an event): it looks again now and then rather
             // than spin.
-            Err(_) => rt::time::sleep(rt::time::Duration::from_millis(10)),
+            Err(_) => runtime::time::sleep(runtime::time::Duration::from_millis(10)),
         }
         if items[0].observed & signals::PEER_CLOSED != 0 && items[0].observed & signals::READABLE == 0 {
             return 0;
@@ -591,8 +591,8 @@ pub fn serve(control: &Channel, session: &mut impl Work) -> i32 {
 pub fn watchdog(control: RawHandle) {
     loop {
         let mut item = [WaitItem { handle: control, signals: signals::PEER_CLOSED, ..Default::default() }];
-        match rt::object::wait_many(&mut item, abi::DEADLINE_INFINITE) {
-            Ok(_) if item[0].observed & signals::PEER_CLOSED != 0 => rt::sys::process_exit(0),
+        match runtime::object::wait_many(&mut item, abi::DEADLINE_INFINITE) {
+            Ok(_) if item[0].observed & signals::PEER_CLOSED != 0 => runtime::sys::process_exit(0),
             Ok(_) | Err(abi::Error::TimedOut) => {}
             Err(_) => return,
         }

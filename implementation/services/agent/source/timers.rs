@@ -10,7 +10,7 @@
 
 use agent::notice::Notice;
 use proto::shell::shell;
-use rt::println;
+use runtime::println;
 
 use crate::Agent;
 use crate::shared::Timer;
@@ -22,7 +22,7 @@ const SHELL_TIMEOUT_NS: u64 = 1_000_000_000;
 impl Agent {
     /// Tells of the timers that came due.
     pub(crate) fn check_timers(&mut self) {
-        let unix = rt::time::unix_time_ns() / 1_000_000_000;
+        let unix = runtime::time::unix_time_ns() / 1_000_000_000;
         let due: Vec<Timer> = {
             let mut s = self.shared.lock();
             let due: Vec<Timer> = s.timers.iter().filter(|t| t.due <= unix).cloned().collect();
@@ -44,7 +44,7 @@ impl Agent {
 
     /// When the main loop should look at the timers again at the latest.
     pub(crate) fn next_timer_ns(&self, now: u64) -> u64 {
-        let unix = rt::time::unix_time_ns() / 1_000_000_000;
+        let unix = runtime::time::unix_time_ns() / 1_000_000_000;
         match self.shared.lock().timers.first() {
             Some(t) => now + t.due.saturating_sub(unix).min(3600) * 1_000_000_000 + 50_000_000,
             None => abi::DEADLINE_INFINITE,

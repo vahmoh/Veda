@@ -45,7 +45,7 @@ pub struct Program {
     /// Binary (executable) name produced by the package.
     pub binary: &'static str,
     /// Built on Rust's standard library, for Veda's own target; otherwise
-    /// `no_std`, on `rt`, for the user target.
+    /// `no_std`, on `runtime`, for the user target.
     pub std: bool,
     /// Linked with the web engine (`cargo automation web`): left out of the
     /// image until it is built.
@@ -58,7 +58,7 @@ pub struct Program {
 }
 
 impl Program {
-    /// A program on `rt` alone (`no_std`).
+    /// A program on `runtime` alone (`no_std`).
     const fn native(package: &'static str) -> Program {
         Program { package, binary: package, std: false, web: false, dynamic: false }
     }

@@ -24,10 +24,10 @@ use alloc::vec;
 
 use net::{IpAddr, SocketAddr, TcpStream};
 use proto::audio::{DeviceFormat, Ring, Role, audiodev, ring::flags};
-use rt::println;
-use rt::time::Duration;
+use runtime::println;
+use runtime::time::Duration;
 
-rt::entry!(main);
+runtime::entry!(main);
 
 /// Frames per 20 ms period at 16 kHz (the period scales with the rate).
 fn period(rate: u32) -> u32 {
@@ -35,7 +35,7 @@ fn period(rate: u32) -> u32 {
 }
 
 fn parse_args() -> Option<(IpAddr, u16, u32)> {
-    let args = rt::env::args();
+    let args = runtime::env::args();
     let spec: String = args.iter().skip(1).cloned().collect::<alloc::vec::Vec<_>>().join(",");
     let mut parts = spec.split(',').filter(|s| !s.is_empty());
     let host = parts.next()?.parse::<IpAddr>().ok()?;
@@ -106,7 +106,7 @@ fn main() -> i32 {
                     if !connected_once {
                         println!("cannot connect to {}: {} (retrying)", addr, e);
                     }
-                    rt::time::sleep(Duration::from_secs(1));
+                    runtime::time::sleep(Duration::from_secs(1));
                     continue;
                 }
             }
@@ -152,7 +152,7 @@ fn main() -> i32 {
         if written < count {
             ring.set_overruns(ring.overruns().saturating_add((count - written) as u32));
         }
-        ring.set_capture_clock(ring.write_pos(), rt::time::now_ns());
+        ring.set_capture_clock(ring.write_pos(), runtime::time::now_ns());
         let _ = link.data_event.signal();
     }
 }

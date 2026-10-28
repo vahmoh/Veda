@@ -91,7 +91,7 @@ impl Dev {
             Dev::Zero | Dev::Full => Ok(alloc::vec![0; len]),
             Dev::Random => {
                 let mut v = alloc::vec![0; len];
-                rt::object::try_random_bytes(&mut v).map_err(|_| FsError::Io)?;
+                runtime::object::try_random_bytes(&mut v).map_err(|_| FsError::Io)?;
                 Ok(v)
             }
         }

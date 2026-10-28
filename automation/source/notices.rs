@@ -498,8 +498,8 @@ mod tests {
             ))
         );
         assert_eq!(
-            tree_entry("rt v0.1.0 (/veda/implementation/libraries/rt) (*)"),
-            Some(("rt".into(), "0.1.0".into(), Some(PathBuf::from("/veda/implementation/libraries/rt"))))
+            tree_entry("runtime v0.1.0 (/veda/implementation/libraries/runtime) (*)"),
+            Some(("runtime".into(), "0.1.0".into(), Some(PathBuf::from("/veda/implementation/libraries/runtime"))))
         );
         assert_eq!(tree_entry(""), None);
         assert_eq!(tree_entry("warning: something"), None);
@@ -571,9 +571,9 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// The crates of the kernel's, of the programs on `rt` and of the driver
-    /// VM's (whose targets the build machine's Rust knows) have their texts,
-    /// and Veda's own crates are not among them.
+    /// The crates of the kernel's, of the programs on `runtime` and of the
+    /// driver VM's (whose targets the build machine's Rust knows) have
+    /// their texts, and Veda's own crates are not among them.
     #[test]
     fn the_programs_crates_have_their_texts() {
         let programs: Vec<&str> = crate::components::PROGRAMS.iter().filter(|p| !p.std).map(|p| p.package).collect();
@@ -585,9 +585,10 @@ mod tests {
             guest,
         ];
         let crates = crates(&groups).unwrap();
-        // The network service's TCP/IP stack is a port's; rt is Veda's.
+        // The network service's TCP/IP stack is a port's; `runtime` is
+        // Veda's.
         assert!(crates.iter().any(|c| c.name == "smoltcp"), "{crates:?}");
-        assert!(!crates.iter().any(|c| c.name == "rt" || c.name == "kernel"), "{crates:?}");
+        assert!(!crates.iter().any(|c| c.name == "runtime" || c.name == "kernel"), "{crates:?}");
         let files = crate_files(&crates).unwrap();
         assert!(files.iter().any(|(path, _)| path.starts_with("licences/crates/smoltcp-")));
     }

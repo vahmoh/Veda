@@ -13,9 +13,9 @@ use alloc::vec::Vec;
 
 use abi::{VcpuExit, vcpu_exit};
 use proto::startup::driver_virtual_machine as roles;
-use rt::object::{Interrupt, IoPorts, Vcpu};
-use rt::println;
-use rt::sync::Mutex;
+use runtime::object::{Interrupt, IoPorts, Vcpu};
+use runtime::println;
+use runtime::sync::Mutex;
 
 use super::i8042::{self, I8042};
 use crate::lines::Lines;
@@ -32,7 +32,7 @@ impl Platform {
     /// What the device manager handed over of the PC: the keyboard
     /// controller, whose lines join `lines`.
     pub fn take(lines: &mut Lines) -> Platform {
-        let take = |role| rt::env::take_handle(role);
+        let take = |role| runtime::env::take_handle(role);
         let i8042 = match (
             take(roles::I8042_DATA),
             take(roles::I8042_COMMAND),

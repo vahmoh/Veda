@@ -42,9 +42,9 @@ use alloc::vec::Vec;
 use abi::{RawHandle, signals};
 use proto::agent::{ActionResult, agent, agentapp};
 pub use proto::agent::{ActionSpec, AppAgentInfo, ParamSpec, Risk};
-use rt::object::{Channel, Event};
-use rt::sync::{Condvar, Mutex};
-use rt::time::Duration;
+use runtime::object::{Channel, Event};
+use runtime::sync::{Condvar, Mutex};
+use runtime::time::Duration;
 
 pub use serde_json::{Map, Value, json};
 
@@ -333,7 +333,7 @@ impl Registration {
             wake: Condvar::new(),
         });
         let helper = shared.clone();
-        rt::thread::Builder::new()
+        runtime::thread::Builder::new()
             .name("agent-link")
             .stack_size(64 * 1024)
             .spawn(move || register_in_background(&helper, &signal))
@@ -386,7 +386,7 @@ fn register_in_background(shared: &RegistrationSlot, ready: &Event) {
                 drop(p);
                 let _ = ready.signal();
             }
-            None => rt::time::sleep(REGISTER_RETRY),
+            None => runtime::time::sleep(REGISTER_RETRY),
         }
     }
 }

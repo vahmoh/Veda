@@ -15,7 +15,7 @@ test = false
 bench = false
 
 [dependencies]
-rt = { workspace = true }
+runtime = { workspace = true }
 net = { workspace = true }
 tls = { workspace = true }
 web = { workspace = true }

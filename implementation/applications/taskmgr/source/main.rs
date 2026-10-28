@@ -142,7 +142,7 @@ impl TaskManager {
 
     /// Takes a sample of the system and the processes.
     pub fn sample(&mut self) {
-        let Ok(info) = rt::object::system_info() else { return };
+        let Ok(info) = runtime::object::system_info() else { return };
         self.cpu_model = cstr(&info.cpu_brand);
         self.version = cstr(&info.version);
         let mut list = process::list();
@@ -238,9 +238,9 @@ impl TaskManager {
             Err(_) => self.dialog = Some(Dialog::Error("The application launcher is not responding.".into())),
         }
         // Give the kernel a moment to tear the process down, then refresh.
-        rt::time::sleep(rt::time::Duration::from_millis(30));
+        runtime::time::sleep(runtime::time::Duration::from_millis(30));
         self.sample();
-        self.next_sample = rt::time::now_ns() + SAMPLE_NS;
+        self.next_sample = runtime::time::now_ns() + SAMPLE_NS;
     }
 
     fn dialogs(&mut self, ui: &mut Ui) {

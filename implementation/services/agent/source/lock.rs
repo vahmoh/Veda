@@ -21,8 +21,8 @@
 //! for the idle lock, on the connection that watches the lock.
 
 use proto::display::{LOCK_NOTICE, LockNotice, display};
-use rt::object::Channel;
-use rt::println;
+use runtime::object::Channel;
+use runtime::println;
 
 use crate::Agent;
 

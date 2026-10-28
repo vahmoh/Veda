@@ -10,8 +10,8 @@ use core::net::SocketAddr;
 use abi::RawHandle;
 use ipc::{Bytes, IpcError};
 use proto::net::{MAX_DATAGRAM, NetError, SocketEvent, SocketRequest};
-use rt::object::Channel;
-use rt::time::Duration;
+use runtime::object::Channel;
+use runtime::time::Duration;
 
 use crate::{deadline, send_request, with_client};
 
@@ -91,7 +91,7 @@ impl UdpSocket {
         if data.len() > MAX_DATAGRAM {
             return Err(NetError::MessageTooLarge);
         }
-        let end = rt::time::deadline_after(Duration::from_secs(10));
+        let end = runtime::time::deadline_after(Duration::from_secs(10));
         loop {
             self.drain();
             if let Some(e) = self.error {

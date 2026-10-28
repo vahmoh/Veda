@@ -20,9 +20,9 @@ use interceptor_game::audio::music::Music;
 use interceptor_game::audio::{Cue, Mixer, RATE, Scene};
 use proto::audio::{OutputStream, StreamSpec, audio};
 use proto::fs::vfs;
-use rt::object::Event;
-use rt::sync::Mutex;
-use rt::vm::Mapping;
+use runtime::object::Event;
+use runtime::sync::Mutex;
+use runtime::vm::Mapping;
 
 /// The tunes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,7 +83,7 @@ impl Speakers {
             alive: AtomicBool::new(true),
         });
         let theirs = shared.clone();
-        rt::thread::Builder::new()
+        runtime::thread::Builder::new()
             .name("speakers")
             .spawn(move || {
                 run(&theirs);
@@ -162,14 +162,14 @@ fn load_music() -> (Music<FileData>, Vec<(Tune, usize)>) {
 /// True once `name` is registered (waiting a few seconds for it, since a
 /// connection to a service that does not exist would wait forever).
 fn registered(name: &str) -> bool {
-    let deadline = rt::time::now_ns() + 5_000_000_000;
+    let deadline = runtime::time::now_ns() + 5_000_000_000;
     loop {
         let found =
             proto::with_registry(|r| r.list().map(|l| l.iter().any(|s| s == name)).unwrap_or(false)).unwrap_or(false);
-        if found || rt::time::now_ns() > deadline {
+        if found || runtime::time::now_ns() > deadline {
             return found;
         }
-        rt::time::sleep(rt::time::Duration::from_millis(100));
+        runtime::time::sleep(runtime::time::Duration::from_millis(100));
     }
 }
 
@@ -209,7 +209,7 @@ fn run(shared: &Shared) {
     let mut underruns = 0;
     // How busy the thread is (the time it works, how often it wakes) and
     // how often the stream ran dry, for the log every 20 s.
-    let (mut busy, mut wakes, mut since) = (0u64, 0u32, rt::time::now_ns());
+    let (mut busy, mut wakes, mut since) = (0u64, 0u32, runtime::time::now_ns());
     loop {
         let mut items = [
             WaitItem { handle: shared.wake.raw(), signals: signals::SIGNALED, ..Default::default() },
@@ -220,8 +220,8 @@ fn run(shared: &Shared) {
                 ..Default::default()
             },
         ];
-        let _ = rt::object::wait_many(&mut items, rt::time::now_ns() + 20_000_000);
-        let woke = rt::time::now_ns();
+        let _ = runtime::object::wait_many(&mut items, runtime::time::now_ns() + 20_000_000);
+        let woke = runtime::time::now_ns();
         wakes += 1;
         let _ = shared.wake.clear();
         let (scene, tune, intensity, volume) = {
@@ -251,7 +251,7 @@ fn run(shared: &Shared) {
                 t.write(&music_block);
             }
         }
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         // (A clock read on another processor may be a hair behind.)
         busy += now.saturating_sub(woke);
         if now.saturating_sub(since) >= 20_000_000_000 {

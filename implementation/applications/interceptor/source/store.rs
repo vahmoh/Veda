@@ -7,7 +7,7 @@
 
 use interceptor_game::career::Save;
 use proto::fs::vfs;
-use rt::object::Vmo;
+use runtime::object::Vmo;
 
 const DIR: &str = "/home/user/.config/interceptor";
 const PATH: &str = "/home/user/.config/interceptor/save";

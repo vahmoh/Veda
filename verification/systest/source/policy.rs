@@ -16,8 +16,8 @@ use abi::{Error, Rights};
 use ipc::{Bytes, Encoder, FLAG_REQUEST, IpcError, Refusal};
 use proto::fs::{FsError, open_flags};
 use proto::launcher;
-use rt::object::{Channel, Event, Handle, Vmo};
-use rt::println;
+use runtime::object::{Channel, Event, Handle, Vmo};
+use runtime::println;
 
 use crate::{TestResult, check, vfs_client};
 
@@ -70,7 +70,7 @@ pub fn test_shared_channels() -> TestResult {
     check(a.0.duplicate(None).err() == Some(Error::AccessDenied), "a channel's end has one handle")?;
     let mut out = [0u32; 2];
     check(
-        rt::sys::call(abi::nr::CHANNEL_CREATE, [out.as_mut_ptr() as usize, 1 << 7, 0, 0, 0, 0])
+        runtime::sys::call(abi::nr::CHANNEL_CREATE, [out.as_mut_ptr() as usize, 1 << 7, 0, 0, 0, 0])
             == Err(Error::InvalidArgs),
         "unknown flags are refused",
     )?;
@@ -114,9 +114,10 @@ impl big::Server for Big {
 /// rather than leaving it waiting for ever.
 pub fn test_ipc_refusals() -> TestResult {
     let (client, server) = Channel::create().map_err(|e| e.to_string())?;
-    let serving = rt::thread::spawn(move || {
+    let serving = runtime::thread::spawn(move || {
         for _ in 0..3 {
-            let Ok(msg) = server.read_blocking(rt::time::deadline_after(rt::time::Duration::from_secs(10))) else {
+            let Ok(msg) = server.read_blocking(runtime::time::deadline_after(runtime::time::Duration::from_secs(10)))
+            else {
                 return;
             };
             if let Ok(reply) = big::dispatch(&mut Big, msg) {
@@ -129,7 +130,7 @@ pub fn test_ipc_refusals() -> TestResult {
     check(c.get(1000).is_ok_and(|b| b.0.len() == 1000), "an answer that fits arrives")?;
     let too_large = c.get(abi::CHANNEL_MAX_BYTES as u32 + 1);
     check(too_large.err() == Some(IpcError::Refused(Refusal::TooLarge)), "an answer too large to send is refused")?;
-    let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(10));
+    let deadline = runtime::time::deadline_after(runtime::time::Duration::from_secs(10));
     let unknown = ipc::call_until(c.channel(), Encoder::with_header(99, 77, FLAG_REQUEST), 77, deadline);
     check(
         unknown.err() == Some(IpcError::Refused(Refusal::UnknownMethod)),
@@ -216,7 +217,7 @@ pub fn test_application_limits() -> TestResult {
         .map_err(s)?
         .map_err(|e| alloc::format!("launch: {e:?}"))?;
     println!("application limits: started a copy of systest as an application (process {app})");
-    let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(20));
+    let deadline = runtime::time::deadline_after(runtime::time::Duration::from_secs(20));
     listener.wait(abi::signals::READABLE, deadline).map_err(|e| alloc::format!("no report: {e}"))?;
     let report = proto::accept(&listener).ok_or("the application did not connect")?;
     let msg = report.read_blocking(deadline).map_err(|e| alloc::format!("no verdict: {e}"))?;
@@ -224,10 +225,10 @@ pub fn test_application_limits() -> TestResult {
     // Calls to both made and answered while its threads spin on every
     // processor: none, if they keep the services from them.
     let until = r.until.min(deadline);
-    rt::time::sleep_until(r.from.min(until));
+    runtime::time::sleep_until(r.from.min(until));
     let mut answered = 0;
-    while rt::time::now_ns() < until {
-        if d.screen_info().is_ok() && l.tasks().is_ok() && rt::time::now_ns() < until {
+    while runtime::time::now_ns() < until {
+        if d.screen_info().is_ok() && l.tasks().is_ok() && runtime::time::now_ns() < until {
             answered += 1;
         }
     }
@@ -307,16 +308,16 @@ pub fn limits(target: Option<&String>) -> i32 {
     // process it makes may have, asking for the most there is.
     let priority = (abi::priority::NORMAL + 1..=abi::priority::REALTIME)
         .rev()
-        .find(|&p| rt::thread::set_priority(p).is_ok())
+        .find(|&p| runtime::thread::set_priority(p).is_ok())
         .unwrap_or(abi::priority::NORMAL);
-    let _ = rt::thread::set_priority(abi::priority::NORMAL);
+    let _ = runtime::thread::set_priority(abi::priority::NORMAL);
     let child = crate::bare_process(abi::priority::REALTIME).and_then(|p| p.info()).map(|i| i.max_priority);
     if priority == abi::priority::NORMAL && child == Ok(abi::priority::NORMAL as u32) {
         bits |= verdict::PRIORITY_DENIED;
     }
     println!("application limits: the rules that held: {bits:#x} of {:#x}", verdict::ALL);
     let Ok(report) = proto::connect(VERDICT) else { return 1 };
-    let from = rt::time::now_ns() + SPIN_START_NS;
+    let from = runtime::time::now_ns() + SPIN_START_NS;
     let until = from + SPIN_NS;
     let sent = Report { bits, priority: priority as u32, from, until }.encode();
     if report.write(&sent, Vec::new()).is_err() {
@@ -324,20 +325,21 @@ pub fn limits(target: Option<&String>) -> i32 {
     }
     spin(priority, until);
     // Stay until the verdict is read (the channel's other end closes).
-    let _ = report.wait(abi::signals::PEER_CLOSED, rt::time::deadline_after(rt::time::Duration::from_secs(20)));
+    let _ =
+        report.wait(abi::signals::PEER_CLOSED, runtime::time::deadline_after(runtime::time::Duration::from_secs(20)));
     i32::from(bits != verdict::ALL)
 }
 
 /// Spins a thread on every processor at `priority` until `until`
 /// (monotonic nanoseconds), as a program gone wrong might.
 fn spin(priority: usize, until: u64) {
-    let cpus = rt::object::system_info().map_or(1, |i| i.cpu_count.max(1) as usize);
+    let cpus = runtime::object::system_info().map_or(1, |i| i.cpu_count.max(1) as usize);
     let spinners: Vec<_> = (0..cpus)
         .filter_map(|_| {
-            let spinner = rt::thread::Builder::new().name("spinner").priority(priority);
+            let spinner = runtime::thread::Builder::new().name("spinner").priority(priority);
             spinner
                 .spawn(move || {
-                    while rt::time::now_ns() < until {
+                    while runtime::time::now_ns() < until {
                         core::hint::spin_loop();
                     }
                 })
@@ -376,7 +378,7 @@ pub fn test_the_lock() -> TestResult {
     check(matches!(l.idle_timeout(), Ok(Err(LockError::Denied))), "a program may not read when the screen locks")?;
     let idle = l.set_idle_timeout(0);
     check(matches!(idle, Ok(Err(LockError::Denied))), "a program may not choose when the screen locks")?;
-    let start = rt::time::Instant::now();
+    let start = runtime::time::Instant::now();
     loop {
         let s = l.status().map_err(|e| e.to_string())?;
         check(!s.password, "no password is set on a fresh system")?;
@@ -386,7 +388,7 @@ pub fn test_the_lock() -> TestResult {
         if start.elapsed().as_millis() > 20_000 {
             return Err("the lock service did not unlock the screen".into());
         }
-        rt::time::sleep(rt::time::Duration::from_millis(100));
+        runtime::time::sleep(runtime::time::Duration::from_millis(100));
     }
 }
 

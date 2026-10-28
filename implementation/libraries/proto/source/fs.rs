@@ -56,7 +56,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use ipc::{Bytes, IpcError, enumeration, message, protocol};
-use rt::object::{Channel, Handle, Vmo};
+use runtime::object::{Channel, Handle, Vmo};
 
 enumeration! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,8 +126,8 @@ message! {
         pub is_dir: bool,
         pub read_only: bool,
         /// Modification time: nanoseconds since 1970-01-01 in local time,
-        /// as `rt::time::unix_time_ns` gives it and Veda shows times (the
-        /// POSIX layer gives programs UTC); 0 = unknown.
+        /// as `runtime::time::unix_time_ns` gives it and Veda shows times
+        /// (the POSIX layer gives programs UTC); 0 = unknown.
         pub modified: u64,
         /// Identifies the file within its file system (never reused while
         /// the system runs): the inode number of POSIX programs.
@@ -765,7 +765,7 @@ mod tests {
         let mut e = Encoder::with_header(23, 1, 0);
         SocketAddress::path("/".to_string() + &"p".repeat(MAX_PATH - 1)).encode(&mut e);
         (1u64, 2u64).encode(&mut e);
-        (Bytes(vec![0; MAX_DATAGRAM]), Bytes(vec![0; 2048]), Vec::<rt::object::Handle>::new()).encode(&mut e);
+        (Bytes(vec![0; MAX_DATAGRAM]), Bytes(vec![0; 2048]), Vec::<runtime::object::Handle>::new()).encode(&mut e);
         assert!(e.bytes.len() <= abi::CHANNEL_MAX_BYTES, "{}", e.bytes.len());
         // In the socket's inbox: who sent it, with the longest name.
         let mut e = Encoder::with_header(socket_event::DATAGRAM, 0, ipc::FLAG_EVENT);

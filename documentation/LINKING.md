@@ -248,8 +248,8 @@ names.
 | CPython | The interpreter linked dynamically, its C API exported; `_ctypes` on libffi, whose closures are memory files mapped twice (its patch); `ctypes.util.find_library` for Veda's names; its configuration (`sysconfig`) naming Veda's own compilers; the tests' extension modules, which must be shared libraries, in images with Python's tests |
 
 **Starting a dynamically linked program.** Programs start in user space
-(`rt::process::Spawn`, [Architecture](ARCHITECTURE.md#user-space)): the
-loader maps the program, at a random address, then the dynamic linker,
+(`runtime::process::Spawn`, [Architecture](ARCHITECTURE.md#user-space)):
+the loader maps the program, at a random address, then the dynamic linker,
 which whoever starts the program gives it ([`Spawn::dynamic_linker`]: the
 POSIX layer's `posix_spawn`, the Terminal, `init`'s launcher and `systest`
 read `/system/lib/libc.so`, the system image's pages), at a random address
@@ -316,7 +316,7 @@ constructors.
 | Area | On Veda |
 |------|---------|
 | Statically linked programs | Load nothing: `dlopen` fails, `Dynamic loading needs a dynamically linked program: this one is linked statically` |
-| Veda's programs on `rt` alone | Static, as they stand on no C library (the services, `init`, the drivers) |
+| Veda's programs on `runtime` alone | Static, as they stand on no C library (the services, `init`, the drivers) |
 | Unloading | `dlclose` unloads nothing: a library stays until the program ends |
 | `-static-libstdc++`, `-static-libgcc` | A library linked so has its own C++ library and unwinder: its exceptions must not leave it, and its C++ state (`std::cout`, `std::set_terminate`, `std::uncaught_exceptions`) is its own, as on Linux |
 | Executable stacks | Never: a library that asks for one (`PT_GNU_STACK`) loads, and the code that would run on its stack faults |
@@ -358,4 +358,4 @@ constructors.
 - **Unit tests** of `elf` on the host: the dynamic linker's path read and
   checked (`PT_INTERP`), and malformed ones refused.
 
-[`Spawn::dynamic_linker`]: ../implementation/libraries/rt/source/process.rs
+[`Spawn::dynamic_linker`]: ../implementation/libraries/runtime/source/process.rs

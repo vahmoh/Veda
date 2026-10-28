@@ -13,7 +13,7 @@
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use rt::vm::Mapping;
+use runtime::vm::Mapping;
 
 /// Plain data: any bytes are a valid value (requests of the bridge).
 ///
@@ -69,7 +69,7 @@ impl GuestMemory {
     }
 
     /// The VMO the guest's RAM is.
-    pub fn vmo(&self) -> &rt::object::Vmo {
+    pub fn vmo(&self) -> &runtime::object::Vmo {
         self.map.vmo()
     }
 

@@ -12,20 +12,20 @@ use crate::user;
 
 /// Nanoseconds since boot (never goes backwards).
 pub fn monotonic_ns() -> u64 {
-    rt::time::now_ns()
+    runtime::time::now_ns()
 }
 
 /// Nanoseconds since 1970-01-01 00:00:00 UTC.
 pub fn realtime_ns() -> u64 {
-    rt::sys::clock_get(abi::clock::UTC)
+    runtime::sys::clock_get(abi::clock::UTC)
 }
 
 /// The offset of the system's local time from UTC, in minutes east: what
 /// the kernel keeps between its two real-time clocks (`tz=` at boot, or
 /// the firmware's zone), with no rules of daylight saving.
 pub fn utc_offset_minutes() -> i64 {
-    let local = rt::sys::clock_get(abi::clock::REALTIME) as i128;
-    let utc = rt::sys::clock_get(abi::clock::UTC) as i128;
+    let local = runtime::sys::clock_get(abi::clock::REALTIME) as i128;
+    let utc = runtime::sys::clock_get(abi::clock::UTC) as i128;
     // The clocks are read a moment apart: to the nearest minute.
     const MINUTE: i128 = 60_000_000_000;
     let d = local - utc;
@@ -100,7 +100,7 @@ pub unsafe extern "C" fn __veda_tz(buf: *mut u8, size: usize) {
 
 /// CPU time this process has used.
 fn cpu_ns() -> u64 {
-    rt::object::process_self_info().map_or(0, |i| i.cpu_time_ns)
+    runtime::object::process_self_info().map_or(0, |i| i.cpu_time_ns)
 }
 
 /// CPU time thread `tid` of this process has used (`None`: no such

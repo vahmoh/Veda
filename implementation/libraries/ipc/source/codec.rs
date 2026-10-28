@@ -13,7 +13,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 
-use rt::object::{Channel, Event, Handle, Interrupt, IoPorts, Process, Resource, Socket, Thread, Vmo};
+use runtime::object::{Channel, Event, Handle, Interrupt, IoPorts, Process, Resource, Socket, Thread, Vmo};
 
 /// Decoding failure (malformed or hostile message).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

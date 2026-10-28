@@ -35,8 +35,8 @@ use init::manifests::{
 use ipc::{Decode, Decoder, Encode};
 use proto::fs::{DirPage, FsError, Place, vfs};
 use proto::init::{AppInfo, ClientIdentity, LaunchError, TaskEvent};
-use rt::object::{Channel, Vmo};
-use rt::println;
+use runtime::object::{Channel, Vmo};
+use runtime::println;
 
 use crate::{Image, Init, Origin};
 
@@ -208,7 +208,7 @@ impl Init {
     }
 
     /// Takes the VFS's answer `msg` to one of `init`'s requests.
-    fn vfs_answer(&mut self, mut msg: rt::Message) {
+    fn vfs_answer(&mut self, mut msg: runtime::Message) {
         let Ok((header, mut d)) = ipc::open(&mut msg) else { return };
         let Some(want) = self.installed.waiting.remove(&header.txid) else { return };
         let refused = header.flags & ipc::FLAG_ERROR != 0;
@@ -347,7 +347,7 @@ impl Init {
     /// Answers a launcher's call on connection `conn` to start an
     /// application (`launcher::launch_app`): at once, or once the program
     /// of an installed package's application is read.
-    pub fn launch_app_call(&mut self, conn: u64, mut msg: rt::Message) {
+    pub fn launch_app_call(&mut self, conn: u64, mut msg: runtime::Message) {
         let Ok((header, mut d)) = ipc::open(&mut msg) else { return };
         let call = (|| -> Result<(String, Vec<String>), ipc::DecodeError> {
             let id = String::decode(&mut d)?;

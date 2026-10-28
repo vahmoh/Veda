@@ -19,7 +19,7 @@
 //! run on every processor: an affinity that leaves some out cannot be had
 //! (`EOPNOTSUPP`).
 
-use rt::sync::Mutex;
+use runtime::sync::Mutex;
 
 use crate::error::SysResult;
 use crate::linux::errno::{EINVAL, EOPNOTSUPP, EPERM, ESRCH};
@@ -152,7 +152,7 @@ pub fn priority_range(of: u32) -> Result<(i32, i32), isize> {
 
 /// The number of processors.
 fn processors() -> usize {
-    rt::object::system_info().map_or(1, |i| i.cpu_count.max(1)) as usize
+    runtime::object::system_info().map_or(1, |i| i.cpu_count.max(1)) as usize
 }
 
 /// `sched_getaffinity`: every processor, in a mask of 64-bit words (as

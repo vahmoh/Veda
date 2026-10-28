@@ -20,9 +20,9 @@ use compositor::Wm;
 use compositor::outbox::Write;
 use gfx::{Bitmap, Rect};
 use proto::display::{self as dp, Cursor, DisplayError, LockNotice, SubsurfaceEvent, WindowEvent};
-use rt::object::Channel;
-use rt::println;
-use rt::vm::Mapping;
+use runtime::object::Channel;
+use runtime::println;
+use runtime::vm::Mapping;
 
 use crate::decor::{self, Decor};
 use crate::gpu::{Gpu, Pending, Slot};

@@ -41,7 +41,7 @@ use proto::packages::{
     Action, Details, Failure, PLAN_STEPS, PackageError, PackageInfo, PackageSummary, Plan, PlanStep, RepositoryChange,
     RepositoryInfo, Request, Scope, Status,
 };
-use rt::println;
+use runtime::println;
 
 /// The installed packages' files.
 pub const LIVE: &str = "/home/packages";

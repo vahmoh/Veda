@@ -21,9 +21,9 @@ use packages::transaction::{self, Change, Failure as FilesFailure, Incoming, Lay
 use proto::packages::{
     Action, Failure, Outcome, PROGRESS, PackageError, Problem, Progress, REPORT_PROBLEMS, Refreshed, Report, Stage,
 };
-use rt::object::{Channel, Event};
-use rt::println;
-use rt::sync::{Condvar, Mutex};
+use runtime::object::{Channel, Event};
+use runtime::println;
+use runtime::sync::{Condvar, Mutex};
 
 use crate::fetch;
 use crate::state::{self, Resolved, Taken, failure, now};
@@ -73,7 +73,7 @@ impl Worker {
         let shared =
             Arc::new(Shared { jobs: Mutex::new(VecDeque::new()), wake: Condvar::new(), done: Mutex::new(Vec::new()) });
         let worker = shared.clone();
-        rt::thread::Builder::new()
+        runtime::thread::Builder::new()
             .name("packages-worker")
             .stack_size(1 << 20)
             .priority(abi::priority::LOW)

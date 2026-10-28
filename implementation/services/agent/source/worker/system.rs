@@ -16,13 +16,13 @@ impl Ctx {
         let launcher = launcher().ok_or("the launcher is not available")?;
         match args["operation"].as_str().unwrap_or("info") {
             "info" => {
-                let info = rt::object::system_info().map_err(|_| "no system information")?;
+                let info = runtime::object::system_info().map_err(|_| "no system information")?;
                 Ok(json!({
                     "os": "Veda 0.1",
                     "cpus": info.cpu_count,
                     "memory_total": files::format::human_size(info.total_memory),
                     "memory_free": files::format::human_size(info.free_memory),
-                    "uptime_minutes": rt::time::now_ns() / 60_000_000_000,
+                    "uptime_minutes": runtime::time::now_ns() / 60_000_000_000,
                 }))
             }
             "restart" => {

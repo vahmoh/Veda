@@ -20,8 +20,8 @@ use acpi::resource::Resource as AcpiResource;
 use acpi::tables;
 use acpi::{Memory, PciFunction};
 use proto::pci::DeviceInfo;
-use rt::object::{Resource, Vmo};
-use rt::println;
+use runtime::object::{Resource, Vmo};
+use runtime::println;
 
 use crate::pci::{Address, ConfigSpace};
 

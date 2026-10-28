@@ -160,7 +160,7 @@ pub fn state(p: &Photos) -> Value {
         v["wallpaper"] = json!("being changed");
     }
     if let Some(t) = &p.toast
-        && rt::time::now_ns() < t.until
+        && runtime::time::now_ns() < t.until
     {
         v["message"] = json!(t.text.as_str());
     }
@@ -268,7 +268,7 @@ impl Photos {
     }
 
     pub(crate) fn agent_invoke(&mut self, action: &str, args: &Value) -> Result<Value, String> {
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         match action {
             "show_picture" => {
                 let i = self.picture_arg(args, "picture")?;

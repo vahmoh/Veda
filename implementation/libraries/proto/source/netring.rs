@@ -33,8 +33,8 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering, fence};
 
 use ipc::message;
-use rt::object::{Event, Vmo};
-use rt::vm::Mapping;
+use runtime::object::{Event, Vmo};
+use runtime::vm::Mapping;
 
 /// Layout of a ring VMO. All fields are little-endian and naturally
 /// aligned; producer and consumer fields live on separate cache lines.

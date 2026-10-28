@@ -22,7 +22,7 @@
 use alloc::collections::BTreeMap;
 
 use hv::platform::{GSIS, PLATFORM_GSIS};
-use rt::object::{Interrupt, Vcpu};
+use runtime::object::{Interrupt, Vcpu};
 
 struct Line {
     irq: Interrupt,

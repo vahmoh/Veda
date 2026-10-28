@@ -31,9 +31,9 @@ use proto::media::{
     self, AudioSpec, FramePool, MediaError, MediaInfo, OpenOptions, PcmRing, SeekMode, SkipLevel, VideoSpec,
     media::Client,
 };
-use rt::object::{Channel, Event, Vmo};
-use rt::println;
-use rt::sync::Mutex;
+use runtime::object::{Channel, Event, Vmo};
+use runtime::println;
+use runtime::sync::Mutex;
 use videos_core::layout;
 use videos_core::playback::{EnginePhase, EngineState};
 
@@ -149,7 +149,7 @@ pub fn start(decoder: String, sound: Option<Arc<audio::Shared>>) -> Option<Arc<S
         decoder_wake: Event::create().ok()?,
     });
     let ours = shared.clone();
-    rt::thread::Builder::new().name("engine").spawn(move || Engine::new(ours, decoder, sound).run()).ok()?;
+    runtime::thread::Builder::new().name("engine").spawn(move || Engine::new(ours, decoder, sound).run()).ok()?;
     Some(shared)
 }
 
@@ -212,7 +212,7 @@ struct Engine {
 
 impl Engine {
     fn new(shared: Arc<Shared>, decoder_path: String, sound: Option<Arc<audio::Shared>>) -> Engine {
-        let total = rt::object::system_info().map_or(0, |i| i.total_memory);
+        let total = runtime::object::system_info().map_or(0, |i| i.total_memory);
         Engine {
             shared,
             sound,
@@ -271,11 +271,11 @@ impl Engine {
                 items.push(WaitItem { handle: d.process.raw(), signals: signals::TERMINATED, ..Default::default() });
             }
             let deadline = match (&self.decoder, &self.open) {
-                (Some(_), Some(_)) => rt::time::now_ns() + WATCH_NS,
-                (Some(_), None) => rt::time::now_ns() + IDLE_WATCH_NS,
+                (Some(_), Some(_)) => runtime::time::now_ns() + WATCH_NS,
+                (Some(_), None) => runtime::time::now_ns() + IDLE_WATCH_NS,
                 (None, _) => abi::DEADLINE_INFINITE,
             };
-            let _ = rt::object::wait_many(&mut items, deadline);
+            let _ = runtime::object::wait_many(&mut items, deadline);
             let _ = self.shared.wake.clear();
             loop {
                 let Some(c) = self.shared.commands.lock().pop_front() else { break };
@@ -296,7 +296,7 @@ impl Engine {
         let Some(image) = &self.image else { return Err("the decoder could not be read".into()) };
         let d = decoder::start(image, "mediadec", CALL_TIMEOUT_NS)?;
         let build = d.build.clone();
-        self.beat = (d.heartbeat.count(), rt::time::now_ns());
+        self.beat = (d.heartbeat.count(), runtime::time::now_ns());
         self.decoder = Some(d);
         let b = build.clone();
         self.set_state(|s| s.decoder = Some(b));
@@ -330,7 +330,7 @@ impl Engine {
             Ok(r) => {
                 // It answered: alive now, whatever its heartbeat did while
                 // it worked on the call.
-                self.beat = (d.heartbeat.count(), rt::time::now_ns());
+                self.beat = (d.heartbeat.count(), runtime::time::now_ns());
                 r.map_err(Failure::Refused)
             }
             Err(e) => {
@@ -456,10 +456,10 @@ impl Engine {
             s.info = None;
             s.error = None;
         });
-        let began = rt::time::now_ns();
+        let began = runtime::time::now_ns();
         match self.try_open(&path, start_us, play) {
             Ok(info) => {
-                let ms = ((rt::time::now_ns() - began) / 1_000_000) as u32;
+                let ms = ((runtime::time::now_ns() - began) / 1_000_000) as u32;
                 self.set_state(|s| {
                     s.phase = EnginePhase::Ready;
                     s.info = Some(info);
@@ -643,7 +643,7 @@ impl Engine {
     /// is ended, and started again if a video is open.
     fn watch(&mut self) {
         let Some(d) = &self.decoder else { return };
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         let mut why = None;
         let mut memory = false;
         if d.process.wait(signals::TERMINATED, 0).is_ok() {
@@ -692,7 +692,7 @@ impl Engine {
     fn restart_once(&mut self, why: &str, at_us: Option<i64>, memory: bool) -> Option<(String, i64)> {
         let shown = at_us.unwrap_or_else(|| self.shared.shown_us.load(Ordering::Acquire));
         println!("decoder stopped ({why}) at {}: restarting", time(shown));
-        let began = rt::time::now_ns();
+        let began = runtime::time::now_ns();
         self.decoder = None;
         self.memory = memory;
         while self.restarts.front().is_some_and(|&t| began - t > 60_000_000_000) {
@@ -729,7 +729,7 @@ impl Engine {
         self.stopped_at = Some(shown);
         match self.resume_after_restart(resume) {
             Ok(()) => {
-                println!("decoder restarted in {} ms", (rt::time::now_ns() - began) / 1_000_000);
+                println!("decoder restarted in {} ms", (runtime::time::now_ns() - began) / 1_000_000);
                 self.set_state(|s| s.phase = EnginePhase::Ready);
                 None
             }

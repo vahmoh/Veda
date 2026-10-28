@@ -13,8 +13,8 @@ use compositor::buffers::Buffers;
 use proto::display::{
     self as dp, Cursor, DisplayError, Placement, ScreenInfo, WindowInfo, WindowSpec, WindowState, display,
 };
-use rt::object::{Channel, Vmo};
-use rt::vm::Mapping;
+use runtime::object::{Channel, Vmo};
+use runtime::vm::Mapping;
 
 use crate::state::Compositor;
 

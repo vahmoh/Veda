@@ -14,10 +14,10 @@
 use abi::map_flags;
 use proto::fs::{FsError, vfs};
 use proto::media::{self, Heartbeat, media::Client};
-use rt::object::{Channel, Process};
-use rt::process::Spawn;
-use rt::sync::Mutex;
-use rt::vm::Mapping;
+use runtime::object::{Channel, Process};
+use runtime::process::Spawn;
+use runtime::sync::Mutex;
+use runtime::vm::Mapping;
 
 /// The decoder's program, read once (a read-only mapping of the file
 /// system's copy).

@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 use std::io;
 
 use proto::audio::{Ring, ring::flags};
-use rt::time::now_ns;
+use runtime::time::now_ns;
 
 use crate::pcm::{self, Pcm};
 use crate::{CHANNELS, RATE};

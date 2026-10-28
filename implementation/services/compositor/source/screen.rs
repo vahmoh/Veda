@@ -58,9 +58,9 @@ use core::sync::atomic::{Ordering, fence};
 
 use gfx::{Bitmap, Damage, Rect};
 use proto::displaydev::{self as dd, DisplayDevError, FlipState, Link, Shown};
-use rt::object::Event;
-use rt::println;
-use rt::vm::Mapping;
+use runtime::object::Event;
+use runtime::println;
+use runtime::vm::Mapping;
 
 /// Shortest time between two composed frames without flips (60 Hz).
 pub(crate) const FRAME_NS: u64 = 16_666_666;
@@ -510,7 +510,7 @@ impl Screen {
         let memory = f
             .pictures
             .iter()
-            .map(|p| p.map.vmo().0.duplicate(None).map(rt::object::Vmo::from_handle).ok())
+            .map(|p| p.map.vmo().0.duplicate(None).map(runtime::object::Vmo::from_handle).ok())
             .collect::<Option<Vec<_>>>()?;
         let stride = f.pictures.first()?.pitch as u32;
         Some(crate::gpu::Pictures { memory, width: self.back.width, height: self.back.height, stride, rgb: self.rgb })

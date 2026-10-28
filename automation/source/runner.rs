@@ -90,10 +90,11 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
 ];
 
 /// Crates with host unit tests that run in a Cargo invocation of their
-/// own: `rt`'s tests turn on its default `runtime` feature, which Cargo
-/// would otherwise unify into the build of `rt` that the POSIX layer's
-/// tests link (a second panic handler and allocator beside `std`'s).
-pub const HOST_TESTED_ALONE: &[&str] = &["rt"];
+/// own: `runtime`'s tests turn on its default `runtime` feature, which
+/// Cargo would otherwise unify into the build of `runtime` that the POSIX
+/// layer's tests link (a second panic handler and allocator beside
+/// `std`'s).
+pub const HOST_TESTED_ALONE: &[&str] = &["runtime"];
 
 /// The driver VM's programs with tests, which run on Linux, as the
 /// programs do (`implementation/guests/linux/`, on musl).

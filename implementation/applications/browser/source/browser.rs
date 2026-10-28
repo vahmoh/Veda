@@ -218,12 +218,12 @@ impl Browser {
     }
 
     pub fn now() -> u64 {
-        rt::time::now_ns()
+        runtime::time::now_ns()
     }
 
     /// Seconds since 1970, which history keeps.
     fn wall_clock() -> u64 {
-        rt::time::unix_time_ns() / 1_000_000_000
+        runtime::time::unix_time_ns() / 1_000_000_000
     }
 
     pub fn note(&mut self, text: impl Into<String>) {

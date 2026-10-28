@@ -92,7 +92,7 @@ impl SecureRandom for RandomSource {
 /// The kernel's random number generator: a ChaCha20 stream seeded from the
 /// firmware's RNG, the processor's random number generators and timing
 /// jitter.
-pub static SYSTEM_RANDOM: RandomSource = RandomSource::new(rt::object::random_bytes);
+pub static SYSTEM_RANDOM: RandomSource = RandomSource::new(runtime::object::random_bytes);
 
 /// The cipher suites, in order of preference: AES-128-GCM is the cheapest
 /// here (it uses the processor's AES instructions when it has them),

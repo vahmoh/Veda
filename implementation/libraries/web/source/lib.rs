@@ -35,8 +35,8 @@ use core::fmt;
 
 use abi::RawHandle;
 use net::{NetError, TcpStream};
-use rt::sync::Mutex;
-use rt::time::Duration;
+use runtime::sync::Mutex;
+use runtime::time::Duration;
 use tls::{ClientConfig, TlsError, TlsStream};
 
 pub use url::Url;
@@ -251,7 +251,7 @@ fn tls_config() -> ClientConfig {
 /// Connects to the server of `url` (TCP, then TLS for `https`/`wss`), all
 /// within about `timeout`.
 pub fn connect(url: &Url, timeout: Duration) -> Result<Conn, WebError> {
-    let start = rt::time::Instant::now();
+    let start = runtime::time::Instant::now();
     let mut tcp = TcpStream::connect_host(&url.host, url.port, timeout)?;
     // Requests and WebSocket messages are small and latency matters.
     let _ = tcp.set_nodelay(true);
@@ -267,7 +267,7 @@ pub fn connect(url: &Url, timeout: Duration) -> Result<Conn, WebError> {
 /// Random bytes for WebSocket keys and masks.
 pub(crate) fn random_bytes(buf: &mut [u8]) {
     #[cfg(not(test))]
-    rt::object::random_bytes(buf);
+    runtime::object::random_bytes(buf);
     #[cfg(test)]
     {
         use core::sync::atomic::{AtomicU64, Ordering};

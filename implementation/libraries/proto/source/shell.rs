@@ -17,8 +17,8 @@ use core::fmt;
 
 use abi::RawHandle;
 use ipc::{enumeration, protocol};
-use rt::object::Event;
-use rt::sync::{Condvar, Mutex};
+use runtime::object::Event;
+use runtime::sync::{Condvar, Mutex};
 
 enumeration! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,7 +120,7 @@ impl ShellLink {
             replies: Mutex::new(Vec::new()),
         });
         let s = shared.clone();
-        rt::thread::Builder::new().name("shell-link").spawn(move || worker(s, theirs)).ok()?;
+        runtime::thread::Builder::new().name("shell-link").spawn(move || worker(s, theirs)).ok()?;
         Some(ShellLink { shared, event })
     }
 

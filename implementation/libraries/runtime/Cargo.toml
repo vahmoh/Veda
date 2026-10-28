@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "rt"
+name = "runtime"
 description = "The Veda user-space runtime: process entry, system calls, heap, threads, synchronisation and I/O"
 version.workspace = true
 edition.workspace = true

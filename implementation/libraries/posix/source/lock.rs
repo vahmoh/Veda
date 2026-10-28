@@ -29,7 +29,7 @@
 use alloc::collections::BTreeMap;
 
 use proto::fs::{LOCK_END, LockRange, lock_kind};
-use rt::sync::Mutex;
+use runtime::sync::Mutex;
 
 use crate::error::SysResult;
 use crate::fd::{self, Description, Object};

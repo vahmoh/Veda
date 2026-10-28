@@ -42,8 +42,8 @@ use proto::instance::{self, Instance};
 use rand::SeedableRng;
 use rand::seq::SliceRandom;
 use rand_pcg::Pcg32;
-use rt::object::Event;
-use rt::sync::Mutex;
+use runtime::object::Event;
+use runtime::sync::Mutex;
 use ui::{App, Font, Icon, Ui, WindowSpec, media};
 
 use engine::{Command, PlayState, Shared, Status};
@@ -194,7 +194,7 @@ struct Player {
 
 impl Player {
     fn new(shared: Arc<Shared>, instance: Option<Instance>) -> Player {
-        let seed = rt::time::now_ns();
+        let seed = runtime::time::now_ns();
         Player {
             shared,
             tracks: Vec::new(),
@@ -303,7 +303,7 @@ impl Player {
         {
             let covers = self.covers.clone();
             let (w2, n2) = (Event::from_handle(w2), Event::from_handle(n2));
-            let ok = rt::thread::Builder::new()
+            let ok = runtime::thread::Builder::new()
                 .name("covers")
                 .priority(abi::priority::NORMAL - 2)
                 .spawn(move || art_thread(covers, w2, n2))
@@ -363,7 +363,7 @@ impl Player {
     }
 
     fn previous(&mut self) {
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         if self.status.position_ms(now) > 3000 || self.order.len() <= 1 {
             self.seek_to(0);
         } else if let Some(i) = self.neighbour(-1, true) {
@@ -392,7 +392,7 @@ impl Player {
         if self.current.is_none() {
             return;
         }
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         let pos = self.status.position_ms(now) as i64 + delta_ms;
         let ms = pos.clamp(0, self.status.duration_ms().saturating_sub(500) as i64) as u64;
         self.seek_to(ms);
@@ -406,7 +406,7 @@ impl Player {
         self.shared.send(Command::Seek { ms, id: self.seek_seq });
         self.seeking = Some(self.seek_seq);
         self.status.pos_frames = ms * self.status.rate as u64 / 1000;
-        self.status.pos_ns = rt::time::now_ns();
+        self.status.pos_ns = runtime::time::now_ns();
     }
 
     fn set_volume(&mut self, v: f32) {
@@ -416,7 +416,7 @@ impl Player {
         }
         self.shared.send(Command::Volume(self.gain()));
         // Log once the value settles (a slider drag is one change).
-        self.volume_log_at = Some(rt::time::now_ns() + 300_000_000);
+        self.volume_log_at = Some(runtime::time::now_ns() + 300_000_000);
     }
 
     /// Logs the volume if a change has settled.
@@ -954,7 +954,7 @@ impl App for Player {
     }
 
     fn update(&mut self, ui: &mut Ui) {
-        let started = rt::time::now_ns();
+        let started = runtime::time::now_ns();
         let now = ui.now();
         if core::mem::take(&mut self.activate) {
             ui.activate();
@@ -987,7 +987,7 @@ impl App for Player {
         }
         self.log_volume(ui);
         // Occasional frame-time report in the system log.
-        let spent = rt::time::now_ns() - started;
+        let spent = runtime::time::now_ns() - started;
         self.perf_frames += 1;
         self.perf_ns += spent;
         if self.perf_start == 0 {
@@ -1019,7 +1019,7 @@ fn run() -> i32 {
         println!("cannot create events");
         return 1;
     };
-    let args = rt::env::args();
+    let args = runtime::env::args();
     let file = args.get(1).filter(|a| !a.starts_with('-')).cloned();
     // One player at a time: a file goes to the player that is running.
     let server = match instance::start("music", file.as_deref()) {

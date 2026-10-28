@@ -273,7 +273,7 @@ impl Settings {
             applied_until: 0,
             error: None,
             thumbs: Thumbnailer::new(320, 200),
-            info: rt::object::system_info().unwrap_or_default(),
+            info: runtime::object::system_info().unwrap_or_default(),
             info_at: 0,
             screen: None,
             parts: Vec::new(),
@@ -986,7 +986,7 @@ impl App for Settings {
             th.collect();
         }
         if now >= self.info_at {
-            if let Ok(i) = rt::object::system_info() {
+            if let Ok(i) = runtime::object::system_info() {
                 self.info = i;
             }
             self.screen = ui.ctx.display.screen_info().ok();
@@ -1076,7 +1076,7 @@ impl App for Settings {
         // passwords typed go.
         if let Some(p) = &mut self.agent {
             p.flush();
-            p.finish(rt::time::now_ns() + CLOSE_WAIT_NS);
+            p.finish(runtime::time::now_ns() + CLOSE_WAIT_NS);
         }
         if let Some(p) = &mut self.lock {
             p.leave();

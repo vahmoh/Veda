@@ -24,10 +24,10 @@ use proto::fs::{open_flags, vfs};
 use proto::media::{
     self, AudioSpec, FramePool, MediaError, OpenOptions, PcmRing, SeekMode, VideoSpec, media::Client, pcm, pool,
 };
-use rt::object::{Channel, Event, Process};
-use rt::process::Spawn;
-use rt::time::{Duration, deadline_after};
-use rt::vm;
+use runtime::object::{Channel, Event, Process};
+use runtime::process::Spawn;
+use runtime::time::{Duration, deadline_after};
+use runtime::vm;
 
 use crate::posix::run_c_for;
 use crate::{TestResult, check, vfs_client};
@@ -58,10 +58,10 @@ pub fn test_checkasm() -> TestResult {
         // Its last line otherwise ("no tests to perform", "reference
         // functions unavailable"): nothing was checked.
         let said = summary.or_else(|| out.lines().rev().find(|l| !l.trim().is_empty())).unwrap_or("(nothing)");
-        rt::println!("{name}: {}", said.trim());
+        runtime::println!("{name}: {}", said.trim());
         if code != 0 {
             for line in out.lines().filter(|l| l.contains("FAIL")).take(20) {
-                rt::println!("{name}: {line}");
+                runtime::println!("{name}: {line}");
             }
         }
         check(code == 0, &format!("{name} exited with {code}"))?;
@@ -69,7 +69,7 @@ pub fn test_checkasm() -> TestResult {
         ran += 1;
     }
     if ran == 0 {
-        rt::println!("checkasm: not in this image (no media libraries were built)");
+        runtime::println!("checkasm: not in this image (no media libraries were built)");
     }
     Ok(())
 }
@@ -105,19 +105,19 @@ fn open(fs: &vfs::Client, d: &Decoder, path: &str, flags: u32) -> Result<Result<
 pub fn test_decoder() -> TestResult {
     let fs = vfs_client()?;
     if !exists(&fs, DECODER) {
-        rt::println!("media decoder: not in this image (no media libraries were built)");
+        runtime::println!("media decoder: not in this image (no media libraries were built)");
         return Ok(());
     }
     let d = start_decoder(&fs)?;
     let hello = d.client.hello(media::VERSION).map_err(|e| format!("hello: {e:?}"))?;
-    rt::println!("media decoder: {} (protocol {})", hello.build, hello.version);
+    runtime::println!("media decoder: {} (protocol {})", hello.build, hello.version);
     check(hello.version == media::VERSION && hello.build.starts_with("FFmpeg"), "the decoder says what it is")?;
 
     // What is not a video is refused, and the decoder carries on.
     let font = open(&fs, &d, "/system/fonts/Inter-Regular.otf", 0)?;
     check(font.is_err(), &format!("a font opened as a video: {font:?}"))?;
     let garbage: Vec<u8> = (0..65_536u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
-    let vmo = rt::object::Vmo::create(garbage.len()).map_err(s)?;
+    let vmo = runtime::object::Vmo::create(garbage.len()).map_err(s)?;
     vmo.write(0, &garbage).map_err(s)?;
     fs.write_file("/tmp/garbage.mkv".into(), vmo, garbage.len() as u64).map_err(s)?.map_err(s)?;
     let bad = open(&fs, &d, "/tmp/garbage.mkv", 0)?;
@@ -128,7 +128,7 @@ pub fn test_decoder() -> TestResult {
     if exists(&fs, COUNTDOWN) {
         decode_countdown(&fs, &d)?;
     } else {
-        rt::println!("media decoder: no sample videos in this image");
+        runtime::println!("media decoder: no sample videos in this image");
     }
 
     // The player goes away: the decoder ends.
@@ -145,7 +145,7 @@ fn decode_countdown(fs: &vfs::Client, d: &Decoder) -> TestResult {
     check(info.is_valid(), "its description keeps to the protocol")?;
     let v = info.video_stream().ok_or("the countdown has no picture")?.clone();
     let a = info.audio_stream().ok_or("the countdown has no sound")?.clone();
-    rt::println!(
+    runtime::println!(
         "countdown: {} {}x{}, {} {} Hz, {} us",
         v.codec,
         v.width,
@@ -168,7 +168,7 @@ fn decode_countdown(fs: &vfs::Client, d: &Decoder) -> TestResult {
         if let Some(i) = got.iter().zip(&expected).position(|(g, e)| g != e) {
             return Err(format!("picture {i} decodes to {}, the encoder made {}", got[i], expected[i]));
         }
-        rt::println!("countdown: {} pictures decode exactly", got.len());
+        runtime::println!("countdown: {} pictures decode exactly", got.len());
         // Back to the start for what follows.
         open(fs, d, COUNTDOWN, 0)?.map_err(s)?;
     }
@@ -190,7 +190,7 @@ fn decode_countdown(fs: &vfs::Client, d: &Decoder) -> TestResult {
     d.client.seek(0, SeekMode::Exact, 1).map_err(|e| format!("{e:?}"))?.map_err(s)?;
     d.client.play().map_err(|e| format!("{e:?}"))?.map_err(s)?;
     let collected = collect(&frames, &ring, &ready, &wake, 1, usize::MAX)?;
-    rt::println!(
+    runtime::println!(
         "countdown: {} pictures and {} frames of sound in order",
         collected.pictures.len(),
         collected.sound_frames

@@ -23,7 +23,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use rt::println;
+use runtime::println;
 
 use crate::acpi::Acpi;
 use crate::pci::{Address, ConfigSpace, pages};

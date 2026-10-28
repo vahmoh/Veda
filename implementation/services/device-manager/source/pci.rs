@@ -9,8 +9,8 @@ use alloc::vec::Vec;
 use core::ops::Range;
 
 use proto::pci::{Bar, Capabilities, DeviceInfo, cap};
-use rt::println;
-use rt::time::{Duration, sleep};
+use runtime::println;
+use runtime::time::{Duration, sleep};
 
 use crate::architecture::config::ConfigAccess;
 

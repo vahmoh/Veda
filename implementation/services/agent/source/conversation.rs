@@ -30,7 +30,7 @@ use agent::notice::Notice;
 use agent::prompt::{self, PromptContext};
 use agent::tools;
 use proto::agent::AgentState;
-use rt::println;
+use runtime::println;
 
 use crate::session::{Connector, Incoming, Session};
 use crate::voice::{MIC_PACKET, Voice};
@@ -101,7 +101,7 @@ impl Agent {
         if !v.open_mic() {
             return;
         }
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         self.listener = Some(listen::Listener::new(&name, &key.unwrap_or_default(), url, now, self.budget.clone()));
     }
 
@@ -169,7 +169,7 @@ impl Agent {
     /// The prompt for a conversation.
     pub(crate) fn build_prompt(&self) -> String {
         let installed = worker::installed_apps();
-        let since = (rt::time::unix_time_ns() / 1_000_000_000).saturating_sub(RECAP_AGE_S);
+        let since = (runtime::time::unix_time_ns() / 1_000_000_000).saturating_sub(RECAP_AGE_S);
         let (memory, recap, infos, name, first) = {
             let s = self.shared.lock();
             let recap: String = s
@@ -218,7 +218,7 @@ impl Agent {
     /// The conversation's connection is open: its settings go out, with
     /// the notices that woke the agent.
     pub(crate) fn connected(&mut self, ws: web::ws::WebSocket<web::Conn>) {
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         let mut s = Session::new(ws, now, core::mem::take(&mut self.attended));
         let settings = self.settings();
         if let Err(e) = s.send(&settings) {
@@ -244,7 +244,7 @@ impl Agent {
     pub(crate) fn end_conversation(&mut self, error: Option<&str>) {
         if let Some(mut s) = self.session.take() {
             s.close();
-            println!("conversation ended after {} s", (rt::time::now_ns() - s.started_ns) / 1_000_000_000);
+            println!("conversation ended after {} s", (runtime::time::now_ns() - s.started_ns) / 1_000_000_000);
             let g = &mut self.gate;
             if g.held > 0 {
                 let (cancelled, recorded) = g.coupling_db();
@@ -275,7 +275,7 @@ impl Agent {
         match error {
             Some(e) => {
                 self.set_state(AgentState::Error, e);
-                self.rest_at = Some(rt::time::now_ns() + ERROR_SHOWN_NS);
+                self.rest_at = Some(runtime::time::now_ns() + ERROR_SHOWN_NS);
             }
             None => self.rest(),
         }
@@ -311,8 +311,8 @@ impl Agent {
     }
 
     fn handle_message(&mut self, m: ServerMessage) {
-        let now = rt::time::now_ns();
-        let unix = rt::time::unix_time_ns() / 1_000_000_000;
+        let now = runtime::time::now_ns();
+        let unix = runtime::time::unix_time_ns() / 1_000_000_000;
         if let Some(s) = &mut self.session {
             s.presence.heard(&m);
         }
@@ -444,7 +444,7 @@ impl Agent {
     /// The agent's voice is coming: its turn starts (once per turn).
     fn agent_speaks(&mut self) {
         let Some(s) = &mut self.session else { return };
-        s.last_activity_ns = rt::time::now_ns();
+        s.last_activity_ns = runtime::time::now_ns();
         if s.end_requested_at.is_some() {
             s.goodbye_started = true;
         }
@@ -503,7 +503,7 @@ impl Agent {
         if self.session.is_none()
             && let Some(l) = &mut self.listener
         {
-            l.hear(&self.mic_buf, &self.playing_buf, &self.recorded_buf, rt::time::now_ns());
+            l.hear(&self.mic_buf, &self.playing_buf, &self.recorded_buf, runtime::time::now_ns());
             return;
         }
         if self.session.is_none() {

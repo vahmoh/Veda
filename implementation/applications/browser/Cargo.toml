@@ -16,7 +16,7 @@ test = false
 bench = false
 
 [dependencies]
-rt = { workspace = true }
+runtime = { workspace = true }
 abi = { workspace = true }
 ipc = { workspace = true }
 net = { workspace = true }

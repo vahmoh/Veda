@@ -30,7 +30,7 @@ use alloc::vec::Vec;
 
 use abi::ObjectType;
 use ipc::{Bytes, Decode, Decoder, Encode, Encoder, message};
-use rt::object::{Channel, Handle, Process, Socket, Vmo};
+use runtime::object::{Channel, Handle, Process, Socket, Vmo};
 
 use crate::error;
 use crate::fd::{Description, Object};

@@ -34,10 +34,10 @@ use core::sync::atomic::{Ordering, fence};
 
 use proto::block::{self, BlockError, BlockInfo, MAX_TRANSFER, Served};
 use proto::pci::{DmaBuffer, Registers, pcidev};
-use rt::object::{Channel, Interrupt};
-use rt::println;
+use runtime::object::{Channel, Interrupt};
+use runtime::println;
 
-rt::entry!(main);
+runtime::entry!(main);
 
 /// The BAR of the controller's registers.
 const REGISTERS: u8 = 0;
@@ -174,12 +174,12 @@ impl Controller {
 
     /// Waits until `done` holds, up to `timeout_ns`.
     fn wait(&self, timeout_ns: u64, mut done: impl FnMut(&Controller) -> bool) -> bool {
-        let end = rt::time::now_ns() + timeout_ns;
+        let end = runtime::time::now_ns() + timeout_ns;
         while !done(self) {
-            if rt::time::now_ns() > end {
+            if runtime::time::now_ns() > end {
                 return false;
             }
-            rt::time::sleep(rt::time::Duration::from_millis(1));
+            runtime::time::sleep(runtime::time::Duration::from_millis(1));
         }
         true
     }
@@ -202,7 +202,7 @@ impl Controller {
         let (qid, tail) = (q.id as usize, q.tail);
         fence(Ordering::SeqCst);
         self.w32(reg::DOORBELLS + 2 * qid * stride, tail as u32);
-        let end = rt::time::now_ns() + COMMAND_TIMEOUT_NS;
+        let end = runtime::time::now_ns() + COMMAND_TIMEOUT_NS;
         let mut spins = 0u32;
         loop {
             let q = if io { &mut self.io } else { &mut self.admin };
@@ -231,16 +231,16 @@ impl Controller {
                     code => Err(Failure::Status(code as u16)),
                 };
             }
-            if rt::time::now_ns() > end || self.r32(reg::CSTS) & CSTS_CFS != 0 {
+            if runtime::time::now_ns() > end || self.r32(reg::CSTS) & CSTS_CFS != 0 {
                 return Err(Failure::Timeout);
             }
             spins += 1;
             match &self.irq {
                 Some(irq) if spins > 50 => {
-                    let _ = irq.wait_irq(rt::time::now_ns() + 1_000_000);
+                    let _ = irq.wait_irq(runtime::time::now_ns() + 1_000_000);
                     let _ = irq.ack();
                 }
-                _ if spins > 500 => rt::time::sleep(rt::time::Duration::from_millis(1)),
+                _ if spins > 500 => runtime::time::sleep(runtime::time::Duration::from_millis(1)),
                 _ => core::hint::spin_loop(),
             }
         }
@@ -433,7 +433,7 @@ impl block::Disks for Nvme {
 }
 
 fn main() -> i32 {
-    let Some(h) = rt::env::take_handle(proto::startup::driver::PCIDEV) else {
+    let Some(h) = runtime::env::take_handle(proto::startup::driver::PCIDEV) else {
         println!("no pcidev channel");
         return 1;
     };

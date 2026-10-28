@@ -15,9 +15,9 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use ipc::IpcError;
 use proto::gpu::{GpuError, ResourceSpec, gpu};
-use rt::object::{Event, Vmo};
-use rt::pool::ThreadPool;
-use rt::vm::Mapping;
+use runtime::object::{Event, Vmo};
+use runtime::pool::ThreadPool;
+use runtime::vm::Mapping;
 
 use crate::backend::{External, ImportError, Memory, OutOfMemory};
 use crate::soft::{SoftBackend, Workers};
@@ -83,7 +83,7 @@ impl Workers for ThreadPool {
 /// (just below normal priority, so that the window system stays
 /// responsive).
 pub fn software_context(config: Config) -> Context {
-    let pool = ThreadPool::named("gl-worker", rt::pool::cpus().min(64), Some(abi::priority::NORMAL - 2));
+    let pool = ThreadPool::named("gl-worker", runtime::pool::cpus().min(64), Some(abi::priority::NORMAL - 2));
     Context::new(Box::new(SoftBackend::new(Box::new(pool))), config)
 }
 
@@ -92,7 +92,7 @@ pub fn software_context(config: Config) -> Context {
 pub fn context(config: Config) -> Context {
     gpu_context(config).unwrap_or_else(|e| {
         if !matches!(e, NoGpu::NoService) {
-            rt::println!("{e}: rendering in software");
+            runtime::println!("{e}: rendering in software");
         }
         software_context(config)
     })
@@ -130,7 +130,7 @@ fn backend_context(t: GpuTransport, config: Config) -> Result<Context, NoGpu> {
                 (config.stencil_bits, crate::gl::STENCIL_BITS, "stencil"),
             ] {
                 if bits > 0 && !config.surfaceless && c.get_integer(pname) == 0 {
-                    rt::println!("{renderer}: the window has no {what} buffer: the renderer could not make one");
+                    runtime::println!("{renderer}: the window has no {what} buffer: the renderer could not make one");
                 }
             }
             Ok(c)
@@ -169,7 +169,7 @@ impl GpuTransport {
     pub fn connect() -> Result<GpuTransport, NoGpu> {
         let services = proto::with_registry(|r| r.list()).map_err(|_| NoGpu::Unreachable)?;
         let registered = services.map_err(|_| NoGpu::Unreachable)?.iter().any(|s| s == gpu::NAME);
-        let booting = rt::time::now_ns() < BOOT_NS;
+        let booting = runtime::time::now_ns() < BOOT_NS;
         if !registered && !booting {
             return Err(NoGpu::NoService);
         }
@@ -308,14 +308,14 @@ impl Transport for GpuTransport {
         let theirs = {
             // SAFETY: the caller's handle, borrowed for the duplication and
             // never closed here (`ManuallyDrop`).
-            let h = core::mem::ManuallyDrop::new(unsafe { rt::object::Handle::from_raw(handle) });
+            let h = core::mem::ManuallyDrop::new(unsafe { runtime::object::Handle::from_raw(handle) });
             Vmo::from_handle(h.duplicate(None).map_err(|_| ImportError::NoMemory)?)
         };
         match self.client.import(spec, memory.stride(), theirs) {
             Ok(Ok(h)) => Ok(h),
             Ok(Err(GpuError::NoMemory)) => Err(ImportError::NoMemory),
             Ok(Err(e)) => {
-                rt::println!("{}: cannot render into or sample memory it is given: {}", self.renderer, e);
+                runtime::println!("{}: cannot render into or sample memory it is given: {}", self.renderer, e);
                 Err(ImportError::Unsupported)
             }
             Err(_) => Err(ImportError::NoMemory),
@@ -362,7 +362,7 @@ impl Transport for GpuTransport {
     fn wait(&mut self, fence: u64, timeout_ns: u64) -> Result<bool, Lost> {
         // A fence the renderer leaves unsignaled for longer than a call may
         // take, it never will: it has hung.
-        let start = rt::time::now_ns();
+        let start = runtime::time::now_ns();
         let hung = start.saturating_add(CALL_NS);
         let until = start.saturating_add(timeout_ns).min(hung);
         loop {
@@ -372,7 +372,7 @@ impl Transport for GpuTransport {
             if self.last_fence() >= fence {
                 return Ok(true);
             }
-            if rt::time::now_ns() >= until {
+            if runtime::time::now_ns() >= until {
                 // The caller's time is up, or the renderer's.
                 return if until < hung {
                     Ok(false)
@@ -381,7 +381,7 @@ impl Transport for GpuTransport {
                 };
             }
             let woken = self.fences.wait(abi::signals::SIGNALED, until);
-            if woken.is_err() && rt::time::now_ns() < until {
+            if woken.is_err() && runtime::time::now_ns() < until {
                 // Not timed out: the event is gone, and the renderer with it.
                 return lost(&self.renderer, format_args!("took its fences' event away"));
             }
@@ -418,6 +418,6 @@ impl FenceWatch {
 /// Says why the GPU's context is lost (the renderer draws nothing from
 /// then on).
 fn lost<T>(renderer: &str, why: core::fmt::Arguments) -> Result<T, Lost> {
-    rt::println!("the GPU service ({renderer}) {why}: rendering stops");
+    runtime::println!("the GPU service ({renderer}) {why}: rendering stops");
     Err(Lost)
 }

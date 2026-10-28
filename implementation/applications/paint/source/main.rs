@@ -98,7 +98,7 @@ const SHORTCUTS: [(&str, &str); 20] = [
 /// What the memory allows: the history's budget (bytes) and the largest picture opened
 /// (pixels), from the machine's memory.
 fn limits() -> (usize, u64) {
-    let total = rt::object::system_info().map(|i| i.total_memory).unwrap_or(1 << 30);
+    let total = runtime::object::system_info().map(|i| i.total_memory).unwrap_or(1 << 30);
     let budget = (total / 8).clamp(32 << 20, 512 << 20) as usize;
     let pixels = (total / 24).clamp(4 << 20, 64 << 20);
     (budget, pixels)

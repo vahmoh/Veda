@@ -5,7 +5,7 @@
 //! written to port 0xCF8, the data at port 0xCFC (segment 0, the first 256
 //! bytes of each function's).
 
-use rt::object::{IoPorts, Resource};
+use runtime::object::{IoPorts, Resource};
 
 use crate::pci::Address;
 

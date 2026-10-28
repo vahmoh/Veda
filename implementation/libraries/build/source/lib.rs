@@ -18,7 +18,8 @@ pub mod amd64;
 /// The linker's arguments for a Veda program, beyond the target's (a static
 /// position-independent executable):
 ///
-/// * it starts at `rt`'s entry point, which takes the bootstrap channel;
+/// * it starts at `runtime`'s entry point, which takes the bootstrap
+///   channel;
 /// * its relative relocations are packed (`DT_RELR`: a word for up to 63 of
 ///   them, where `DT_RELA` takes 24 bytes for each);
 /// * functions with the same code are kept once (Rust promises no function

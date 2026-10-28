@@ -13,7 +13,7 @@ path = "source/lib.rs"
 
 [dependencies]
 ipc = { workspace = true }
-rt = { workspace = true, default-features = false }
+runtime = { workspace = true, default-features = false }
 abi = { workspace = true }
 
 [lints]

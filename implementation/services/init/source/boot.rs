@@ -9,8 +9,8 @@ use alloc::vec::Vec;
 use abi::resource_kind;
 use abi::startup::role;
 use proto::startup::device_manager as roles;
-use rt::object::Handle;
-use rt::println;
+use runtime::object::Handle;
+use runtime::println;
 
 use crate::{Init, Origin};
 
@@ -43,7 +43,7 @@ const SERVICES: [&str; 10] = [
 pub const RESTARTABLE: [&str; 8] =
     ["compositor", "lock", "shell", "audio", "network", "wlan", "agent", "package-manager"];
 
-fn dup(h: &Option<rt::Vmo>) -> Option<Handle> {
+fn dup(h: &Option<runtime::Vmo>) -> Option<Handle> {
     h.as_ref().and_then(|v| v.0.duplicate(None).ok())
 }
 

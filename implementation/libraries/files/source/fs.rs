@@ -25,8 +25,8 @@ use core::ops::{Add, ControlFlow, Deref};
 
 use ipc::{Bytes, IpcError};
 use proto::fs::{MAX_IO, open_flags, vfs};
-use rt::object::Vmo;
-use rt::vm::Mapping;
+use runtime::object::Vmo;
+use runtime::vm::Mapping;
 
 pub use proto::fs::{DirEntry, DirPage, FsError, Space, Stat};
 

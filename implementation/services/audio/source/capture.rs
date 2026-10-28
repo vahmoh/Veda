@@ -38,7 +38,7 @@ use audio::resample::Resampler;
 use proto::audio::{
     AudioError, DeviceFormat, InputHandle, InputLink, InputSpec, Ring, RingError, Role, recorded_at, ring,
 };
-use rt::object::Event;
+use runtime::object::Event;
 
 use crate::mixer::Mixer;
 use audio::aec::EchoCanceller;
@@ -281,7 +281,7 @@ impl Capture {
             return Err(AudioError::NoSuchStream);
         }
         if let Some(s) = self.streams.remove(&id) {
-            rt::println!("capture stream {} \"{}\" closed ({} overruns)", id & !ID_BIT, s.name, s.overruns);
+            runtime::println!("capture stream {} \"{}\" closed ({} overruns)", id & !ID_BIT, s.name, s.overruns);
         }
         self.after_close();
         Ok(())
@@ -414,8 +414,10 @@ impl Capture {
                 if echo.report_at_ns != 0 && echo.canceller.converged() {
                     let c = &echo.canceller;
                     match c.echo_delay_ms() {
-                        Some(d) => rt::println!("echo cancellation: {:.0} dB, echo delay {:.0} ms", c.erle_db(), d),
-                        None => rt::println!("echo cancellation: {:.0} dB", c.erle_db()),
+                        Some(d) => {
+                            runtime::println!("echo cancellation: {:.0} dB, echo delay {:.0} ms", c.erle_db(), d)
+                        }
+                        None => runtime::println!("echo cancellation: {:.0} dB", c.erle_db()),
                     }
                 }
                 echo.report_at_ns = end_ns + ECHO_REPORT_NS;

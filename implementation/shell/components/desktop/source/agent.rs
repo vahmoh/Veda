@@ -21,8 +21,8 @@
 
 use gfx::{Align, Canvas, Color, Rect};
 use proto::agent::{AGENT_EVENT, AgentEvent, AgentState, AgentStatus, ApprovalRequest, Live, agent};
-use rt::object::Channel;
-use rt::vm::Mapping;
+use runtime::object::Channel;
+use runtime::vm::Mapping;
 use shell_common::presence::{self, RING_WIDTH};
 use ui::{Font, Icon, Ui, status};
 

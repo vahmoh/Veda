@@ -50,9 +50,9 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use net::{Connectivity, Duration, IpAddr, NetError, SocketAddr, TcpStream, UdpSocket, wifi};
-use rt::println;
+use runtime::println;
 
-rt::entry!(main);
+runtime::entry!(main);
 
 type Check = Result<String, String>;
 
@@ -62,7 +62,7 @@ fn net(e: NetError) -> String {
 
 /// Waits until the network has a default route (through `via`, if given).
 fn wait_online_via(timeout: Duration, via: Option<&str>) -> Check {
-    let end = rt::time::now_ns() + timeout.as_nanos() as u64;
+    let end = runtime::time::now_ns() + timeout.as_nanos() as u64;
     loop {
         if let Ok(st) = net::status()
             && st.connectivity == Connectivity::Routable
@@ -70,10 +70,10 @@ fn wait_online_via(timeout: Duration, via: Option<&str>) -> Check {
         {
             return Ok(format!("via {} (gateway {:?})", st.default_interface, st.default_gateway));
         }
-        if rt::time::now_ns() > end {
+        if runtime::time::now_ns() > end {
             return Err(String::from("no network connection"));
         }
-        rt::time::sleep(Duration::from_millis(250));
+        runtime::time::sleep(Duration::from_millis(250));
     }
 }
 
@@ -97,7 +97,7 @@ fn check_ipv6_internet() -> Check {
 /// TCP over IPv6 to example.com from any routable IPv6 address (QEMU's NAT
 /// uses site-local ones).
 fn ipv6_tcp(global_only: bool) -> Check {
-    let end = rt::time::now_ns() + 20_000_000_000;
+    let end = runtime::time::now_ns() + 20_000_000_000;
     let global = loop {
         let found = net::interfaces().map_err(net)?.iter().flat_map(|i| i.addresses.iter().map(|a| a.address)).find(
             |a| match a {
@@ -106,10 +106,10 @@ fn ipv6_tcp(global_only: bool) -> Check {
                 _ => false,
             },
         );
-        if found.is_some() || rt::time::now_ns() > end {
+        if found.is_some() || runtime::time::now_ns() > end {
             break found;
         }
-        rt::time::sleep(Duration::from_millis(250));
+        runtime::time::sleep(Duration::from_millis(250));
     };
     let Some(own) = global else { return Ok(String::from("skipped: no global IPv6 address")) };
     let l = net::lookup("example.com", net::AddrFamily::V6, Duration::from_secs(15)).map_err(net)?;
@@ -122,7 +122,7 @@ fn ipv6_tcp(global_only: bool) -> Check {
 /// the configuration, and fails if it is a hypervisor's NAT (QEMU's,
 /// 10.0.2.0/24).
 fn check_lan() -> Check {
-    let end = rt::time::now_ns() + 60_000_000_000;
+    let end = runtime::time::now_ns() + 60_000_000_000;
     let ifaces = loop {
         let ifaces = net::interfaces().map_err(net)?;
         let leased = ifaces.iter().any(|i| {
@@ -131,11 +131,11 @@ fn check_lan() -> Check {
         if leased {
             break ifaces;
         }
-        if rt::time::now_ns() > end {
+        if runtime::time::now_ns() > end {
             let states: Vec<String> = ifaces.iter().map(|i| format!("{}: DHCP {:?}", i.name, i.dhcp.state)).collect();
             return Err(format!("no IPv4 lease after 60 s ({})", states.join(", ")));
         }
-        rt::time::sleep(Duration::from_millis(250));
+        runtime::time::sleep(Duration::from_millis(250));
     };
     let eth = ifaces
         .iter()
@@ -167,12 +167,12 @@ fn check_lan() -> Check {
 
 /// Waits for the Wi-Fi service and its adapter (both may still be starting).
 fn check_wifi_adapter() -> Check {
-    let end = rt::time::now_ns() + 60_000_000_000;
+    let end = runtime::time::now_ns() + 60_000_000_000;
     while !wifi::available() {
-        if rt::time::now_ns() > end {
+        if runtime::time::now_ns() > end {
             return Err(String::from("the Wi-Fi service is not running"));
         }
-        rt::time::sleep(Duration::from_millis(250));
+        runtime::time::sleep(Duration::from_millis(250));
     }
     let s = wifi::wait_for(Duration::from_secs(60), |s| s.state != wifi::ConnState::NoAdapter).map_err(wifi)?;
     if s.state == wifi::ConnState::NoAdapter {
@@ -183,7 +183,7 @@ fn check_wifi_adapter() -> Check {
 
 /// Scans until `ssid` shows up.
 fn check_wifi_scan(ssid: &str) -> Check {
-    let end = rt::time::now_ns() + 60_000_000_000;
+    let end = runtime::time::now_ns() + 60_000_000_000;
     loop {
         let _ = wifi::scan();
         let w = wifi::Watcher::new().map_err(wifi)?;
@@ -204,7 +204,7 @@ fn check_wifi_scan(ssid: &str) -> Check {
                 names.join(", ")
             ));
         }
-        if rt::time::now_ns() > end {
+        if runtime::time::now_ns() > end {
             return Err(format!("{ssid} not found"));
         }
     }
@@ -214,7 +214,7 @@ fn check_wifi_scan(ssid: &str) -> Check {
 fn check_wifi_connect(ssid: &str, password: &str) -> Check {
     let pass = (!password.is_empty()).then_some(password);
     wifi::connect(ssid, pass, false).map_err(wifi)?;
-    let t0 = rt::time::now_ns();
+    let t0 = runtime::time::now_ns();
     let s = wifi::wait_for(Duration::from_secs(45), |s| {
         s.state == wifi::ConnState::Connected || (s.state == wifi::ConnState::Disconnected && s.last_failure.is_some())
     })
@@ -232,7 +232,7 @@ fn check_wifi_connect(ssid: &str, password: &str) -> Check {
         s.channel,
         s.signal_dbm,
         s.security.label(),
-        (rt::time::now_ns() - t0) / 1_000_000
+        (runtime::time::now_ns() - t0) / 1_000_000
     ))
 }
 
@@ -246,9 +246,9 @@ fn check_dns(host: &str) -> Check {
 }
 
 fn check_http(url: &str, expect: &str) -> Check {
-    let t0 = rt::time::now_ns();
+    let t0 = runtime::time::now_ns();
     let r = web::http::get(url, Duration::from_secs(20), 4 << 20).map_err(|e| format!("{e}"))?;
-    let ms = (rt::time::now_ns() - t0) / 1_000_000;
+    let ms = (runtime::time::now_ns() - t0) / 1_000_000;
     if r.status != 200 {
         return Err(format!("HTTP {} {}", r.status, r.reason));
     }
@@ -269,14 +269,14 @@ enum Connect {
 }
 
 fn ms_since(t0: u64) -> u64 {
-    (rt::time::now_ns() - t0) / 1_000_000
+    (runtime::time::now_ns() - t0) / 1_000_000
 }
 
 /// `GET path` from `host` over HTTPS: expects HTTP status `status` and, if
 /// given, `text` in the response.
 fn check_https(host: &str, path: &str, status: u16, text: Option<&str>, how: Connect) -> Check {
     let config = tls::ClientConfig::with_alpn(&[b"http/1.1"]);
-    let t0 = rt::time::now_ns();
+    let t0 = runtime::time::now_ns();
     let (mut tls, timing) = match how {
         Connect::Together => {
             let tls = tls::connect(host, 443, Duration::from_secs(60), &config).map_err(|e| format!("{e}"))?;
@@ -286,7 +286,7 @@ fn check_https(host: &str, path: &str, status: u16, text: Option<&str>, how: Con
             let mut tcp = TcpStream::connect_host(host, 443, Duration::from_secs(20)).map_err(net)?;
             let tcp_ms = ms_since(t0);
             tcp.set_read_timeout(Some(Duration::from_secs(60)));
-            let t1 = rt::time::now_ns();
+            let t1 = runtime::time::now_ns();
             let tls = tls::TlsStream::connect(tcp, host, &config).map_err(|e| format!("{e}"))?;
             (tls, format!("TCP {tcp_ms} ms, TLS handshake {} ms", ms_since(t1)))
         }
@@ -379,8 +379,8 @@ fn dns_probe(server: IpAddr, id: u16) -> String {
         return String::from("fail");
     }
     let mut buf = [0u8; 1500];
-    let end = rt::time::now_ns() + 3_000_000_000;
-    while rt::time::now_ns() < end {
+    let end = runtime::time::now_ns() + 3_000_000_000;
+    while runtime::time::now_ns() < end {
         match sock.recv_from(&mut buf, Some(Duration::from_millis(500))) {
             Ok((n, _)) if n >= 12 && buf[0..2] == q[0..2] && buf[2] & 0x80 != 0 => {
                 return match buf[3] & 0x0F {
@@ -455,7 +455,7 @@ fn route_watch() -> ! {
             println!("{}", line);
             last = line;
         }
-        rt::time::sleep(Duration::from_millis(500));
+        runtime::time::sleep(Duration::from_millis(500));
     }
 }
 
@@ -480,7 +480,7 @@ fn run(checks: &[(&str, &dyn Fn() -> Check)]) -> i32 {
 }
 
 fn main() -> i32 {
-    let args = rt::env::args();
+    let args = runtime::env::args();
     let mode = args.get(1).map(String::as_str).unwrap_or("online");
     match mode {
         "online" => {

@@ -24,8 +24,8 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use abi::map_flags;
-use rt::object::Vmo;
-use rt::vm::Mapping;
+use runtime::object::Vmo;
+use runtime::vm::Mapping;
 
 /// `"VTTY"`
 pub const MAGIC: u32 = u32::from_le_bytes(*b"VTTY");

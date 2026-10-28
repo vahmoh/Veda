@@ -35,8 +35,8 @@ use core::fmt;
 
 use abi::RawHandle;
 use ipc::{enumeration, message, protocol};
-use rt::object::Event;
-use rt::sync::{Condvar, Mutex};
+use runtime::object::Event;
+use runtime::sync::{Condvar, Mutex};
 
 /// The fewest characters a password has.
 pub const MIN_PASSWORD: usize = 4;
@@ -207,7 +207,7 @@ impl LockLink {
             replies: Mutex::new(Vec::new()),
         });
         let s = shared.clone();
-        rt::thread::Builder::new().name("lock-link").spawn(move || worker(s, theirs)).ok()?;
+        runtime::thread::Builder::new().name("lock-link").spawn(move || worker(s, theirs)).ok()?;
         Some(LockLink { shared, event })
     }
 

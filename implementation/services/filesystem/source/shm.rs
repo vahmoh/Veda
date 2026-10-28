@@ -9,7 +9,7 @@
 
 use abi::Rights;
 use proto::fs::FsError;
-use rt::object::Vmo;
+use runtime::object::Vmo;
 
 /// An object's memory.
 pub struct Memory(Vmo);

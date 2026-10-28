@@ -171,7 +171,7 @@ impl Taskbar {
         let clock = Rect::new(show_desktop.x - 6 - 96, 4, 96, h - 8);
         let resp = ui.interact(ui.id("clock"), clock);
         Self::button_bg(ui, clock, resp.hovered, resp.held, m.popup == Some(PopupKind::Calendar));
-        let now = rt::time::DateTime::now();
+        let now = runtime::time::DateTime::now();
         let time = format!("{:02}:{:02}", now.hour, now.minute);
         let date = format!("{} {} {}", &now.weekday_name()[..3], now.day, &now.month_name()[..3]);
         ui.label(Rect::new(clock.x, clock.y + 3, clock.w, 18), &time, Font::Regular, 13.0, t.text, Align::Center);
@@ -187,7 +187,7 @@ impl Taskbar {
             m.push(Action::TogglePopup(PopupKind::Calendar));
         }
         // Redraw when the minute changes.
-        let into_minute = rt::time::unix_time_ns() % 60_000_000_000;
+        let into_minute = runtime::time::unix_time_ns() % 60_000_000_000;
         let now_ns = ui.now();
         ui.repaint_at(now_ns + 60_000_000_000 - into_minute);
 

@@ -75,7 +75,7 @@ impl Entry {
 struct Trashed {
     /// Each item's name in the Trash, and where it was.
     items: Vec<(String, String)>,
-    /// When (`rt::time::now_ns`).
+    /// When (`runtime::time::now_ns`).
     at: u64,
 }
 
@@ -1232,7 +1232,7 @@ impl Files {
                 if !moved.is_empty() {
                     let from = folder_of(moved.iter().map(|(_, origin)| origin.as_str()));
                     println!("moved {} from {from} to the Trash", items(moved.len()));
-                    self.trashed = Some(Trashed { items: moved.clone(), at: rt::time::now_ns() });
+                    self.trashed = Some(Trashed { items: moved.clone(), at: runtime::time::now_ns() });
                 }
                 self.after_removal(self.cursor);
                 if !no_room.is_empty() {
@@ -1557,7 +1557,7 @@ impl App for Files {
 }
 
 fn main() {
-    let args = rt::env::args();
+    let args = runtime::env::args();
     let empty_trash = args.get(1).is_some_and(|a| a == "--empty-trash");
     let start = match args.get(1) {
         _ if empty_trash => trash::FILES.to_string(),

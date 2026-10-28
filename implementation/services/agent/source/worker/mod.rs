@@ -45,9 +45,9 @@ use agent::tools::{self, Risk, names};
 use proto::display::display;
 use proto::init::launcher;
 use proto::shell::shell;
-use rt::object::{Channel, Event};
-use rt::sync::{Condvar, Mutex};
-use rt::time::DateTime;
+use runtime::object::{Channel, Event};
+use runtime::sync::{Condvar, Mutex};
+use runtime::time::DateTime;
 use serde_json::Value;
 
 use crate::shared::Shared;
@@ -136,7 +136,7 @@ impl Worker {
             links: Mutex::new(Vec::new()),
         });
         let wq = q.clone();
-        rt::thread::Builder::new()
+        runtime::thread::Builder::new()
             .name("actions")
             .spawn(move || {
                 let mut ctx = Ctx { shared, q: wq, signal, apps: BTreeMap::new(), fs: user_files() };

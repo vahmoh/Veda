@@ -13,7 +13,7 @@ dependencies = [
  "abi",
  "apps-common",
  "proto",
- "rt",
+ "runtime",
  "ui",
 ]
 
@@ -84,7 +84,7 @@ dependencies = [
  "net",
  "percent-encoding",
  "proto",
- "rt",
+ "runtime",
  "serde",
  "serde_json",
  "web",
@@ -123,7 +123,7 @@ dependencies = [
  "gfx",
  "ipc",
  "proto",
- "rt",
+ "runtime",
  "ui",
 ]
 
@@ -199,7 +199,7 @@ dependencies = [
  "build",
  "ipc",
  "proto",
- "rt",
+ "runtime",
 ]
 
 [[package]]
@@ -209,7 +209,7 @@ dependencies = [
  "build",
  "libm",
  "proto",
- "rt",
+ "runtime",
 ]
 
 [[package]]
@@ -351,7 +351,7 @@ dependencies = [
  "ipc",
  "net",
  "proto",
- "rt",
+ "runtime",
  "serde_json",
  "ui",
 ]
@@ -402,7 +402,7 @@ dependencies = [
  "calculator-core",
  "gfx",
  "proto",
- "rt",
+ "runtime",
  "ui",
 ]
 
@@ -511,7 +511,7 @@ dependencies = [
  "ipc",
  "num-traits",
  "proto",
- "rt",
+ "runtime",
  "splash",
 ]
 
@@ -720,7 +720,7 @@ dependencies = [
  "iommu",
  "ipc",
  "proto",
- "rt",
+ "runtime",
 ]
 
 [[package]]
@@ -747,7 +747,7 @@ dependencies = [
  "initrd",
  "ipc",
  "proto",
- "rt",
+ "runtime",
 ]
 
 [[package]]
@@ -794,7 +794,7 @@ dependencies = [
  "files",
  "gfx",
  "proto",
- "rt",
+ "runtime",
  "text",
  "ui",
 ]
@@ -880,7 +880,7 @@ dependencies = [
  "build",
  "gfx",
  "proto",
- "rt",
+ "runtime",
 ]
 
 [[package]]
@@ -944,7 +944,7 @@ dependencies = [
  "files",
  "gfx",
  "proto",
- "rt",
+ "runtime",
  "ui",
 ]
 
@@ -957,7 +957,7 @@ dependencies = [
  "image",
  "ipc",
  "proto",
- "rt",
+ "runtime",
 ]
 
 [[package]]
@@ -970,7 +970,7 @@ dependencies = [
  "initrd",
  "ipc",
  "proto",
- "rt",
+ "runtime",
 ]
 
 [[package]]
@@ -1069,7 +1069,7 @@ dependencies = [
  "ipc",
  "libm",
  "proto",
- "rt",
+ "runtime",
 ]
 
 [[package]]
@@ -1110,7 +1110,7 @@ dependencies = [
  "abi",
  "guest-sys",
  "proto",
- "rt",
+ "runtime",
  "rustix",
 ]
 
@@ -1121,7 +1121,7 @@ dependencies = [
  "abi",
  "guest-sys",
  "proto",
- "rt",
+ "runtime",
 ]
 
 [[package]]
@@ -1164,7 +1164,7 @@ dependencies = [
  "abi",
  "guest-sys",
  "proto",
- "rt",
+ "runtime",
  "rustix",
 ]
 
@@ -1181,7 +1181,7 @@ name = "guest-logkeeper"
 version = "0.1.0"
 dependencies = [
  "guest-sys",
- "rt",
+ "runtime",
  "rustix",
 ]
 
@@ -1192,7 +1192,7 @@ dependencies = [
  "abi",
  "guest-sys",
  "proto",
- "rt",
+ "runtime",
  "rustix",
 ]
 
@@ -1219,7 +1219,7 @@ dependencies = [
  "guest-sys",
  "ipc",
  "proto",
- "rt",
+ "runtime",
  "rustix",
 ]
 
@@ -1249,7 +1249,7 @@ dependencies = [
  "guest-sys",
  "ipc",
  "proto",
- "rt",
+ "runtime",
  "rustix",
 ]
 
@@ -1366,7 +1366,7 @@ dependencies = [
  "initrd",
  "ipc",
  "proto",
- "rt",
+ "runtime",
 ]
 
 [[package]]
@@ -1393,7 +1393,7 @@ dependencies = [
  "interceptor-game",
  "libm",
  "proto",
- "rt",
+ "runtime",
  "ui",
 ]
 
@@ -1433,7 +1433,7 @@ name = "ipc"
 version = "0.1.0"
 dependencies = [
  "abi",
- "rt",
+ "runtime",
 ]
 
 [[package]]
@@ -1525,7 +1525,7 @@ dependencies = [
  "ipc",
  "lock-core",
  "proto",
- "rt",
+ "runtime",
  "shell-common",
  "splash",
  "ui",
@@ -1579,7 +1579,7 @@ version = "0.1.0"
 dependencies = [
  "abi",
  "proto",
- "rt",
+ "runtime",
 ]
 
 [[package]]
@@ -1630,7 +1630,7 @@ dependencies = [
  "proto",
  "rand 0.10.3",
  "rand_pcg",
- "rt",
+ "runtime",
  "ui",
  "videos-core",
 ]
@@ -1655,7 +1655,7 @@ dependencies = [
  "abi",
  "ipc",
  "proto",
- "rt",
+ "runtime",
 ]
 
 [[package]]
@@ -1674,7 +1674,7 @@ version = "0.1.0"
 dependencies = [
  "build",
  "net",
- "rt",
+ "runtime",
  "tls",
  "web",
 ]
@@ -1689,7 +1689,7 @@ dependencies = [
  "ipc",
  "netstack",
  "proto",
- "rt",
+ "runtime",
 ]
 
 [[package]]
@@ -1780,7 +1780,7 @@ dependencies = [
  "abi",
  "build",
  "proto",
- "rt",
+ "runtime",
 ]
 
 [[package]]
@@ -1825,7 +1825,7 @@ dependencies = [
  "ipc",
  "packages",
  "proto",
- "rt",
+ "runtime",
  "web",
 ]
 
@@ -1855,7 +1855,7 @@ dependencies = [
  "libm",
  "paint-core",
  "proto",
- "rt",
+ "runtime",
  "ui",
 ]
 
@@ -1926,7 +1926,7 @@ dependencies = [
  "gfx",
  "image",
  "proto",
- "rt",
+ "runtime",
  "ui",
 ]
 
@@ -1945,7 +1945,7 @@ dependencies = [
  "ipc",
  "packages",
  "proto",
- "rt",
+ "runtime",
  "zeroize",
 ]
 
@@ -1999,7 +1999,7 @@ dependencies = [
  "ipc",
  "linux-raw-sys",
  "proto",
- "rt",
+ "runtime",
 ]
 
 [[package]]
@@ -2070,7 +2070,7 @@ version = "0.1.0"
 dependencies = [
  "abi",
  "ipc",
- "rt",
+ "runtime",
 ]
 
 [[package]]
@@ -2255,7 +2255,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rt"
+name = "runtime"
 version = "0.1.0"
 dependencies = [
  "abi",
@@ -2408,7 +2408,7 @@ dependencies = [
  "ipc",
  "net",
  "proto",
- "rt",
+ "runtime",
  "ui",
  "zeroize",
 ]
@@ -2448,7 +2448,7 @@ dependencies = [
  "ipc",
  "net",
  "proto",
- "rt",
+ "runtime",
  "shell-common",
  "ui",
 ]
@@ -2463,7 +2463,7 @@ dependencies = [
  "image",
  "num-traits",
  "proto",
- "rt",
+ "runtime",
 ]
 
 [[package]]
@@ -2589,7 +2589,7 @@ dependencies = [
  "build",
  "ipc",
  "proto",
- "rt",
+ "runtime",
 ]
 
 [[package]]
@@ -2601,7 +2601,7 @@ dependencies = [
  "files",
  "gfx",
  "proto",
- "rt",
+ "runtime",
  "ui",
 ]
 
@@ -2628,7 +2628,7 @@ dependencies = [
  "ipc",
  "net",
  "proto",
- "rt",
+ "runtime",
  "terminal-core",
  "ui",
  "web",
@@ -2648,7 +2648,7 @@ dependencies = [
  "build",
  "net",
  "proto",
- "rt",
+ "runtime",
 ]
 
 [[package]]
@@ -2691,7 +2691,7 @@ dependencies = [
  "net",
  "p256",
  "p384",
- "rt",
+ "runtime",
  "rustls",
  "sha2",
  "subtle",
@@ -2768,7 +2768,7 @@ dependencies = [
  "libm",
  "proto",
  "raster",
- "rt",
+ "runtime",
  "serde_json",
  "unicode-segmentation",
 ]
@@ -2846,7 +2846,7 @@ dependencies = [
  "ipc",
  "libm",
  "proto",
- "rt",
+ "runtime",
  "ui",
  "videos-core",
 ]
@@ -2859,7 +2859,7 @@ dependencies = [
  "files",
  "ipc",
  "proto",
- "rt",
+ "runtime",
 ]
 
 [[package]]
@@ -2941,7 +2941,7 @@ dependencies = [
  "httparse",
  "net",
  "percent-encoding",
- "rt",
+ "runtime",
  "sha1",
  "tls",
 ]
@@ -3078,7 +3078,7 @@ dependencies = [
  "files",
  "ipc",
  "proto",
- "rt",
+ "runtime",
  "wlan",
  "zeroize",
 ]

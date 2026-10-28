@@ -22,8 +22,8 @@ use abi::RawHandle;
 use files::fs::Error;
 use files::path::{file_name, is_within, join, parent};
 use files::{Fs, trash};
-use rt::object::Event;
-use rt::sync::{Condvar, Mutex};
+use runtime::object::Event;
+use runtime::sync::{Condvar, Mutex};
 
 /// Something to do with files.
 #[derive(Debug, Clone)]
@@ -154,7 +154,7 @@ impl Worker {
         });
         let theirs = Event::from_handle(event.0.duplicate(None).ok()?);
         let worker = shared.clone();
-        let thread = rt::thread::Builder::new()
+        let thread = runtime::thread::Builder::new()
             .name("file-operations")
             .stack_size(256 * 1024)
             .spawn(move || work(&worker, &theirs));
@@ -217,7 +217,7 @@ impl Worker {
             if self.shared.finished.lock().iter().any(|f| f.id == id) {
                 return true;
             }
-            if rt::time::now_ns() >= deadline {
+            if runtime::time::now_ns() >= deadline {
                 return false;
             }
             let _ = self.event.wait(abi::signals::SIGNALED, deadline);

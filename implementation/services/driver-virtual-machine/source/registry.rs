@@ -32,9 +32,9 @@ use abi::{DEADLINE_INFINITE, Error, signals};
 use ipc::WaitSet;
 use proto::init::RegistryError;
 use proto::registry;
-use rt::object::{Channel, Event};
-use rt::println;
-use rt::sync::Mutex;
+use runtime::object::{Channel, Event};
+use runtime::println;
+use runtime::sync::Mutex;
 
 /// The services the guest may connect to: those drivers attach to.
 const CONNECT: &[&str] = &[
@@ -105,7 +105,7 @@ impl Registry {
                         println!("the guest's registry cannot wait ({e}); it tries again");
                         said = true;
                     }
-                    rt::time::sleep(rt::time::Duration::from_millis(10));
+                    runtime::time::sleep(runtime::time::Duration::from_millis(10));
                     continue;
                 }
             };

@@ -43,9 +43,9 @@ use guest_sys::idle;
 use guest_sys::retry::{self, Ended};
 use guest_sys::sysfs::link_name;
 use proto::displaydev::{self, DisplayDevError, FlipState, Link, Screen, ScreenMode, Shown, displaydev as protocol};
-use rt::guest::Watch;
-use rt::object::{Channel, Event, Vmo};
-use rt::vm::Mapping;
+use runtime::guest::Watch;
+use runtime::object::{Channel, Event, Vmo};
+use runtime::vm::Mapping;
 use rustix::event::{PollFd, PollFlags, poll};
 use rustix::time::{ClockId, clock_gettime};
 
@@ -204,7 +204,8 @@ fn imported(card: &Card, width: u32, height: u32, stride: u32, bytes: usize) -> 
         let fb = Vmo::create_with(bytes, abi::vmo_flags::WRITE_COMBINING)
             .map_err(|e| format!("no write-combining memory: {e}"))
             .and_then(|vmo| {
-                let buf: OwnedFd = rt::guest::dmabuf(vmo.raw(), 0, bytes as u64, true).map_err(|e| format!("{e}"))?;
+                let buf: OwnedFd =
+                    runtime::guest::dmabuf(vmo.raw(), 0, bytes as u64, true).map_err(|e| format!("{e}"))?;
                 let fb = card.import_framebuffer(&buf, width, height, stride).map_err(|e| format!("{e}"))?;
                 Ok((vmo, fb))
             });
@@ -349,7 +350,7 @@ fn attach(d: &Display, client: protocol::Client) -> Result<Session, String> {
 fn veda_time(ns: u64) -> u64 {
     // Both clocks follow the processors' counter; their difference, read
     // now.
-    let veda = rt::time::now_ns();
+    let veda = runtime::time::now_ns();
     let now = clock_gettime(ClockId::Monotonic);
     let linux = now.tv_sec as u64 * 1_000_000_000 + now.tv_nsec as u64;
     (ns as i64 + (veda as i64 - linux as i64)).max(0) as u64

@@ -9,8 +9,8 @@ use alloc::vec::Vec;
 use abi::signals::{PEER_CLOSED, READABLE};
 use ipc::Bytes;
 use proto::fs::{FsError, LockHolder, LockRange, MAX_IO, Stat, file, lock_event, open_flags, seek};
-use rt::object::{Channel, Vmo};
-use rt::sync::Mutex;
+use runtime::object::{Channel, Vmo};
+use runtime::sync::Mutex;
 
 use crate::error;
 use crate::linux::errno::{EINVAL, EIO, ENOLCK, ENOMEM, ERESTARTSYS};

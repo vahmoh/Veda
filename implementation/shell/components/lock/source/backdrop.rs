@@ -26,8 +26,8 @@ use std::sync::Arc;
 use abi::RawHandle;
 use gfx::color::lerp_px;
 use gfx::{Bitmap, Canvas};
-use rt::object::Event;
-use rt::sync::{Condvar, Mutex};
+use runtime::object::Event;
+use runtime::sync::{Condvar, Mutex};
 use shell_common::wallpaper::{self, Wallpaper};
 
 /// What the backdrop is shaded with: the splash's deep blue.
@@ -157,7 +157,7 @@ impl Painter {
         let theirs = Event::from_handle(event.0.duplicate(None).ok()?);
         let shared = Arc::new(Shared { asked: Mutex::new(None), wake: Condvar::new(), done: Mutex::new(None) });
         let worker = shared.clone();
-        rt::thread::Builder::new()
+        runtime::thread::Builder::new()
             .name("backdrop")
             .stack_size(256 * 1024)
             .spawn(move || work(&worker, &theirs))

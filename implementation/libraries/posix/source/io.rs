@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 
 use abi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE, TERMINATED, WRITABLE};
 use abi::{RawHandle, WaitItem, startup};
-use rt::object::{Channel, Socket};
+use runtime::object::{Channel, Socket};
 
 use crate::error::{self, SysResult};
 use crate::fd::{self, Description, Object};
@@ -917,14 +917,14 @@ pub fn adopt_startup_fds(inherited: &Inherited) {
     for (n, carried) in &inherited.carried {
         let Some(n) = u32::try_from(*n).ok().filter(|&n| n < startup::role::MAX_FDS) else { continue };
         let roles = [startup::role::FD + n, startup::role::FD_EXTRA + n];
-        let handles = roles.into_iter().map_while(rt::env::take_handle).collect();
+        let handles = roles.into_iter().map_while(runtime::env::take_handle).collect();
         if let Some(desc) = crate::carry::from_parent(carried, handles) {
             let _ = fd::replace(n as i32, desc, false);
         }
     }
-    for role in rt::env::handle_roles() {
+    for role in runtime::env::handle_roles() {
         let Some(n) = startup::role::fd(role) else { continue };
-        let Some(h) = rt::env::take_handle(role) else { continue };
+        let Some(h) = runtime::env::take_handle(role) else { continue };
         let Ok(info) = h.basic_info() else { continue };
         let desc = if info.object_type == abi::ObjectType::Socket as u32 {
             // Its access is what the handle allows.
@@ -935,7 +935,7 @@ pub fn adopt_startup_fds(inherited: &Inherited) {
             };
             Description::new(Object::Stream(crate::stream::Stream::new(Socket::from_handle(h))), mode)
         } else if info.object_type == abi::ObjectType::Channel as u32 {
-            let f = crate::file::VfsFile::new(rt::object::Channel::from_handle(h));
+            let f = crate::file::VfsFile::new(runtime::object::Channel::from_handle(h));
             let mode = f.open_flags().map(crate::file::access_mode).unwrap_or(o::RDWR);
             let append = f.open_flags().is_ok_and(|fl| fl & proto::fs::open_flags::APPEND != 0);
             Description::new(Object::File(f), mode | if append { o::APPEND } else { 0 })

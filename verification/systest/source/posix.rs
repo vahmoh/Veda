@@ -21,10 +21,10 @@ use abi::startup::role;
 use abi::{Error, Rights, map_flags, nr};
 use ipc::Bytes;
 use proto::fs::{FsError, device, file, open_flags, seek, vfs};
-use rt::object::{Channel, Process, Socket, Vmo};
-use rt::process::Spawn;
-use rt::sys::call;
-use rt::vm;
+use runtime::object::{Channel, Process, Socket, Vmo};
+use runtime::process::Spawn;
+use runtime::sys::call;
+use runtime::vm;
 
 use crate::{TestResult, check, vfs_client};
 
@@ -192,7 +192,7 @@ pub fn test_memory_protection() -> TestResult {
 pub fn test_private_memory() -> TestResult {
     const PAGE: usize = abi::PAGE_SIZE;
     let rw = map_flags::READ | map_flags::WRITE;
-    let resident = || rt::object::process_self_info().map(|i| i.memory_bytes as usize).map_err(s);
+    let resident = || runtime::object::process_self_info().map(|i| i.memory_bytes as usize).map_err(s);
     let addr = vm::allocate(None, 16 * PAGE, 0, rw).map_err(s)?;
     let untouched = resident()?;
     for i in 0..16 {
@@ -227,24 +227,24 @@ pub fn test_private_memory() -> TestResult {
     check(r == Err(Error::NotSupported), "memory a VMO backs is not decommitted")
 }
 
-/// The clocks a program reads itself (`rt::time`, without a system call)
-/// are the kernel's: each reading lies between the kernel's before and
-/// after it, and the monotonic one never goes back.
+/// The clocks a program reads itself (`runtime::time`, without a system
+/// call) are the kernel's: each reading lies between the kernel's before
+/// and after it, and the monotonic one never goes back.
 pub fn test_clocks() -> TestResult {
     use abi::clock;
     for (id, name) in [(clock::MONOTONIC, "monotonic"), (clock::REALTIME, "real-time"), (clock::UTC, "UTC")] {
         let kernel = || call(nr::CLOCK_GET, [id, 0, 0, 0, 0, 0]).map(|v| v as u64).map_err(s);
         let before = kernel()?;
-        let here = rt::sys::clock_get(id);
+        let here = runtime::sys::clock_get(id);
         let after = kernel()?;
         check(
             before <= here && here <= after,
             &format!("the {name} clock read here lies between the kernel's readings ({before} <= {here} <= {after})"),
         )?;
     }
-    let mut last = rt::time::now_ns();
+    let mut last = runtime::time::now_ns();
     for _ in 0..100_000 {
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         check(now >= last, "the monotonic clock never goes back")?;
         last = now;
     }
@@ -257,7 +257,7 @@ pub fn test_clocks() -> TestResult {
 /// copy, which a reader's fault ends.
 pub fn test_unmapped_on_every_processor() -> TestResult {
     let copy = start_copy("unmapped")?;
-    let code = copy.join(rt::time::deadline_after(rt::time::Duration::from_secs(20))).map_err(s)?;
+    let code = copy.join(runtime::time::deadline_after(runtime::time::Duration::from_secs(20))).map_err(s)?;
     check(code != 3, "a thread read a page after it was unmapped (see the log)")?;
     check(code == abi::EXIT_CODE_CRASHED, &format!("the copy ends with a reader's fault (it ended with {code})"))
 }
@@ -273,10 +273,10 @@ pub fn test_barrier_on_every_processor() -> TestResult {
     use core::sync::atomic::{AtomicBool, AtomicUsize};
     static STOP: AtomicBool = AtomicBool::new(false);
     static SPINNING: AtomicUsize = AtomicUsize::new(0);
-    let cpus = rt::object::system_info().map_or(2, |i| i.cpu_count as usize);
+    let cpus = runtime::object::system_info().map_or(2, |i| i.cpu_count as usize);
     let threads: Vec<_> = (1..cpus.max(2))
         .map(|_| {
-            rt::thread::spawn(|| {
+            runtime::thread::spawn(|| {
                 SPINNING.fetch_add(1, Ordering::AcqRel);
                 while !STOP.load(Ordering::Acquire) {
                     core::hint::spin_loop();
@@ -284,13 +284,13 @@ pub fn test_barrier_on_every_processor() -> TestResult {
             })
         })
         .collect();
-    let until = rt::time::now_ns() + 5_000_000_000;
-    while SPINNING.load(Ordering::Acquire) < threads.len() && rt::time::now_ns() < until {
+    let until = runtime::time::now_ns() + 5_000_000_000;
+    while SPINNING.load(Ordering::Acquire) < threads.len() && runtime::time::now_ns() < until {
         core::hint::spin_loop();
     }
-    let started = rt::time::now_ns();
+    let started = runtime::time::now_ns();
     let done = (0..1000).try_for_each(|_| vm::barrier());
-    let took = rt::time::now_ns() - started;
+    let took = runtime::time::now_ns() - started;
     STOP.store(true, Ordering::Release);
     for t in threads {
         let _ = t.join();
@@ -312,13 +312,13 @@ pub fn unmapped() -> i32 {
     static STALE: AtomicUsize = AtomicUsize::new(0);
     static READS: [AtomicUsize; READERS] = [const { AtomicUsize::new(0) }; READERS];
     const PAGE: usize = abi::PAGE_SIZE;
-    let cpus = rt::object::system_info().map_or(2, |i| i.cpu_count as usize);
+    let cpus = runtime::object::system_info().map_or(2, |i| i.cpu_count as usize);
     let readers = cpus.clamp(2, READERS + 1) - 1;
     let Ok(at) = vm::allocate(None, PAGE, 0, map_flags::READ | map_flags::WRITE) else { return 1 };
     // SAFETY: our fresh, writable page.
     unsafe { core::ptr::write_volatile(at as *mut u64, 0xabab_abab_abab_abab) };
     for reads in READS.iter().take(readers) {
-        let _ = rt::thread::spawn(move || {
+        let _ = runtime::thread::spawn(move || {
             loop {
                 let unmapped = UNMAPPED.load(Ordering::Acquire) != 0;
                 // SAFETY: mapped until the main thread unmaps it; a read after
@@ -331,10 +331,10 @@ pub fn unmapped() -> i32 {
             }
         });
     }
-    let until = rt::time::now_ns() + 5_000_000_000;
+    let until = runtime::time::now_ns() + 5_000_000_000;
     while READS.iter().take(readers).any(|r| r.load(Ordering::Relaxed) < 1000) {
-        if rt::time::now_ns() >= until {
-            rt::println!("unmapped: the readers did not start");
+        if runtime::time::now_ns() >= until {
+            runtime::println!("unmapped: the readers did not start");
             return 1;
         }
         core::hint::spin_loop();
@@ -344,15 +344,15 @@ pub fn unmapped() -> i32 {
     }
     // Every processor that could translate the page has forgotten it.
     UNMAPPED.store(1, Ordering::Release);
-    let until = rt::time::now_ns() + 2_000_000_000;
-    while rt::time::now_ns() < until {
+    let until = runtime::time::now_ns() + 2_000_000_000;
+    while runtime::time::now_ns() < until {
         if STALE.load(Ordering::Acquire) != 0 {
-            rt::println!("unmapped: a thread read the page after it was unmapped");
+            runtime::println!("unmapped: a thread read the page after it was unmapped");
             return 3;
         }
         core::hint::spin_loop();
     }
-    rt::println!("unmapped: no reader read the page again");
+    runtime::println!("unmapped: no reader read the page again");
     1
 }
 
@@ -403,7 +403,7 @@ pub fn test_shared_program_pages() -> TestResult {
     };
     let (shared, copied) = (start(true)?, start(false)?);
     // Both settle into their wait.
-    rt::time::sleep(rt::time::Duration::from_millis(200));
+    runtime::time::sleep(runtime::time::Duration::from_millis(200));
     let memory = |p: &Process| p.info().map(|i| i.memory_bytes as usize).map_err(s);
     let (a, b) = (memory(&shared), memory(&copied));
     let _ = (shared.kill(), copied.kill());
@@ -415,7 +415,7 @@ pub fn test_shared_program_pages() -> TestResult {
 fn processes() -> Vec<abi::ProcessInfo> {
     let mut list = alloc::vec![abi::ProcessInfo::default(); 256];
     loop {
-        let n = rt::object::process_list(&mut list).unwrap_or(0);
+        let n = runtime::object::process_list(&mut list).unwrap_or(0);
         if n <= list.len() {
             list.truncate(n);
             return list;
@@ -438,24 +438,24 @@ fn running(koid: u64) -> bool {
 pub fn test_kill_job() -> TestResult {
     let leader = start_copy("job")?;
     let koid = leader.0.koid();
-    let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(20));
+    let deadline = runtime::time::deadline_after(runtime::time::Duration::from_secs(20));
     let member = loop {
         if let Some(c) = child_of(koid) {
             break c;
         }
-        if rt::time::now_ns() > deadline {
+        if runtime::time::now_ns() > deadline {
             let _ = leader.kill_tree();
             return Err("the job's leader started nothing".into());
         }
-        rt::time::sleep(rt::time::Duration::from_millis(20));
+        runtime::time::sleep(runtime::time::Duration::from_millis(20));
     };
     leader.kill_tree().map_err(s)?;
     leader.join(deadline).map_err(s)?;
     while running(member) {
-        if rt::time::now_ns() > deadline {
+        if runtime::time::now_ns() > deadline {
             return Err("the process the leader started still runs".into());
         }
-        rt::time::sleep(rt::time::Duration::from_millis(20));
+        runtime::time::sleep(runtime::time::Duration::from_millis(20));
     }
     Ok(())
 }
@@ -471,16 +471,16 @@ pub fn test_signal_job() -> TestResult {
     const SIGWINCH: usize = 28;
     let leader = start_copy("job")?;
     let koid = leader.0.koid();
-    let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(20));
+    let deadline = runtime::time::deadline_after(runtime::time::Duration::from_secs(20));
     let member = loop {
         if let Some(c) = child_of(koid) {
             break c;
         }
-        if rt::time::now_ns() > deadline {
+        if runtime::time::now_ns() > deadline {
             let _ = leader.kill_tree();
             return Err("the job's leader started nothing".into());
         }
-        rt::time::sleep(rt::time::Duration::from_millis(20));
+        runtime::time::sleep(runtime::time::Duration::from_millis(20));
     };
     let outcome = (|| {
         let signal_only = Process(leader.0.duplicate(Some(Rights(Rights::SIGNAL.0 | Rights::WAIT.0))).map_err(s)?);
@@ -492,16 +492,16 @@ pub fn test_signal_job() -> TestResult {
         check(leader.signal(abi::posix_signal::MAX + 1, 0) == Err(Error::InvalidArgs), "a signal past the last")?;
         signal_only.signal(SIGWINCH, 0).map_err(s)?;
         leader.signal(SIGWINCH, job).map_err(s)?;
-        rt::time::sleep(rt::time::Duration::from_millis(100));
+        runtime::time::sleep(runtime::time::Duration::from_millis(100));
         check(running(koid) && running(member), "a signal that does nothing by default ended the job")?;
         leader.signal(SIGTERM, job).map_err(s)?;
         let code = leader.join(deadline).map_err(s)?;
         check(abi::exit_signal(code) == Some(SIGTERM as u32), "the leader did not end as SIGTERM ends a program")?;
         while running(member) {
-            if rt::time::now_ns() > deadline {
+            if runtime::time::now_ns() > deadline {
                 return Err("the process the leader started still runs".into());
             }
-            rt::time::sleep(rt::time::Duration::from_millis(20));
+            runtime::time::sleep(runtime::time::Duration::from_millis(20));
         }
         Ok(())
     })();
@@ -519,14 +519,16 @@ pub fn test_interruptions() -> TestResult {
     static WORD: AtomicU32 = AtomicU32::new(1);
     let me = call(nr::THREAD_SELF, [0; 6]).map_err(s)?;
     // SAFETY: a fresh handle from the kernel.
-    let me = rt::object::Thread(unsafe { rt::object::Handle::from_raw(me as u32) });
+    let me = runtime::object::Thread(unsafe { runtime::object::Handle::from_raw(me as u32) });
     call(nr::THREAD_INTERRUPT, [me.raw() as usize, 0, 0, 0, 0, 0]).map_err(s)?;
-    let deadline = rt::time::deadline_after(rt::time::Duration::from_millis(50));
+    let deadline = runtime::time::deadline_after(runtime::time::Duration::from_millis(50));
     let deferred = abi::wait_flags::DEFERRED;
     let waited = call(nr::FUTEX_WAIT, [WORD.as_ptr() as usize, 1, deadline as usize, deferred, 0, 0]);
     check(waited == Err(Error::TimedOut), "a wait of a process without a signal entry was interrupted")?;
-    let waited =
-        call(nr::SLEEP, [rt::time::deadline_after(rt::time::Duration::from_millis(20)) as usize, 0, 0, 0, 0, 0]);
+    let waited = call(
+        nr::SLEEP,
+        [runtime::time::deadline_after(runtime::time::Duration::from_millis(20)) as usize, 0, 0, 0, 0, 0],
+    );
     check(waited == Ok(0), "a sleep of a process without a signal entry was interrupted")?;
     check(call(nr::SLEEP, [0, 1 << 3, 0, 0, 0, 0]) == Err(Error::InvalidArgs), "a wait's flags it has not")?;
     // Another process's thread is not this one's to interrupt.
@@ -535,7 +537,7 @@ pub fn test_interruptions() -> TestResult {
         let theirs = call(nr::THREAD_CREATE, [copy.raw() as usize, b"t".as_ptr() as usize, 1, 0, 0, 0]);
         let theirs = theirs.map_err(|e| format!("a thread of the copy: {e}"))?;
         // SAFETY: a fresh handle from the kernel.
-        let theirs = rt::object::Thread(unsafe { rt::object::Handle::from_raw(theirs as u32) });
+        let theirs = runtime::object::Thread(unsafe { runtime::object::Handle::from_raw(theirs as u32) });
         let r = call(nr::THREAD_INTERRUPT, [theirs.raw() as usize, 0, 0, 0, 0, 0]);
         check(r == Err(Error::AccessDenied), "another process's thread was interrupted")
     })();
@@ -552,7 +554,7 @@ pub fn job() -> i32 {
             0
         }
         Err(e) => {
-            rt::println!("job: {e}");
+            runtime::println!("job: {e}");
             1
         }
     }
@@ -566,7 +568,7 @@ pub fn job() -> i32 {
 /// their handles are closed. Until then, each is listed as ended.
 pub fn test_ended_processes_go() -> TestResult {
     const SIGTERM: usize = 15;
-    let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(60));
+    let deadline = runtime::time::deadline_after(runtime::time::Duration::from_secs(60));
     let mut ended = Vec::new();
     // Waits for `process`, `what` it is, to end with `expected`, listed as
     // ended while held, and notes it.
@@ -589,7 +591,7 @@ pub fn test_ended_processes_go() -> TestResult {
             }
         }
     } else {
-        rt::println!("ended processes: no c programs in this image (no cross toolchain was built)");
+        runtime::println!("ended processes: no c programs in this image (no cross toolchain was built)");
     }
     let signalled = abi::EXIT_CODE_SIGNALED - SIGTERM as i64;
     for (how, expected) in [("exit", 0), ("kill", abi::EXIT_CODE_KILLED), ("signal", signalled)] {
@@ -612,7 +614,7 @@ pub fn end(how: Option<&String>) -> i32 {
         "signal" => Process::current().and_then(|p| p.signal(SIGTERM, 0)),
         _ => return 2,
     };
-    rt::println!("end: running still after {how} ({ended:?})");
+    runtime::println!("end: running still after {how} ({ended:?})");
     1
 }
 
@@ -623,11 +625,11 @@ pub fn end(how: Option<&String>) -> i32 {
 /// `thread_start`, and no new thread is made in it. Nothing of it is left:
 /// no thread, no handle, and its thread never ran.
 pub fn test_killed_before_start() -> TestResult {
-    let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(5));
+    let deadline = runtime::time::deadline_after(runtime::time::Duration::from_secs(5));
     let process = crate::bare_process(0).map_err(s)?;
     let made = call(nr::THREAD_CREATE, [process.raw() as usize, "main".as_ptr() as usize, 4, 0, 0, 0]).map_err(s)?;
     // SAFETY: a fresh handle from the kernel.
-    let thread = rt::object::Thread(unsafe { rt::object::Handle::from_raw(made as u32) });
+    let thread = runtime::object::Thread(unsafe { runtime::object::Handle::from_raw(made as u32) });
     process.kill().map_err(s)?;
     // None of its threads had started: it ended at once.
     check(process.join(deadline).map_err(s)? == abi::EXIT_CODE_KILLED, "the killed process's exit code")?;
@@ -642,7 +644,7 @@ pub fn test_killed_before_start() -> TestResult {
     check(started == Err(Error::BadState), &format!("thread_start in a killed process: {started:?}"))?;
     let another = call(nr::THREAD_CREATE, [process.raw() as usize, "t".as_ptr() as usize, 1, 0, 0, 0]);
     // SAFETY: a fresh handle from the kernel, if it made a thread.
-    let another = another.map(|h| unsafe { rt::object::Handle::from_raw(h as u32) });
+    let another = another.map(|h| unsafe { runtime::object::Handle::from_raw(h as u32) });
     check(another.as_ref().err() == Some(&Error::BadState), "a thread was made in a killed process")?;
     let info = process.info().map_err(s)?;
     let left = (info.state, info.threads, info.handles);
@@ -656,7 +658,7 @@ pub fn test_killed_before_start() -> TestResult {
 /// decoder does before reading a file) is refused them, and keeps the rest.
 pub fn test_process_restrict() -> TestResult {
     let copy = start_copy("restricted")?;
-    let code = copy.join(rt::time::deadline_after(rt::time::Duration::from_secs(20))).map_err(s)?;
+    let code = copy.join(runtime::time::deadline_after(runtime::time::Duration::from_secs(20))).map_err(s)?;
     check(code == 0, "the restricted copy is refused what it gave up, and only that (see its log)")
 }
 
@@ -666,7 +668,7 @@ pub fn restricted() -> i32 {
     match try_restricted() {
         Ok(()) => 0,
         Err(e) => {
-            rt::println!("restricted: {e}");
+            runtime::println!("restricted: {e}");
             1
         }
     }
@@ -676,13 +678,13 @@ fn try_restricted() -> TestResult {
     use abi::restrict;
     const PAGE: usize = abi::PAGE_SIZE;
     let mut log = [0u8; 64];
-    check(rt::object::log_read(0, &mut log).is_ok(), "the log can be read until then")?;
-    check(rt::process::restrict(1 << 20) == Err(Error::InvalidArgs), "abilities it does not know are refused")?;
-    rt::process::restrict(restrict::ALL).map_err(s)?;
+    check(runtime::object::log_read(0, &mut log).is_ok(), "the log can be read until then")?;
+    check(runtime::process::restrict(1 << 20) == Err(Error::InvalidArgs), "abilities it does not know are refused")?;
+    runtime::process::restrict(restrict::ALL).map_err(s)?;
     let denied = Err(Error::AccessDenied);
-    check(rt::object::log_read(0, &mut log).map(|_| ()) == denied, "the log is refused")?;
+    check(runtime::object::log_read(0, &mut log).map(|_| ()) == denied, "the log is refused")?;
     let mut list = [abi::ProcessInfo::default(); 4];
-    check(rt::object::process_list(&mut list).map(|_| ()) == denied, "the process list is refused")?;
+    check(runtime::object::process_list(&mut list).map(|_| ()) == denied, "the process list is refused")?;
     let name = b"escape";
     let created = call(nr::PROCESS_CREATE, [name.as_ptr() as usize, name.len(), 0, 0, 0, 0]);
     check(created.map(|_| ()) == denied, "a new process is refused")?;
@@ -696,24 +698,24 @@ fn try_restricted() -> TestResult {
     check(vm::protect(None, at, PAGE, rx) == denied, "pages are not made executable")?;
     vm::protect(None, at, PAGE, map_flags::READ).map_err(|e| format!("pages made read-only: {e}"))?;
     vm::unmap(None, at, PAGE).map_err(s)?;
-    let t = rt::thread::spawn(|| {});
+    let t = runtime::thread::spawn(|| {});
     t.join().map_err(|e| format!("a thread: {e}"))?;
-    rt::process::restrict(restrict::NO_LOG).map_err(s)
+    runtime::process::restrict(restrict::NO_LOG).map_err(s)
 }
 
 /// `systest wait`: waits until it is killed (a minute at most).
 pub fn wait() {
-    rt::time::sleep(rt::time::Duration::from_secs(60));
+    runtime::time::sleep(runtime::time::Duration::from_secs(60));
 }
 
 /// A thread's exit futex word is cleared, and its waiter woken, once the
 /// thread has ended.
 pub fn test_exit_futex() -> TestResult {
     static WORD: AtomicU32 = AtomicU32::new(1);
-    let t = rt::thread::spawn(|| {
+    let t = runtime::thread::spawn(|| {
         let _ = call(nr::THREAD_SET_EXIT_FUTEX, [WORD.as_ptr() as usize, 0, 0, 0, 0, 0]);
     });
-    let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(5));
+    let deadline = runtime::time::deadline_after(runtime::time::Duration::from_secs(5));
     while WORD.load(Ordering::Acquire) != 0 {
         match call(nr::FUTEX_WAIT, [WORD.as_ptr() as usize, 1, deadline as usize, 0, 0, 0]) {
             Ok(_) | Err(Error::ShouldWait) => {}
@@ -726,12 +728,12 @@ pub fn test_exit_futex() -> TestResult {
 /// Wakes the futex at `addr` until a waiter is woken, which may not be
 /// waiting yet: `false` if none is within five seconds.
 fn wake_one(addr: usize) -> bool {
-    let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(5));
-    while rt::time::now_ns() < deadline {
+    let deadline = runtime::time::deadline_after(runtime::time::Duration::from_secs(5));
+    while runtime::time::now_ns() < deadline {
         if call(nr::FUTEX_WAKE, [addr, 1, 0, 0, 0, 0]) == Ok(1) {
             return true;
         }
-        rt::time::sleep(rt::time::Duration::from_millis(1));
+        runtime::time::sleep(runtime::time::Duration::from_millis(1));
     }
     false
 }
@@ -751,8 +753,8 @@ pub fn test_shared_futex() -> TestResult {
     // SAFETY: both mappings are this test's, and the word is aligned.
     let word = unsafe { &*(wa as *const AtomicU32) };
     word.store(1, Ordering::SeqCst);
-    let waiter = rt::thread::spawn(move || {
-        let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(10));
+    let waiter = runtime::thread::spawn(move || {
+        let deadline = runtime::time::deadline_after(runtime::time::Duration::from_secs(10));
         call(nr::FUTEX_WAIT, [wa, 1, deadline as usize, 0, 0, 0])
     });
     check(wake_one(wb), "a wait through one mapping is woken through another")?;
@@ -761,10 +763,10 @@ pub fn test_shared_futex() -> TestResult {
     // A thread's exit futex: cleared as it ends, and its waiter woken,
     // through the other mapping.
     word.store(1, Ordering::SeqCst);
-    let t = rt::thread::spawn(move || {
+    let t = runtime::thread::spawn(move || {
         let _ = call(nr::THREAD_SET_EXIT_FUTEX, [wa, 0, 0, 0, 0, 0]);
     });
-    let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(5));
+    let deadline = runtime::time::deadline_after(runtime::time::Duration::from_secs(5));
     while word.load(Ordering::Acquire) != 0 {
         match call(nr::FUTEX_WAIT, [wb, 1, deadline as usize, 0, 0, 0]) {
             Ok(_) | Err(Error::ShouldWait) => {}
@@ -898,7 +900,7 @@ pub(crate) fn run_c(path: &str, args: &[&str], cwd: &str) -> Result<(i64, String
 /// [`run_c`], giving the program `seconds` to finish.
 pub(crate) fn run_c_for(path: &str, args: &[&str], cwd: &str, seconds: u64) -> Result<(i64, String), String> {
     let (process, ours) = start_c(path, args, cwd)?;
-    let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(seconds));
+    let deadline = runtime::time::deadline_after(runtime::time::Duration::from_secs(seconds));
     let mut out = Vec::new();
     let mut buf = [0u8; 4096];
     loop {
@@ -955,7 +957,7 @@ fn start_c(path: &str, args: &[&str], cwd: &str) -> Result<(Process, Socket), St
 /// test` gives): the arguments that have the checks of the C library and of
 /// Rust's standard library reach them too.
 fn host_args() -> Vec<String> {
-    let args = rt::env::args();
+    let args = runtime::env::args();
     match args.get(1..5) {
         Some([host, address, tcp, udp]) if host == "host" => {
             alloc::vec![host.clone(), address.clone(), tcp.clone(), udp.clone()]
@@ -973,7 +975,7 @@ fn host_args() -> Vec<String> {
 pub fn test_c_programs() -> TestResult {
     let fs = vfs_client()?;
     if fs.stat("/system/tests/c/hello".into()).map_err(s)?.is_err() {
-        rt::println!("c programs: none in this image (no cross toolchain was built)");
+        runtime::println!("c programs: none in this image (no cross toolchain was built)");
         return Ok(());
     }
     // Each program linked statically, at a fixed address and
@@ -981,7 +983,7 @@ pub fn test_c_programs() -> TestResult {
     for variant in ["", "-pie", "-dynamic"] {
         let hello = format!("hello{variant}");
         let (code, out) = run_c(&format!("/system/tests/c/{hello}"), &["one", "two"], "/tmp")?;
-        rt::println!("{hello}: {}", out.trim_end());
+        runtime::println!("{hello}: {}", out.trim_end());
         check(code == 42, &format!("{hello} exited with {code}"))?;
         let greeting = out.contains("Hello from C on Veda! argc=3 argv[0]=c-test") && out.contains("cwd=/tmp");
         check(greeting, &format!("{hello}'s output"))?;
@@ -997,7 +999,7 @@ pub fn test_c_programs() -> TestResult {
                 if checks == "posix" { host.iter().map(String::as_str).collect() } else { Vec::new() };
             let (code, out) = run_c(&format!("/system/tests/c/{program}"), &args, &dir)?;
             for line in out.lines().filter(|l| !l.starts_with("ok - ")) {
-                rt::println!("{program}: {line}");
+                runtime::println!("{program}: {line}");
             }
             let passed = code == 0 && out.contains("PASS: 0 failed");
             check(passed, &format!("{program} checks failed (exit code {code})"))?;
@@ -1014,7 +1016,7 @@ pub fn test_c_programs() -> TestResult {
 pub fn test_rust_programs() -> TestResult {
     let fs = vfs_client()?;
     if fs.stat("/system/tests/rust/stdlib".into()).map_err(s)?.is_err() {
-        rt::println!("rust programs: none in this image (no Rust toolchain was built)");
+        runtime::println!("rust programs: none in this image (no Rust toolchain was built)");
         return Ok(());
     }
     let host = host_args();
@@ -1027,7 +1029,7 @@ pub fn test_rust_programs() -> TestResult {
                 if checks == "stdlib" { host.iter().map(String::as_str).collect() } else { Vec::new() };
             let (code, out) = run_c(&format!("/system/tests/rust/{program}"), &args, &dir)?;
             for line in out.lines().filter(|l| !l.starts_with("ok - ")) {
-                rt::println!("{program}: {line}");
+                runtime::println!("{program}: {line}");
             }
             let passed = code == 0 && out.contains("PASS: 0 failed");
             check(passed, &format!("{program} checks failed (exit code {code})"))?;
@@ -1043,14 +1045,14 @@ pub fn test_plugins() -> TestResult {
     let fs = vfs_client()?;
     let libraries = ["/system/tests/c/lib/libplugin.so", "/system/tests/rust/lib/librustplugin.so"];
     if libraries.iter().any(|l| !fs.stat((*l).into()).is_ok_and(|r| r.is_ok())) {
-        rt::println!("plugins: no test libraries in this image (no toolchain was built)");
+        runtime::println!("plugins: no test libraries in this image (no toolchain was built)");
         return Ok(());
     }
     let dir = String::from("/tmp/plugins-test");
     let _ = fs.mkdir(dir.clone());
     let (code, out) = run_c("/system/bin/plugins", &[], &dir)?;
     for line in out.lines().filter(|l| !l.starts_with("ok - ")) {
-        rt::println!("plugins: {line}");
+        runtime::println!("plugins: {line}");
     }
     let passed = code == 0 && out.contains("PASS: 0 failed");
     check(passed, &format!("plugins checks failed (exit code {code})"))
@@ -1066,7 +1068,7 @@ pub fn test_plugins() -> TestResult {
 pub fn test_python() -> TestResult {
     let fs = vfs_client()?;
     if fs.stat("/system/bin/python3".into()).map_err(s)?.is_err() {
-        rt::println!("python: not in this image (Python was not built)");
+        runtime::println!("python: not in this image (Python was not built)");
         return Ok(());
     }
     let host = host_args();
@@ -1076,7 +1078,7 @@ pub fn test_python() -> TestResult {
     let _ = fs.mkdir(dir.clone());
     let (code, out) = run_c_for("/system/bin/python3", &args, &dir, 600)?;
     for line in out.lines().filter(|l| !l.starts_with("ok - ")) {
-        rt::println!("python: {line}");
+        runtime::println!("python: {line}");
     }
     let passed = code == 0 && out.contains("PASS: 0 failed");
     check(passed, &format!("Python's checks failed (exit code {code})"))
@@ -1091,7 +1093,7 @@ pub fn test_std_crates() -> TestResult {
     let _ = vfs_client()?.mkdir(dir.clone());
     let (code, out) = run_c("/system/bin/stdcrates", &[], &dir)?;
     for line in out.lines().filter(|l| !l.starts_with("ok - ")) {
-        rt::println!("stdcrates: {line}");
+        runtime::println!("stdcrates: {line}");
     }
     let passed = code == 0 && out.contains("PASS: 0 failed");
     check(passed, &format!("stdcrates checks failed (exit code {code})"))

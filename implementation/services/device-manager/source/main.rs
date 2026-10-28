@@ -72,8 +72,8 @@ use proto::pci::{
     ReservedMemory, pcidev,
 };
 use proto::startup::{self, device_manager as roles, driver_virtual_machine::exit_code};
-use rt::object::{Channel, Interrupt, Process, Resource, Vmo};
-use rt::println;
+use runtime::object::{Channel, Interrupt, Process, Resource, Vmo};
+use runtime::println;
 
 use acpi::Acpi;
 use architecture::config::ConfigAccess;
@@ -81,7 +81,7 @@ use architecture::platform::Platform;
 use gpio::Gpio;
 use pci::{Address, ConfigSpace, Placement};
 
-rt::entry!(main);
+runtime::entry!(main);
 
 /// Drivers for whole device classes: (class, subclass, programming
 /// interface, driver).
@@ -572,7 +572,7 @@ fn start_program(
     image: &Vmo,
     name: &str,
     args: &[String],
-    handles: Vec<(u32, rt::object::Handle)>,
+    handles: Vec<(u32, runtime::object::Handle)>,
 ) -> Option<Process> {
     let path = alloc::format!("bin/{name}");
     let Some(file) = boot.find(&path) else {
@@ -581,8 +581,9 @@ fn start_program(
     };
     let registry = proto::with_registry(|r| r.clone_registry()).ok()?.ok()?.ok()?;
     let file_path = alloc::format!("/system/{path}");
-    let mut spawn =
-        rt::process::Spawn::new(name).path(&file_path).handle(abi::startup::role::REGISTRY, registry.into_handle());
+    let mut spawn = runtime::process::Spawn::new(name)
+        .path(&file_path)
+        .handle(abi::startup::role::REGISTRY, registry.into_handle());
     for (role, h) in handles {
         spawn = spawn.handle(role, h);
     }
@@ -606,7 +607,7 @@ fn start_program(
 
 /// The boot information `init` hands over (where the ACPI tables are).
 fn boot_info() -> Option<abi::KernelBootInfo> {
-    let vmo = Vmo::from_handle(rt::env::take_handle(abi::startup::role::BOOT_INFO)?);
+    let vmo = Vmo::from_handle(runtime::env::take_handle(abi::startup::role::BOOT_INFO)?);
     let mut buf = [0u8; core::mem::size_of::<abi::KernelBootInfo>()];
     vmo.read(0, &mut buf).ok()?;
     // SAFETY: KernelBootInfo is plain old data written by the kernel.
@@ -631,7 +632,7 @@ fn described_below(acpi: Option<&Acpi>, a: Address) -> (Option<Path>, Vec<::acpi
 /// Maps the system image (the initrd) that `init` hands over; also
 /// returns it, for the driver VM.
 fn boot_image() -> Option<(initrd::Archive<'static>, Vmo)> {
-    let vmo = rt::object::Vmo::from_handle(rt::env::take_handle(abi::startup::role::INITRD)?);
+    let vmo = runtime::object::Vmo::from_handle(runtime::env::take_handle(abi::startup::role::INITRD)?);
     let size = vmo.size().ok()?;
     let addr = vmo.map(0, size, abi::map_flags::READ).ok()?;
     // SAFETY: a read-only mapping that lives as long as the process.
@@ -732,7 +733,7 @@ impl Told {
     /// Connects to whichever service it has no connection to (one that has
     /// not registered yet gets it when it does).
     fn connect(&mut self) {
-        self.since = rt::time::now_ns();
+        self.since = runtime::time::now_ns();
         if self.display.is_none()
             && let Ok(ch) = proto::connect(displaydev::NAME)
         {
@@ -754,7 +755,7 @@ impl Told {
 
     /// When to try again, the wait growing each time.
     fn later(&mut self) -> u64 {
-        let at = rt::time::now_ns().saturating_add(self.again_ns);
+        let at = runtime::time::now_ns().saturating_add(self.again_ns);
         self.again_ns = (self.again_ns * 2).min(TELL_AGAIN_NS.1);
         at
     }
@@ -799,7 +800,7 @@ impl Told {
             "the audio service"
         };
         println!("{} went away: the device manager tells it again what is coming when it is back", name);
-        if rt::time::now_ns().saturating_sub(self.since) >= 6 * TELL_AGAIN_NS.1 {
+        if runtime::time::now_ns().saturating_sub(self.since) >= 6 * TELL_AGAIN_NS.1 {
             self.again_ns = TELL_AGAIN_NS.0;
         }
         if self.again_at.is_none() {
@@ -954,7 +955,7 @@ impl DriverVm {
             return;
         }
         self.starts += 1;
-        self.started_ns = rt::time::now_ns();
+        self.started_ns = runtime::time::now_ns();
         let mut what = String::from("started driver-virtual-machine");
         if self.starts > 1 {
             what.push_str(" again");
@@ -981,7 +982,7 @@ impl DriverVm {
             0 | 1 => 0,
             n => 1_000_000_000u64 << (n - 2).min(5),
         };
-        self.next_start_ns = Some(rt::time::now_ns() + wait_ns);
+        self.next_start_ns = Some(runtime::time::now_ns() + wait_ns);
     }
 
     /// What it brings, while it runs or is to run again (nothing, once it
@@ -1028,7 +1029,7 @@ impl DriverVm {
             Some((abi::process_state::OUT_OF_MEMORY, _)) => String::from("memory ran out"),
             _ => String::from("the monitor crashed"),
         };
-        let ran_ns = rt::time::now_ns().saturating_sub(self.started_ns);
+        let ran_ns = runtime::time::now_ns().saturating_sub(self.started_ns);
         self.failures = if ran_ns < DRIVER_VM_STABLE_NS { self.failures + 1 } else { 0 };
         let mut resets = Vec::new();
         for d in &self.devices {
@@ -1057,7 +1058,7 @@ fn listed_devices(options: &[String], option: &str) -> Vec<(u16, u16)> {
 }
 
 fn main() -> i32 {
-    let take = |role| rt::env::take_handle(role).map(Resource::from_handle);
+    let take = |role| runtime::env::take_handle(role).map(Resource::from_handle);
     let (Some(io), Some(irq), Some(mmio), Some(dma), Some(pci)) = (
         take(roles::IOPORT_RESOURCE),
         take(roles::IRQ_RESOURCE),
@@ -1096,7 +1097,7 @@ fn main() -> i32 {
         gpio: RefCell::new(Gpio::new(gpio_mmio)),
         lines: RefCell::new(BTreeMap::new()),
     };
-    let args = rt::env::args();
+    let args = runtime::env::args();
     let live = args.iter().any(|a| a == "live");
     // The driver VM's options: `driver-virtual-machine`,
     // `driver-virtual-machine=off`, and its own as
@@ -1228,7 +1229,7 @@ fn main() -> i32 {
     if runs.is_ok() && (!guest.is_empty() || !platform.is_empty() || asked) {
         match take(roles::HYPERVISOR_RESOURCE) {
             Some(hypervisor) => {
-                let variables = rt::env::take_handle(abi::startup::role::FIRMWARE_VARIABLES).map(Vmo::from_handle);
+                let variables = runtime::env::take_handle(abi::startup::role::FIRMWARE_VARIABLES).map(Vmo::from_handle);
                 let memory = vm_memory(&guest, mgr.acpi.as_ref());
                 vm = Some(DriverVm::new(&vm_options, memory, guest, platform, variables, hypervisor));
             }
@@ -1245,7 +1246,7 @@ fn main() -> i32 {
     const DRIVER_VM: u64 = u64::MAX;
     loop {
         if let Some(v) = vm.as_mut()
-            && v.next_start_ns.is_some_and(|at| rt::time::now_ns() >= at)
+            && v.next_start_ns.is_some_and(|at| runtime::time::now_ns() >= at)
         {
             v.start(&boot, &image, &mut bound, &mut next);
             // A start that failed for good brings nothing.
@@ -1271,11 +1272,11 @@ fn main() -> i32 {
             }
         }
         if ws.is_empty() && deadline == abi::DEADLINE_INFINITE {
-            rt::time::sleep(rt::time::Duration::from_secs(3600));
+            runtime::time::sleep(runtime::time::Duration::from_secs(3600));
             continue;
         }
         let Ok(ready) = ws.wait(deadline) else { continue };
-        if told.again_at.is_some_and(|at| rt::time::now_ns() >= at) {
+        if told.again_at.is_some_and(|at| runtime::time::now_ns() >= at) {
             told.connect();
             told.say(&coming(&vm));
         }

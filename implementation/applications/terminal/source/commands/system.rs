@@ -32,7 +32,7 @@ fn format_cpu(ns: u64) -> String {
 }
 
 fn system_info(io: &mut Io, cmd: &str) -> Option<abi::SystemInfo> {
-    match rt::object::system_info() {
+    match runtime::object::system_info() {
         Ok(i) => Some(i),
         Err(e) => {
             io.error(cmd, &format!("cannot read system information: {e}"));
@@ -210,7 +210,7 @@ pub(super) fn cmd_sysinfo(_sh: &mut Shell, io: &mut Io, _args: &[String]) -> i32
     let version = cstr(&i.version);
     let used = i.total_memory.saturating_sub(i.free_memory);
     let mut info: Vec<(&str, String)> = vec![
-        ("OS", format!("Veda {} {}", version.trim_start_matches("Veda").trim(), rt::architecture::MACHINE)),
+        ("OS", format!("Veda {} {}", version.trim_start_matches("Veda").trim(), runtime::architecture::MACHINE)),
         ("Kernel", format!("{} (microkernel)", version.trim_start_matches("Veda").trim())),
         ("Uptime", uptime(i.uptime_ns)),
         ("CPU", format!("{} ({} cores)", cstr(&i.cpu_brand), i.cpu_count)),
@@ -270,7 +270,7 @@ pub(super) fn cmd_sysinfo(_sh: &mut Shell, io: &mut Io, _args: &[String]) -> i32
 }
 
 pub(super) fn cmd_date(_sh: &mut Shell, io: &mut Io, _args: &[String]) -> i32 {
-    let d = rt::time::DateTime::now();
+    let d = runtime::time::DateTime::now();
     io.println(&format!(
         "{}, {} {} {}, {:02}:{:02}:{:02}",
         d.weekday_name(),
@@ -289,7 +289,7 @@ fn read_log() -> String {
     let mut out = Vec::new();
     let mut buf = vec![0u8; 64 * 1024];
     let mut offset = 0u64;
-    while let Ok((n, next)) = rt::object::log_read(offset, &mut buf) {
+    while let Ok((n, next)) = runtime::object::log_read(offset, &mut buf) {
         if n == 0 || out.len() > 4 << 20 {
             break;
         }

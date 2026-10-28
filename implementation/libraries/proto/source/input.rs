@@ -38,7 +38,7 @@ union! {
 }
 
 /// Sends a batch of events.
-pub fn report(ch: &rt::object::Channel, events: Vec<InputEvent>) -> Result<(), ipc::IpcError> {
+pub fn report(ch: &runtime::object::Channel, events: Vec<InputEvent>) -> Result<(), ipc::IpcError> {
     ipc::send_event(ch, REPORT, events)
 }
 
@@ -46,7 +46,7 @@ pub fn report(ch: &rt::object::Channel, events: Vec<InputEvent>) -> Result<(), i
 /// the window system: when the service goes away, the sink connects again
 /// (the registry holds the new connection until a successor registers).
 pub struct InputSink {
-    channel: rt::object::Channel,
+    channel: runtime::object::Channel,
 }
 
 impl InputSink {

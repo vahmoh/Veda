@@ -23,7 +23,7 @@
 //!   a receive takes one, and those it sends go on the channel as far as it
 //!   has room.
 //!
-//! Its channel is shared (`rt::object::Channel::create_shared`), as a
+//! Its channel is shared (`runtime::object::Channel::create_shared`), as a
 //! connection's kernel socket is, so whoever holds them reads and writes:
 //! as on Linux, processes that share a socket share its connection's bytes,
 //! a listener's connections and a datagram socket's datagrams, which go to
@@ -71,8 +71,8 @@ use abi::ObjectType;
 use abi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE, USER_0, USER_1, WRITABLE};
 use ipc::{Encode, Encoder, IpcError};
 use proto::net::{MAX_DATAGRAM, NetError, SocketEvent, SocketRequest, TcpOptions};
-use rt::object::{Channel, Handle, Socket};
-use rt::sync::{Mutex, MutexGuard};
+use runtime::object::{Channel, Handle, Socket};
+use runtime::sync::{Mutex, MutexGuard};
 
 use crate::error::{self, SysResult};
 use crate::io::Waitable;

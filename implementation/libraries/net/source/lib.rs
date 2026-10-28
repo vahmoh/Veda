@@ -52,14 +52,14 @@ pub use proto::net::{
     FirewallQuestion, FirewallReason, FirewallStats, InterfaceInfo, InterfaceKind, IpConfig, NetError, NetEvent,
     NetStatus, PortRule, RouteInfo, Scope, SocketInfo, TcpOptions, format_mac,
 };
-pub use rt::time::Duration;
+pub use runtime::time::Duration;
 pub use tcp::{TcpListener, TcpStream};
 pub use udp::UdpSocket;
 
 use ipc::{Encode, Encoder, IpcError};
 use proto::net::{ResolveResult, SocketRequest, net};
-use rt::object::Channel;
-use rt::sync::Mutex;
+use runtime::object::Channel;
+use runtime::sync::Mutex;
 
 /// Default time to wait for a connection.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
@@ -116,7 +116,7 @@ pub(crate) fn send_request(ch: &Channel, req: SocketRequest) -> Result<(), NetEr
 /// A deadline `timeout` from now (`None`: forever).
 pub(crate) fn deadline(timeout: Option<Duration>) -> u64 {
     match timeout {
-        Some(t) => rt::time::deadline_after(t),
+        Some(t) => runtime::time::deadline_after(t),
         None => abi::DEADLINE_INFINITE,
     }
 }
@@ -141,7 +141,7 @@ pub fn lookup(name: &str, family: AddrFamily, timeout: Duration) -> Result<Looku
         let (ours, theirs) = Channel::create().map_err(IpcError::Kernel)?;
         Ok(c.resolve(name.clone(), family, theirs)?.map(|()| ours))
     })??;
-    let msg = ours.read_blocking(rt::time::deadline_after(timeout)).map_err(|e| match e {
+    let msg = ours.read_blocking(runtime::time::deadline_after(timeout)).map_err(|e| match e {
         abi::Error::TimedOut => NetError::TimedOut,
         _ => NetError::Unavailable,
     })?;

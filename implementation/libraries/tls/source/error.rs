@@ -85,7 +85,7 @@ impl From<rustls::Error> for TlsError {
 
 /// A date as `YYYY-MM-DD` (UTC).
 fn date(t: &UnixTime) -> String {
-    let d = rt::time::DateTime::from_unix(t.as_secs());
+    let d = runtime::time::DateTime::from_unix(t.as_secs());
     format!("{:04}-{:02}-{:02}", d.year, d.month, d.day)
 }
 

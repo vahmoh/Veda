@@ -182,7 +182,7 @@ impl TaskManager {
     /// A new sample when the last one is a second old, as the window takes
     /// them (CPU use is measured between two samples).
     fn refresh(&mut self) {
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         if now >= self.next_sample {
             self.sample();
             self.next_sample = now + SAMPLE_NS;
@@ -307,17 +307,17 @@ impl TaskManager {
             return Err(msg);
         }
         // Wait (briefly) until it is gone, so that the table shows it.
-        let end = rt::time::now_ns() + END_WAIT_NS;
+        let end = runtime::time::now_ns() + END_WAIT_NS;
         let mut gone = false;
-        while !gone && rt::time::now_ns() < end {
+        while !gone && runtime::time::now_ns() < end {
             gone = !self.tasks()?.iter().any(|t| t.koid == koid);
             if !gone {
-                rt::time::sleep(rt::time::Duration::from_millis(50));
+                runtime::time::sleep(runtime::time::Duration::from_millis(50));
             }
         }
         if self.procs.iter().any(|p| p.koid == koid) {
             self.sample();
-            self.next_sample = rt::time::now_ns() + SAMPLE_NS;
+            self.next_sample = runtime::time::now_ns() + SAMPLE_NS;
         }
         let mut v = json!({ "ended": title, "pid": koid });
         if !gone {

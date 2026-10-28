@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `rt` — the Veda user-space runtime.
+//! `runtime` — the Veda user-space runtime.
 //!
 //! Every Veda program links this crate. It provides:
 //!
@@ -15,7 +15,7 @@
 //! The runtime pieces that only make sense in a real Veda program (entry
 //! point, allocator, panic handler, C symbols) are behind the default
 //! `runtime` feature, and left out of the crate's own unit tests. Libraries
-//! depend on `rt` with `default-features = false`, which keeps them
+//! depend on `runtime` with `default-features = false`, which keeps them
 //! unit-testable on the host.
 //!
 //! Programs of the driver VM's Linux guest are built with `--cfg
@@ -24,13 +24,13 @@
 //! then go through the bridge (`guest`), and threads are Linux's (`std`'s).
 //!
 //! Programs on Rust's standard library, built for Veda's own target
-//! (`target_os = "veda"`, on the C library), link `rt` too, for Veda's
-//! objects and services. The standard library is their runtime there (the
-//! entry point, the panic handler, the C symbols) and their threads are its
-//! own ([`thread`]); the C library's POSIX layer holds the handles the
-//! process started with, which [`env`] asks it for. `rt`'s heap stays the
-//! global allocator (the `runtime` feature), so that a program allocates as
-//! Veda's others do.
+//! (`target_os = "veda"`, on the C library), link `runtime` too, for
+//! Veda's objects and services. The standard library is their runtime
+//! there (the entry point, the panic handler, the C symbols) and their
+//! threads are its own ([`thread`]); the C library's POSIX layer holds the
+//! handles the process started with, which [`env`] asks it for.
+//! `runtime`'s heap stays the global allocator (the `runtime` feature), so
+//! that a program allocates as Veda's others do.
 
 #![no_std]
 

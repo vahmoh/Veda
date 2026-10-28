@@ -23,9 +23,9 @@ use gfx::Bitmap;
 use image::{DecodeOptions, Filter, Format, Image, ImageError, Orientation};
 use proto::fs::FsError;
 use proto::vfs;
-use rt::object::Event;
-use rt::sync::{Condvar, Mutex};
-use rt::vm::Mapping;
+use runtime::object::Event;
+use runtime::sync::{Condvar, Mutex};
+use runtime::vm::Mapping;
 
 /// Files larger than this are not opened.
 const MAX_FILE: u64 = 128 << 20;
@@ -181,7 +181,7 @@ impl Loader {
         for (name, thumbs, priority) in workers {
             let s = shared.clone();
             let ev = Event::from_handle(event.0.duplicate(None).ok()?);
-            rt::thread::Builder::new()
+            runtime::thread::Builder::new()
                 .name(name)
                 .stack_size(512 * 1024)
                 .priority(priority)
@@ -333,14 +333,14 @@ fn worker(shared: Arc<Shared>, event: Event, thumbs: bool) {
                     progressive: i.progressive,
                     file_size: bytes.len() as u64,
                 });
-                let started = rt::time::now_ns();
+                let started = runtime::time::now_ns();
                 let decoded = decode(bytes, max_pixels);
-                let decode_ms = (rt::time::now_ns() - started) / 1_000_000;
+                let decode_ms = (runtime::time::now_ns() - started) / 1_000_000;
                 drop(data);
                 let name = path.rsplit('/').next().unwrap_or("");
                 if thumbs {
                     let result = decoded.map(|(img, _)| make_thumbs(&img, shared.id()));
-                    let total_ms = (rt::time::now_ns() - started) / 1_000_000;
+                    let total_ms = (runtime::time::now_ns() - started) / 1_000_000;
                     match &result {
                         Ok(_) => println!("thumbnail of {name}: decoded in {decode_ms} ms, {total_ms} ms in all"),
                         Err(e) => println!("no thumbnail for {name}: {e}"),
@@ -358,7 +358,7 @@ fn worker(shared: Arc<Shared>, event: Event, thumbs: bool) {
                         let _ = event.signal();
                     }
                     let result = decoded.map(|(img, damaged)| Arc::new(make_picture(img, damaged, shared.id())));
-                    let total_ms = (rt::time::now_ns() - started) / 1_000_000;
+                    let total_ms = (runtime::time::now_ns() - started) / 1_000_000;
                     match &result {
                         Ok(p) => println!(
                             "opened {name} ({}x{}): decoded in {decode_ms} ms, ready in {total_ms} ms",

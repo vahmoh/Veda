@@ -17,7 +17,7 @@ use std::ffi::c_int;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use proto::audio::{OpenError, OutputStream, StreamSpec, audio};
-use rt::object::Event;
+use runtime::object::Event;
 
 /// The process's connection to the audio service, made as the first
 /// stream opens, and again once it broke.
@@ -105,7 +105,7 @@ pub unsafe extern "C" fn browser_sound_write(sound: *const Sound, samples: *cons
 pub unsafe extern "C" fn browser_sound_wait(sound: *const Sound, frames: u32, timeout_ms: u32) {
     // SAFETY: per the caller.
     let sound = unsafe { &*sound };
-    let deadline = rt::time::now_ns().saturating_add(u64::from(timeout_ms) * 1_000_000);
+    let deadline = runtime::time::now_ns().saturating_add(u64::from(timeout_ms) * 1_000_000);
     let _ = sound.room.clear();
     let short = {
         let stream = sound.stream();

@@ -6,7 +6,7 @@
 use alloc::format;
 use alloc::string::{String, ToString};
 
-use rt::time::DateTime;
+use runtime::time::DateTime;
 
 const NS_PER_SEC: u64 = 1_000_000_000;
 
@@ -53,7 +53,7 @@ pub fn format_time(ns: u64) -> String {
 /// A modification time relative to now: `Today, 14:05`, `Yesterday, 09:30`
 /// or `3 Oct 2026, 14:05`; `—` when unknown (0).
 pub fn friendly_time(ns: u64) -> String {
-    friendly_time_at(ns, rt::time::unix_time_ns())
+    friendly_time_at(ns, runtime::time::unix_time_ns())
 }
 
 /// [`friendly_time`] with an explicit current time (both in nanoseconds
@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn calendar_dates_and_days_agree() {
-        use rt::time::days_from_civil;
+        use runtime::time::days_from_civil;
         assert_eq!(days_from_civil(1970, 1, 1), 0);
         assert_eq!(days_from_civil(2000, 3, 1), 11_017);
         assert_eq!(days_from_civil(1969, 12, 31), -1);

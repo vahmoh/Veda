@@ -25,9 +25,9 @@ use proto::media::{
     self, AudioSpec, DecoderInfo, FramePool, Heartbeat, MediaError, MediaInfo, OpenOptions, PcmRing, PictureChecksum,
     SeekMode, SkipLevel, SlotMeta, Stats, Thumbnail, VideoSpec, open_flags, pcm, video_flags,
 };
-use rt::object::{Channel, Event, Vmo};
-use rt::println;
-use rt::vm::Mapping;
+use runtime::object::{Channel, Event, Vmo};
+use runtime::println;
+use runtime::vm::Mapping;
 
 use crate::ffi::{self, AGAIN, END, NO_TIME, OK};
 use crate::info;
@@ -371,7 +371,7 @@ impl Session {
             && !self.first_picture
             && let Some((clock_us, at_ns)) = out.pool.player_clock()
         {
-            let now = rt::time::now_ns();
+            let now = runtime::time::now_ns();
             let shown = clock_us.saturating_add((now.saturating_sub(at_ns) / 1000) as i64);
             if pts.saturating_add(duration.max(1)) < shown.saturating_sub(LATE_US) {
                 self.pictures.pop_front();
@@ -383,9 +383,9 @@ impl Session {
         let Some(slot) = out.pool.claim() else { return false };
         let frame = self.pictures.pop_front().unwrap();
         let o = self.opened.as_ref().map_or(Orientation::default(), |o| o.orientation);
-        let began = rt::time::now_ns();
+        let began = runtime::time::now_ns();
         let r = convert(out, slot, &frame, o);
-        self.counters.convert_ns += rt::time::now_ns().saturating_sub(began);
+        self.counters.convert_ns += runtime::time::now_ns().saturating_sub(began);
         self.counters.converted += 1;
         if r != OK {
             out.pool.abandon(slot);
@@ -747,7 +747,7 @@ impl Session {
     /// picture published last.
     fn position(&self) -> i64 {
         if let Some((clock_us, at_ns)) = self.video_out.as_ref().and_then(|o| o.pool.player_clock()) {
-            let since = if self.running { rt::time::now_ns().saturating_sub(at_ns) / 1000 } else { 0 };
+            let since = if self.running { runtime::time::now_ns().saturating_sub(at_ns) / 1000 } else { 0 };
             return clock_us.saturating_add(since as i64);
         }
         self.last

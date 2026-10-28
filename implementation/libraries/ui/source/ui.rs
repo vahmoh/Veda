@@ -730,7 +730,7 @@ pub(crate) mod tests {
     /// A window's context without fonts or a display: nothing in the tests
     /// may call the compositor.
     pub(crate) fn context() -> Context {
-        let channel = rt::object::Channel::from_handle(rt::object::Handle::invalid());
+        let channel = runtime::object::Channel::from_handle(runtime::object::Handle::invalid());
         Context {
             text: SharedText::new(gfx::Text::new()),
             fonts: [0; 4],

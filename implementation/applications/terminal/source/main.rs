@@ -254,7 +254,7 @@ impl Terminal {
     fn new(cwd: &str) -> Option<Terminal> {
         let output = Output::new()?;
         let mut screen = Screen::new();
-        let version = rt::object::system_info()
+        let version = runtime::object::system_info()
             .map(|i| {
                 let n = i.version.iter().position(|&c| c == 0).unwrap_or(i.version.len());
                 String::from_utf8_lossy(&i.version[..n]).trim().into()
@@ -531,13 +531,13 @@ impl Terminal {
     /// Waits up to `timeout` ns for the running command, moving its output
     /// to the screen. Returns whether none runs any more.
     fn wait_for_job(&mut self, timeout: u64) -> bool {
-        let deadline = rt::time::now_ns().saturating_add(timeout);
+        let deadline = runtime::time::now_ns().saturating_add(timeout);
         loop {
             self.collect();
             if self.job.is_none() {
                 return true;
             }
-            if rt::time::now_ns() >= deadline {
+            if runtime::time::now_ns() >= deadline {
                 return false;
             }
             self.output.wait(deadline);
@@ -1524,7 +1524,7 @@ fn main() {
 
 /// Runs the program; its exit code.
 fn run() -> i32 {
-    let cwd = rt::env::args().get(1).cloned().unwrap_or_else(|| String::from(HOME));
+    let cwd = runtime::env::args().get(1).cloned().unwrap_or_else(|| String::from(HOME));
     let Some(term) = Terminal::new(&cwd) else {
         println!("cannot create events");
         return 1;

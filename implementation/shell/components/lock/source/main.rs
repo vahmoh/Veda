@@ -52,8 +52,8 @@ use lock_core::throttle::Throttle;
 use proto::display::{LOCK_NOTICE, LockNotice};
 use proto::init::ClientIdentity;
 use proto::lock::{LockError, LockStatus, lock};
-use rt::object::{Channel, Message};
-use rt::println;
+use runtime::object::{Channel, Message};
+use runtime::println;
 use ui::window::Display;
 use zeroize::Zeroizing;
 
@@ -132,13 +132,13 @@ struct Lock {
 
 /// The Unix time, in seconds.
 fn unix_s() -> u64 {
-    rt::time::unix_time_ns() / 1_000_000_000
+    runtime::time::unix_time_ns() / 1_000_000_000
 }
 
 /// A new salt, from the kernel's random number generator.
 fn salt() -> [u8; SALT_LEN] {
     let mut s = [0u8; SALT_LEN];
-    rt::object::random_bytes(&mut s);
+    runtime::object::random_bytes(&mut s);
     s
 }
 
@@ -581,7 +581,7 @@ impl Lock {
             items.push(WaitItem { handle: c.channel.raw(), signals: readable, ..Default::default() });
         }
         items.truncate(abi::WAIT_MANY_MAX);
-        let _ = rt::object::wait_many(&mut items, deadline);
+        let _ = runtime::object::wait_many(&mut items, deadline);
         for (c, it) in self.clients.iter().zip(items.iter().skip(first_client)) {
             if it.observed & it.signals != 0 {
                 self.ready.push(c.id);
@@ -591,7 +591,7 @@ impl Lock {
 
     fn run(&mut self) -> ! {
         loop {
-            let now = rt::time::now_ns();
+            let now = runtime::time::now_ns();
             self.connect_display(now);
             self.take_notices(now);
             self.take_hashed(now);
@@ -605,7 +605,7 @@ impl Lock {
                     v.invalidate();
                 }
             }
-            self.pump_view(rt::time::now_ns());
+            self.pump_view(runtime::time::now_ns());
             self.serve();
             self.wait();
         }

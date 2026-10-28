@@ -14,8 +14,8 @@ use core::ffi::{CStr, c_char, c_int, c_void};
 use core::mem::ManuallyDrop;
 
 use abi::{Error, RawHandle, WaitItem, nr};
-use rt::object::{Channel, Handle};
-use rt::sys::call;
+use runtime::object::{Channel, Handle};
+use runtime::sys::call;
 
 fn fail(e: Error) -> c_int {
     -(e as c_int)
@@ -62,7 +62,7 @@ unsafe fn name<'a>(name: *const c_char) -> Option<&'a str> {
 #[unsafe(no_mangle)]
 pub extern "C" fn veda_close(h: RawHandle) -> c_int {
     let _layer = crate::interrupt::Layer::enter();
-    done(rt::sys::handle_close(h))
+    done(runtime::sys::handle_close(h))
 }
 
 /// Duplicates a handle with `rights` (`~0`: those it has).
@@ -90,7 +90,7 @@ pub unsafe extern "C" fn veda_startup_handle(role: u32, out: *mut RawHandle) -> 
     if role < abi::startup::role::USER {
         return fail(Error::InvalidArgs);
     }
-    match rt::env::take_handle(role) {
+    match runtime::env::take_handle(role) {
         // SAFETY: as the caller promises.
         Some(h) => unsafe { give(out, Ok(h.into_raw() as usize)) },
         None => fail(Error::NotFound),
@@ -231,7 +231,7 @@ pub unsafe extern "C" fn veda_wait(items: *mut WaitItem, count: usize, deadline:
     }
     // SAFETY: as the caller promises.
     let items = unsafe { core::slice::from_raw_parts_mut(items, count) };
-    match rt::object::wait_many(items, deadline) {
+    match runtime::object::wait_many(items, deadline) {
         Ok(n) => n as c_int,
         Err(Error::TimedOut) => 0,
         Err(e) => fail(e),
@@ -242,7 +242,7 @@ pub unsafe extern "C" fn veda_wait(items: *mut WaitItem, count: usize, deadline:
 #[unsafe(no_mangle)]
 pub extern "C" fn veda_now_ns() -> u64 {
     let _layer = crate::interrupt::Layer::enter();
-    rt::time::now_ns()
+    runtime::time::now_ns()
 }
 
 /// Creates a memory object of `size` bytes, zero-filled.

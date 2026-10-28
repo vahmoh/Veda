@@ -18,7 +18,7 @@ use core::ops::Range;
 
 use gfx::text::font_files;
 use gfx::{Align, Canvas, Color, LineMetrics, Rect, Text};
-use rt::sync::Mutex;
+use runtime::sync::Mutex;
 
 /// The interface's font files in fallback order; the first four are the
 /// [`Font`](crate::Font) roles: Inter, Inter SemiBold, JetBrains Mono and

@@ -27,14 +27,14 @@ static TLS13_ONLY: &[&SupportedProtocolVersion] = &[&rustls::version::TLS13];
 #[cfg(test)]
 static TLS12_ONLY: &[&SupportedProtocolVersion] = &[&rustls::version::TLS12];
 
-/// The system's wall clock (`rt::time::utc_time_ns`), for certificate
+/// The system's wall clock (`runtime::time::utc_time_ns`), for certificate
 /// validity checks.
 #[derive(Debug)]
 pub struct SystemClock;
 
 impl TimeProvider for SystemClock {
     fn current_time(&self) -> Option<UnixTime> {
-        let secs = rt::time::utc_time_ns() / 1_000_000_000;
+        let secs = runtime::time::utc_time_ns() / 1_000_000_000;
         (secs >= EARLIEST_PLAUSIBLE_TIME).then(|| UnixTime::since_unix_epoch(Duration::from_secs(secs)))
     }
 }

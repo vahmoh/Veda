@@ -23,7 +23,7 @@ use alloc::vec::Vec;
 
 use abi::RawHandle;
 use base64ct::{Base64, Encoding};
-use rt::time::Duration;
+use runtime::time::Duration;
 use sha1::{Digest, Sha1};
 
 use crate::http::{Head, Reader, parse_head};

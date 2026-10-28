@@ -31,7 +31,7 @@ use abi::signals;
 use guest_sys::netif::{self, Frames, Interface};
 use guest_sys::retry::{self, Backoff, Ended, Served};
 use proto::net::{DeviceAttachment, DeviceInfo, InterfaceKind};
-use rt::guest::Watch;
+use runtime::guest::Watch;
 use rustix::event::{PollFd, PollFlags, poll};
 
 use link::Reported;

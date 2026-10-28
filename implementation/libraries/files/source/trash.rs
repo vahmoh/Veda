@@ -37,7 +37,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::ops::ControlFlow;
 
-use rt::time::DateTime;
+use runtime::time::DateTime;
 
 use crate::fs::{Error, Fs, FsError, Hook, Progress, Result};
 use crate::path::{HOME, TMP, file_name, is_within, join, natural_cmp, normalize, parent, unique_name};
@@ -129,7 +129,7 @@ pub fn put(fs: &Fs, path: &str) -> Result<String> {
         return Err(Error::Fs(FsError::ReadOnly));
     }
     ensure(fs)?;
-    let record = info_text(path, rt::time::unix_time_ns());
+    let record = info_text(path, runtime::time::unix_time_ns());
     for _ in 0..ATTEMPTS {
         let name = unique_name(file_name(path), |n| fs.exists(&join(FILES, n)) || fs.exists(&info_path(n)));
         match fs.create_new(&info_path(&name), record.as_bytes()) {
@@ -380,7 +380,7 @@ fn parse_date(s: &str) -> Option<u64> {
         return None;
     }
     // From 1970 on (checked above): never negative.
-    let days = rt::time::days_from_civil(year as i32, month as u8, day as u8) as u64;
+    let days = runtime::time::days_from_civil(year as i32, month as u8, day as u8) as u64;
     Some(((days * 86_400) + hour * 3_600 + minute * 60 + second) * NS_PER_SEC)
 }
 

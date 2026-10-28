@@ -215,7 +215,7 @@ struct VedaLog {
 impl VedaLog {
     fn take(&mut self, into: &mut Kept) {
         loop {
-            match rt::object::log_read(self.offset, &mut self.buf) {
+            match runtime::object::log_read(self.offset, &mut self.buf) {
                 Ok((0, _)) => return,
                 Ok((n, next)) => {
                     let from = next - n as u64;
@@ -305,7 +305,7 @@ fn main() {
     };
     let dir = dir.strip_prefix(MOUNTED).unwrap_or(&dir).display().to_string();
     println!("logkeeper: keeping the log on the stick ({device}), in {dir}");
-    let t = rt::time::DateTime::now();
+    let t = runtime::time::DateTime::now();
     let when = format!(
         "{}-{:02}-{:02} {:02}:{:02}:{:02} (the system's clock)",
         t.year, t.month, t.day, t.hour, t.minute, t.second

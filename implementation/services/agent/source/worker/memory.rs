@@ -13,7 +13,7 @@ use super::Ctx;
 impl Ctx {
     /// `memory`: remember, search, forget.
     pub(super) fn memory(&self, args: &Value) -> Result<Value, String> {
-        let now = rt::time::unix_time_ns() / 1_000_000_000;
+        let now = runtime::time::unix_time_ns() / 1_000_000_000;
         let mut sh = self.shared.lock();
         let r = match args["operation"].as_str().unwrap_or("search") {
             "remember" => {

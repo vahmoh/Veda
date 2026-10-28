@@ -40,9 +40,9 @@ use core::ffi::c_void;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use abi::{Error, nr};
-use rt::object::{Handle, Thread};
-use rt::sync::Mutex;
-use rt::sys::call;
+use runtime::object::{Handle, Thread};
+use runtime::sync::Mutex;
+use runtime::sys::call;
 
 use crate::error::{self, SysResult};
 use crate::interrupt::Layer;
@@ -178,7 +178,7 @@ static PRIORITY: AtomicUsize = AtomicUsize::new(0);
 /// at kernel priority `priority`: `EACCES`, and no thread changed, if the
 /// process may not run that high.
 pub fn set_priority(priority: usize) -> Result<(), isize> {
-    let most = rt::object::process_self_info().map_err(error::kernel)?.max_priority as usize;
+    let most = runtime::object::process_self_info().map_err(error::kernel)?.max_priority as usize;
     if priority > most {
         return Err(EACCES);
     }
@@ -325,7 +325,7 @@ pub fn set_tid_address(addr: usize) -> SysResult {
 pub fn exit_thread() -> ! {
     forget_current();
     crate::signal::thread_exited();
-    rt::sys::thread_exit()
+    runtime::sys::thread_exit()
 }
 
 /// Where a thread `__veda_clone` started goes when its function returns
@@ -350,7 +350,7 @@ pub unsafe extern "C" fn __veda_unmapself(base: usize, size: usize) -> ! {
     forget_current();
     crate::signal::thread_exited();
     // SAFETY: per the caller.
-    unsafe { rt::thread::exit_unmapping(base, size) }
+    unsafe { runtime::thread::exit_unmapping(base, size) }
 }
 
 /// `futex(addr, op, val, timeout, addr2, val3)`.

@@ -18,7 +18,7 @@ members = [
     "implementation/libraries/heap",
     "implementation/libraries/frames",
     "implementation/libraries/build",
-    "implementation/libraries/rt",
+    "implementation/libraries/runtime",
     "implementation/libraries/ipc",
     "implementation/libraries/proto",
     "implementation/libraries/gfx",
@@ -136,7 +136,7 @@ image = { path = "implementation/libraries/image" }
 heap = { path = "implementation/libraries/heap" }
 frames = { path = "implementation/libraries/frames" }
 build = { path = "implementation/libraries/build" }
-rt = { path = "implementation/libraries/rt" }
+runtime = { path = "implementation/libraries/runtime" }
 ipc = { path = "implementation/libraries/ipc" }
 proto = { path = "implementation/libraries/proto" }
 gfx = { path = "implementation/libraries/gfx" }

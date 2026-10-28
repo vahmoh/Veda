@@ -30,7 +30,7 @@ use lock_core::screen::{Due, Phase, Screen, Submit, Tone};
 use proto::display::{Cursor, WindowKind, WindowSpec, modifiers};
 use proto::input::keys;
 use proto::lock::MAX_PASSWORD;
-use rt::time::DateTime;
+use runtime::time::DateTime;
 use shell_common::presence;
 use ui::window::{Display, WindowError};
 use ui::{Font, Host, Icon, Ui};
@@ -126,7 +126,7 @@ impl View {
             sent: 0,
             caps_lock: false,
         };
-        Ok(View { host, face, opened: rt::time::now_ns(), drawn: false })
+        Ok(View { host, face, opened: runtime::time::now_ns(), drawn: false })
     }
 
     /// When it was opened, and whether it has drawn itself since.
@@ -184,7 +184,7 @@ impl View {
             // wallpaper.
             self.drawn = true;
             let password = self.face.screen.password();
-            self.face.screen = Screen::new(rt::time::now_ns(), password);
+            self.face.screen = Screen::new(runtime::time::now_ns(), password);
         }
         let mut out = Vec::new();
         let View { host, face, .. } = self;
@@ -254,7 +254,7 @@ impl Face {
             ui.repaint_at(t);
         }
         // The clock's next minute, and the wait's next second.
-        let wall = rt::time::unix_time_ns();
+        let wall = runtime::time::unix_time_ns();
         ui.repaint_at(now + 60_000_000_000 - wall % 60_000_000_000);
         if wait_s > 0 {
             ui.repaint_at(now + 1_000_000_000 - wall % 1_000_000_000);

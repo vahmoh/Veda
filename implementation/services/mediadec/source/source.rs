@@ -13,7 +13,7 @@ use core::ffi::c_void;
 
 use abi::{RawHandle, WaitItem, signals};
 use proto::fs::{MAX_IO, file};
-use rt::object::Channel;
+use runtime::object::Channel;
 
 /// How long one read may take before the source counts as failed.
 const READ_TIMEOUT_NS: u64 = 10_000_000_000;
@@ -71,7 +71,7 @@ impl Source {
     /// Whether the player went away (its control channel closed).
     pub fn interrupted(&self) -> bool {
         let mut item = [WaitItem { handle: self.control, signals: signals::PEER_CLOSED, ..Default::default() }];
-        rt::object::wait_many(&mut item, 0).is_ok() && item[0].observed & signals::PEER_CLOSED != 0
+        runtime::object::wait_many(&mut item, 0).is_ok() && item[0].observed & signals::PEER_CLOSED != 0
     }
 }
 

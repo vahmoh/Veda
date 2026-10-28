@@ -15,8 +15,8 @@
 //!   `/system/licences/README` lists them (About Veda, Settings).
 //!
 //! These belong with the libraries they extend: the process lists with
-//! `proto`'s launcher protocol, the formats with `rt` and `files`, the
-//! icons and the clipboard with `ui`. The pure parts are tested on the
+//! `proto`'s launcher protocol, the formats with `runtime` and `files`,
+//! the icons and the clipboard with `ui`. The pure parts are tested on the
 //! host.
 
 #![no_std]

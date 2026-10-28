@@ -741,7 +741,7 @@ pub mod clock {
 /// `((ticks - ticks_at_zero) * ns_per_tick) >> 32` nanoseconds; the
 /// real-time clocks are it plus their offsets. It never changes once the
 /// system has started, so that a program asks for it once and reads the
-/// clocks itself (`rt::time`).
+/// clocks itself (`runtime::time`).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ClockInfo {
@@ -1220,7 +1220,7 @@ pub const fn exit_signal(code: i64) -> Option<u32> {
 }
 
 /// Whether a process that ended with `code` crashed: a CPU fault, a panic
-/// (`rt`'s), or for a POSIX program a signal that a fault of its own
+/// (`runtime`'s), or for a POSIX program a signal that a fault of its own
 /// raises: `SIGABRT` (from `abort`, as a Rust panic in a program on the
 /// standard library raises it), `SIGSEGV`, `SIGBUS`, `SIGILL` or `SIGFPE`.
 /// A process ended by another (killed) did not crash.

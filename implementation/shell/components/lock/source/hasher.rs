@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use abi::RawHandle;
 use lock_core::password::{Record, SALT_LEN};
-use rt::object::Event;
-use rt::sync::{Condvar, Mutex};
+use runtime::object::Event;
+use runtime::sync::{Condvar, Mutex};
 use zeroize::Zeroizing;
 
 /// A password to check or to set.
@@ -74,7 +74,11 @@ impl Hasher {
         let shared =
             Arc::new(Shared { jobs: Mutex::new(VecDeque::new()), wake: Condvar::new(), done: Mutex::new(Vec::new()) });
         let worker = shared.clone();
-        rt::thread::Builder::new().name("hasher").stack_size(256 * 1024).spawn(move || work(&worker, &theirs)).ok()?;
+        runtime::thread::Builder::new()
+            .name("hasher")
+            .stack_size(256 * 1024)
+            .spawn(move || work(&worker, &theirs))
+            .ok()?;
         Some(Hasher { shared, event })
     }
 

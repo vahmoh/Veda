@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 
 use hv::acpi::{self, Child, Function, Gpio, GpioInterrupt, HID_OVER_I2C, Resource};
 use proto::pci::{AcpiDevice, AcpiResource, IntxLine, pcidev};
-use rt::println;
+use runtime::println;
 
 use crate::gpio::{Owner, Pins};
 use crate::lines::Lines;

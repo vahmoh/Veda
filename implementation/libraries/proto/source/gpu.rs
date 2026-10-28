@@ -38,7 +38,7 @@
 use alloc::string::String;
 use core::ops::Range;
 use ipc::{Bytes, enumeration, message, protocol};
-use rt::object::{Event, Vmo};
+use runtime::object::{Event, Vmo};
 
 enumeration! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]

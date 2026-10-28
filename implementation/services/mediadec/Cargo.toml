@@ -17,7 +17,7 @@ bench = false
 
 [dependencies]
 abi = { workspace = true }
-rt = { workspace = true, default-features = false }
+runtime = { workspace = true, default-features = false }
 proto = { workspace = true }
 
 [lints]

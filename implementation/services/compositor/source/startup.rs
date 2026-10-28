@@ -41,7 +41,7 @@ use alloc::string::String;
 
 use gfx::{Bitmap, Canvas, Color, Rect, Text};
 use num_traits::Float;
-use rt::println;
+use runtime::println;
 use splash::Ring;
 
 use crate::gpu::{Gpu, Slot, Splash};

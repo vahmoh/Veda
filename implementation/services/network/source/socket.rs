@@ -39,7 +39,7 @@ use abi::{Error, RawHandle};
 use ipc::{Encode, Encoder};
 use netstack::{PingEvent, SockId, Stack, TcpState};
 use proto::net::{MAX_SEND, NetError, RECEIVE_WINDOW, SocketEvent, SocketRequest, TcpOptions, UDP_UNMETERED_WINDOW};
-use rt::object::{Channel, Socket};
+use runtime::object::{Channel, Socket};
 
 /// Bytes of datagrams a UDP client may send ahead of what the stack has
 /// taken.

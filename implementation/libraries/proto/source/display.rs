@@ -71,7 +71,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use ipc::{enumeration, message, protocol, union};
-use rt::object::{Channel, Vmo};
+use runtime::object::{Channel, Vmo};
 
 message! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

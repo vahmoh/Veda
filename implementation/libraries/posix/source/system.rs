@@ -5,7 +5,7 @@
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use rt::sync::Mutex;
+use runtime::sync::Mutex;
 
 use crate::error::{self, SysResult};
 use crate::linux::errno::{EFAULT, EINVAL, EPERM, ESRCH};
@@ -30,7 +30,7 @@ pub unsafe fn uname(buf: usize) -> SysResult {
         nodename: field("veda"),
         release: field(RELEASE),
         version: field(&version),
-        machine: field(rt::architecture::MACHINE),
+        machine: field(runtime::architecture::MACHINE),
         domainname: field("(none)"),
     };
     // SAFETY: the program passed a struct utsname.
@@ -44,7 +44,7 @@ pub unsafe fn uname(buf: usize) -> SysResult {
 #[unsafe(no_mangle)]
 pub extern "C" fn veda_process_memory() -> usize {
     let _layer = crate::interrupt::Layer::enter();
-    rt::object::process_self_info().map_or(0, |i| i.memory_bytes as usize)
+    runtime::object::process_self_info().map_or(0, |i| i.memory_bytes as usize)
 }
 
 /// `veda_process_set_memory_class(class)` (`<veda/memory.h>`): moves this
@@ -55,7 +55,7 @@ pub extern "C" fn veda_process_memory() -> usize {
 pub extern "C" fn veda_process_set_memory_class(class: core::ffi::c_int) -> core::ffi::c_int {
     let _layer = crate::interrupt::Layer::enter();
     let Ok(class) = usize::try_from(class) else { return EINVAL as core::ffi::c_int };
-    match rt::process::set_memory_class(None, class) {
+    match runtime::process::set_memory_class(None, class) {
         Ok(()) => 0,
         Err(e) => error::kernel(e) as core::ffi::c_int,
     }
@@ -86,7 +86,7 @@ pub unsafe extern "C" fn veda_memory_file(fd: core::ffi::c_int, vmo: *mut abi::R
 }
 
 pub unsafe fn sysinfo(buf: usize) -> SysResult {
-    let i = rt::object::system_info().unwrap_or_default();
+    let i = runtime::object::system_info().unwrap_or_default();
     let s = Sysinfo {
         uptime: (i.uptime_ns / 1_000_000_000) as i64,
         totalram: i.total_memory,
@@ -106,7 +106,7 @@ fn limit(resource: u32) -> Result<Rlimit, isize> {
     let unlimited = Rlimit { cur: rlimit::INFINITY, max: rlimit::INFINITY };
     Ok(match resource {
         rlimit::STACK => {
-            let s = rt::process::POSIX_STACK as u64;
+            let s = runtime::process::POSIX_STACK as u64;
             Rlimit { cur: s, max: s }
         }
         rlimit::NOFILE => Rlimit { cur: fd::MAX_FDS as u64, max: fd::MAX_FDS as u64 },
@@ -157,7 +157,7 @@ pub unsafe fn getrandom(buf: usize, len: usize, flags: u32) -> SysResult {
     }
     // SAFETY: the program passed `len` bytes.
     let out = unsafe { user::slice_mut(buf, len)? };
-    rt::object::try_random_bytes(out).map_err(error::kernel)?;
+    runtime::object::try_random_bytes(out).map_err(error::kernel)?;
     Ok(len)
 }
 
@@ -187,7 +187,7 @@ pub unsafe fn prctl(option: u32, arg: usize) -> SysResult {
         prctl::GET_NAME => {
             // A thread's own name, or else the process's.
             let out = signal::thread_name().unwrap_or_else(|| {
-                let info = rt::object::process_self_info().unwrap_or_default();
+                let info = runtime::object::process_self_info().unwrap_or_default();
                 let name = info.name();
                 let mut out = [0u8; signal::THREAD_NAME_SIZE];
                 let n = name.len().min(signal::THREAD_NAME_SIZE - 1);

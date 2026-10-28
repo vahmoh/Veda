@@ -216,7 +216,7 @@ impl Editor {
         // What the file holds now is the agent's to replace again.
         tab.agent_file = true;
         let msg = format!("Saved {}", tab.title);
-        self.show_toast(msg, rt::time::now_ns());
+        self.show_toast(msg, runtime::time::now_ns());
         Ok(())
     }
 

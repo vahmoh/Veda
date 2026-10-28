@@ -43,8 +43,8 @@
 use core::sync::atomic::Ordering;
 
 use abi::{Error, WaitItem, nr};
-use rt::object::{Handle, Port};
-use rt::sys::call;
+use runtime::object::{Handle, Port};
+use runtime::sys::call;
 
 use crate::architecture::signal as arch;
 use crate::signal;

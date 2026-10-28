@@ -178,7 +178,7 @@ impl Output {
                 true
             }
             Err(e) => {
-                rt::println!("cannot open an audio stream ({e:?})");
+                runtime::println!("cannot open an audio stream ({e:?})");
                 false
             }
         }
@@ -187,7 +187,7 @@ impl Output {
     /// The stream went with its service: a new one is tried at once.
     pub fn lost(&mut self) {
         if self.stream.is_some() || self.client.is_some() {
-            rt::println!("the audio service went away");
+            runtime::println!("the audio service went away");
             self.losses = self.losses.wrapping_add(1);
         }
         self.stream = None;

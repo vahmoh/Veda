@@ -34,8 +34,8 @@ use guest_sys::netif::{self, Frames, Interface};
 use guest_sys::retry::{self, Backoff, Ended, Served};
 use proto::netring::Link;
 use proto::wlan::{PhyInfo, RadioState, channel_flags, wlanmlme_ctl, wlanphy};
-use rt::guest::Watch;
-use rt::object::Channel;
+use runtime::guest::Watch;
+use runtime::object::Channel;
 use rustix::event::{PollFd, PollFlags, poll};
 
 use mlme::Radio;

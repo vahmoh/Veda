@@ -969,7 +969,7 @@ impl App for CalcApp {
 
     fn agent_invoke(&mut self, action: &str, args: &ui::agent::Value) -> Result<ui::agent::Value, String> {
         let result = agent::invoke(&mut self.calc, action, args);
-        self.store.due = Some(rt::time::now_ns() + SAVE_DELAY_NS);
+        self.store.due = Some(runtime::time::now_ns() + SAVE_DELAY_NS);
         if action == "set_mode" || action == "convert" {
             self.panel = false;
         }

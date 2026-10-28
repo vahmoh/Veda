@@ -19,7 +19,7 @@ use alloc::vec::Vec;
 use compositor::buffers::{Buffers, Layout, Surface};
 use compositor::switcher;
 use gfx::Bitmap;
-use rt::vm::Mapping;
+use runtime::vm::Mapping;
 
 /// A bitmap of `w` x `h`, cleared; `None` if there is not the memory for it.
 pub(crate) fn try_bitmap(w: i32, h: i32) -> Option<Bitmap> {

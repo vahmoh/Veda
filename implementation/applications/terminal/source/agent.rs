@@ -144,7 +144,7 @@ impl Terminal {
         match &self.job {
             Some(job) if !job.finished() => json!({
                 "command": job.shown.as_str(),
-                "seconds": rt::time::now_ns().saturating_sub(job.started) / 1_000_000_000,
+                "seconds": runtime::time::now_ns().saturating_sub(job.started) / 1_000_000_000,
             }),
             _ => Value::Null,
         }

@@ -50,7 +50,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use ipc::{Bytes, enumeration, message, protocol, union};
-use rt::object::Channel;
+use runtime::object::Channel;
 
 use crate::netring::LinkEndpoints;
 

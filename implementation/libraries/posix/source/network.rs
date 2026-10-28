@@ -8,7 +8,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use ipc::IpcError;
 use proto::net::{NetError, net};
-use rt::sync::Mutex;
+use runtime::sync::Mutex;
 
 use crate::linux::errno::*;
 

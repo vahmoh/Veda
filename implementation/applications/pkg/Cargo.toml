@@ -15,7 +15,7 @@ test = false
 bench = false
 
 [dependencies]
-rt = { workspace = true, default-features = false }
+runtime = { workspace = true, default-features = false }
 abi = { workspace = true }
 ipc = { workspace = true }
 proto = { workspace = true }
@@ -24,11 +24,11 @@ packages = { workspace = true, features = ["std"] }
 getrandom = { workspace = true }
 zeroize = { workspace = true, features = ["alloc"] }
 
-# In Veda, `rt`'s runtime, whose heap is the allocator of every program
-# (documentation/RUST.md); on the build machine, where `pkg` makes keys,
-# packages and repositories too, the standard library's.
+# In Veda, the runtime is `runtime`'s, whose heap is the allocator of every
+# program (documentation/RUST.md); on the build machine, where `pkg` makes
+# keys, packages and repositories too, the standard library's.
 [target.'cfg(target_os = "veda")'.dependencies]
-rt = { workspace = true }
+runtime = { workspace = true }
 
 [lints]
 workspace = true

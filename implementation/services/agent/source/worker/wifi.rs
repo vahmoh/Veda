@@ -5,7 +5,7 @@
 
 use net::wifi;
 use proto::wlan::ConnState;
-use rt::time::Duration;
+use runtime::time::Duration;
 use serde_json::{Value, json};
 
 use super::Ctx;
@@ -25,7 +25,7 @@ impl Ctx {
             }
             "scan" => {
                 let _ = wifi::scan();
-                rt::time::sleep(Duration::from_secs(3));
+                runtime::time::sleep(Duration::from_secs(3));
                 let nets = wifi::networks().map_err(err)?;
                 let list: Vec<Value> = nets
                     .iter()

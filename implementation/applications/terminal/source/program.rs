@@ -28,9 +28,9 @@ use abi::{Error, map_flags};
 use ipc::WaitSet;
 use proto::fs::vfs;
 use proto::tty::{self, Tty};
-use rt::object::{Channel, Event, Handle, Process, Socket};
-use rt::process::{Spawn, SpawnError, is_executable};
-use rt::sync::Mutex;
+use runtime::object::{Channel, Event, Handle, Process, Socket};
+use runtime::process::{Spawn, SpawnError, is_executable};
+use runtime::sync::Mutex;
 use terminal_core::text::{Capture, Utf8Stream};
 
 use crate::job::Output;
@@ -242,7 +242,7 @@ fn ended(code: i64) -> (i32, Option<&'static str>) {
 /// arguments it starts with.
 struct Program {
     path: String,
-    image: rt::vm::Mapping,
+    image: runtime::vm::Mapping,
     size: usize,
     args: Vec<String>,
 }
@@ -251,7 +251,7 @@ struct Program {
 /// script the interpreter its first line names (`#!`, from the directory
 /// `cwd`), given its argument and the script's path before the arguments
 /// but the first, as `posix_spawn` runs one. An interpreter may be a script
-/// too, `rt::process::SCRIPT_DEPTH` deep.
+/// too, `runtime::process::SCRIPT_DEPTH` deep.
 fn program(fs: &vfs::Client, cwd: &str, path: &str, args: &[String]) -> Result<Program, String> {
     let (mut path, mut args) = (path.to_string(), args.to_vec());
     let mut depth = 0;
@@ -262,7 +262,7 @@ fn program(fs: &vfs::Client, cwd: &str, path: &str, args: &[String]) -> Result<P
             Err(_) => return Err("the file system is not responding".into()),
         };
         let size = size as usize;
-        let image = rt::vm::Mapping::new(vmo, size.max(1), map_flags::READ).map_err(|e| format!("{path}: {e}"))?;
+        let image = runtime::vm::Mapping::new(vmo, size.max(1), map_flags::READ).map_err(|e| format!("{path}: {e}"))?;
         // SAFETY: a read-only mapping of the file, which nothing changes:
         // the system image's pages, or a copy made for us alone.
         let bytes = unsafe { &image.as_slice()[..size] };
@@ -272,11 +272,11 @@ fn program(fs: &vfs::Client, cwd: &str, path: &str, args: &[String]) -> Result<P
         if !bytes.starts_with(b"#!") {
             return Err(spawn_error(&path, SpawnError::NotExecutable));
         }
-        if depth == rt::process::SCRIPT_DEPTH {
+        if depth == runtime::process::SCRIPT_DEPTH {
             return Err(format!("{path}: its interpreter is a script, and so on, too deep"));
         }
         depth += 1;
-        let interpreter = rt::process::interpreter(bytes)
+        let interpreter = runtime::process::interpreter(bytes)
             .and_then(|i| Some((core::str::from_utf8(i.path).ok()?, i.argument.map(core::str::from_utf8))))
             .ok_or_else(|| format!("{path}: its first line names no interpreter that can run it"))?;
         let (interpreter, argument) = match interpreter {

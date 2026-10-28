@@ -26,9 +26,9 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use abi::startup::role;
 use abi::{WaitItem, signals};
-use rt::object::{Handle, Process, Vmo};
-use rt::process::{Spawn, SpawnError};
-use rt::sync::Mutex;
+use runtime::object::{Handle, Process, Vmo};
+use runtime::process::{Spawn, SpawnError};
+use runtime::sync::Mutex;
 
 use crate::error::{self, SysResult};
 use crate::fd::{self, Description, Object};
@@ -54,7 +54,7 @@ pub fn koid() -> u64 {
     if k != 0 {
         return k;
     }
-    let k = rt::object::process_self_info().map_or(0, |i| i.koid);
+    let k = runtime::object::process_self_info().map_or(0, |i| i.koid);
     KOID.store(k, Ordering::Relaxed);
     k
 }
@@ -69,7 +69,7 @@ pub fn pid() -> i32 {
 
 /// The id of the process that started this one.
 pub fn ppid() -> i32 {
-    rt::object::process_self_info().map_or(0, |i| if i.parent_koid == 0 { 0 } else { pid_of(i.parent_koid) })
+    runtime::object::process_self_info().map_or(0, |i| if i.parent_koid == 0 { 0 } else { pid_of(i.parent_koid) })
 }
 
 /// The processes this one started and has not waited for.
@@ -92,13 +92,13 @@ pub fn is_child(pid: i32) -> bool {
 /// Ends the process with `code` (`exit`).
 pub fn exit(code: i32) -> ! {
     crate::fd::flush_logs();
-    rt::sys::process_exit((code & 0xff) as i64)
+    runtime::sys::process_exit((code & 0xff) as i64)
 }
 
 /// Ends the process as killed by signal `s`.
 pub fn exit_by_signal(s: u32) -> ! {
     crate::fd::flush_logs();
-    rt::sys::process_exit(abi::EXIT_CODE_SIGNALED - s as i64)
+    runtime::sys::process_exit(abi::EXIT_CODE_SIGNALED - s as i64)
 }
 
 /// A wait status (`WIFEXITED`, `WIFSIGNALED`) for an exit code.
@@ -317,9 +317,9 @@ fn executable(cwd: &str, name: &[u8]) -> Result<String, isize> {
 /// Linux runs one: given its argument, if the line has one, then the
 /// script as `name` names it, before the arguments that follow the
 /// program's own name. An interpreter may be a script too,
-/// `rt::process::SCRIPT_DEPTH` deep (`ELOOP` beyond); a line that names
-/// none, or does not end soon enough, is `ENOEXEC`. Each file is the system image's pages, or a copy
-/// of its own that nothing else changes.
+/// `runtime::process::SCRIPT_DEPTH` deep (`ELOOP` beyond); a line that
+/// names none, or does not end soon enough, is `ENOEXEC`. Each file is the
+/// system image's pages, or a copy of its own that nothing else changes.
 fn program(cwd: &str, name: &[u8]) -> Result<Program, isize> {
     let mut path = executable(cwd, name)?;
     let mut given = name.to_vec();
@@ -328,17 +328,17 @@ fn program(cwd: &str, name: &[u8]) -> Result<Program, isize> {
     loop {
         let (vmo, size): (Vmo, u64) = error::ipc(vfs::with(|c| c.read_file(path.clone()))?)?;
         let size = usize::try_from(size).map_err(|_| ENOEXEC)?;
-        let mut start = [0u8; rt::process::SCRIPT_LINE_MAX];
-        let start = &mut start[..size.min(rt::process::SCRIPT_LINE_MAX)];
+        let mut start = [0u8; runtime::process::SCRIPT_LINE_MAX];
+        let start = &mut start[..size.min(runtime::process::SCRIPT_LINE_MAX)];
         vmo.read(0, start).map_err(error::kernel)?;
         if !start.starts_with(b"#!") {
             return Ok(Program { path, vmo, size, prefix });
         }
-        if depth == rt::process::SCRIPT_DEPTH {
+        if depth == runtime::process::SCRIPT_DEPTH {
             return Err(ELOOP);
         }
         depth += 1;
-        let interpreter = rt::process::interpreter(start).ok_or(ENOEXEC)?;
+        let interpreter = runtime::process::interpreter(start).ok_or(ENOEXEC)?;
         // What came before stays after the script: the interpreter's
         // arguments go first, the script's name replacing the program's.
         let mut args = alloc::vec![interpreter.path.to_vec()];
@@ -397,7 +397,7 @@ unsafe fn spawn(res: usize, name: usize, ops: usize, attr: usize, argv: usize, e
     if let Some(vmo) = tty::vmo_for_child() {
         handles.push((role::TERMINAL, vmo.into_handle()));
     }
-    if let Ok(me) = rt::object::Process::current() {
+    if let Ok(me) = runtime::object::Process::current() {
         // Sent through the channel, it is to be transferable.
         let rights = abi::Rights(
             abi::Rights::SIGNAL.0 | abi::Rights::WAIT.0 | abi::Rights::GET_INFO.0 | abi::Rights::TRANSFER.0,
@@ -637,7 +637,7 @@ pub fn kill(pid: i32, s: u32) -> SysResult {
 pub unsafe fn getrusage(who: i32, buf: usize) -> SysResult {
     let mut r = Rusage::default();
     if who == 0 {
-        let ns = rt::object::process_self_info().map_or(0, |i| i.cpu_time_ns);
+        let ns = runtime::object::process_self_info().map_or(0, |i| i.cpu_time_ns);
         r.utime = Timeval { sec: (ns / 1_000_000_000) as i64, usec: ((ns % 1_000_000_000) / 1000) as i64 };
     }
     // SAFETY: the program passed a struct rusage.

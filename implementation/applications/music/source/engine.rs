@@ -22,10 +22,10 @@ use audio::source::Source;
 use files::format::duration as format_time;
 use proto::audio::{OutputStream, ring};
 use proto::fs::vfs;
-use rt::object::Event;
-use rt::println;
-use rt::sync::Mutex;
-use rt::vm::Mapping;
+use runtime::object::Event;
+use runtime::println;
+use runtime::sync::Mutex;
+use runtime::vm::Mapping;
 use videos_core::output::{Kept, Output};
 
 use crate::library::{self, Track};
@@ -317,7 +317,7 @@ impl Engine {
     /// there) and is empty.
     fn prepare_stream(&mut self, rate: u32) {
         self.output.set_rate(rate);
-        match self.output.keep(rt::time::now_ns()) {
+        match self.output.keep(runtime::time::now_ns()) {
             Kept::Opened => self.stream_base = 0,
             Kept::Same => self.stream_base = self.output.flush().unwrap_or(0),
             Kept::None => {}
@@ -403,7 +403,7 @@ impl Engine {
         if play {
             self.set_paused(false);
         }
-        let now = rt::time::now_ns();
+        let now = runtime::time::now_ns();
         self.set_status(|s| {
             s.state = if play { PlayState::Playing } else { PlayState::Paused };
             s.path = path;
@@ -493,7 +493,7 @@ impl Engine {
                 self.seek(ms);
                 // The new position goes out with the id: the UI must never
                 // take the old one for the answer.
-                let (pos, now) = (self.track_position(), rt::time::now_ns());
+                let (pos, now) = (self.track_position(), runtime::time::now_ns());
                 self.set_status(|s| {
                     s.pos_frames = pos;
                     s.pos_ns = now;
@@ -573,7 +573,7 @@ impl Engine {
         self.vfs = proto::connect(vfs::NAME).ok().map(vfs::Client::new);
         self.rescan(true);
         loop {
-            let now = rt::time::now_ns();
+            let now = runtime::time::now_ns();
             let mut deadline = if self.playing { now + TICK_NS } else { abi::DEADLINE_INFINITE };
             // Without a stream for the track loaded: the output is tried again.
             if self.source.is_some()
@@ -584,13 +584,13 @@ impl Engine {
             let mut items =
                 vec![WaitItem { handle: self.shared.wake.raw(), signals: signals::SIGNALED, ..Default::default() }];
             self.output.wait_items(&mut items);
-            let _ = rt::object::wait_many(&mut items, deadline);
+            let _ = runtime::object::wait_many(&mut items, deadline);
             let _ = self.shared.wake.clear();
             if let Some(s) = self.output.stream() {
                 let _ = s.event().clear();
             }
             self.output.observe();
-            if self.source.is_some() && self.output.keep(rt::time::now_ns()) == Kept::Opened {
+            if self.source.is_some() && self.output.keep(runtime::time::now_ns()) == Kept::Opened {
                 self.renewed();
             }
             self.publish_output();
@@ -606,7 +606,7 @@ impl Engine {
             }
             // Publish the position; detect the end of the track.
             let pos = self.track_position();
-            let now = rt::time::now_ns();
+            let now = runtime::time::now_ns();
             let finished = self.playing && self.eof && self.output.stream().is_some_and(drained);
             if finished {
                 println!("finished {}", self.title);
@@ -633,7 +633,7 @@ impl Engine {
 
 /// Starts the engine thread.
 pub fn start(shared: Arc<Shared>, volume: f32) -> bool {
-    let builder = rt::thread::Builder::new().name("decoder");
+    let builder = runtime::thread::Builder::new().name("decoder");
     builder
         .spawn(move || -> () {
             let mut e = Engine {

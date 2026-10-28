@@ -466,7 +466,7 @@ pub fn invoke(app: &mut PaintApp, action: &str, args: &Value) -> Result<Value, S
             if let Some(s) = arg_opt_str(args, "secondary") {
                 app.settings.secondary = color::parse(s).ok_or_else(|| format!("there is no colour called {s}"))?;
             }
-            app.settings_changed(rt::time::now_ns());
+            app.settings_changed(runtime::time::now_ns());
             Ok(json!({ "primary": color_json(app.settings.primary), "secondary": color_json(app.settings.secondary) }))
         }
         "set_tool" => {
@@ -480,7 +480,7 @@ pub fn invoke(app: &mut PaintApp, action: &str, args: &Value) -> Result<Value, S
             if let Some(size) = opt_f32(args, "size")? {
                 app.settings.set_size(size);
             }
-            app.settings_changed(rt::time::now_ns());
+            app.settings_changed(runtime::time::now_ns());
             Ok(json!({ "tool": app.settings.tool.name(), "size": app.settings.size() }))
         }
         "select" => {

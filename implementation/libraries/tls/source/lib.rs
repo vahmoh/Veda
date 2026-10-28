@@ -62,7 +62,7 @@ pub fn connect(
     timeout: Duration,
     config: &ClientConfig,
 ) -> Result<TlsStream<net::TcpStream>, TlsError> {
-    let start = rt::time::Instant::now();
+    let start = runtime::time::Instant::now();
     let tcp = net::TcpStream::connect_host(host, port, timeout)?;
     // The handshake gets what is left of the time (at least a second).
     let left = timeout.saturating_sub(start.elapsed()).max(Duration::from_secs(1));

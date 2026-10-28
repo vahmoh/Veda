@@ -36,7 +36,7 @@ use alloc::vec::Vec;
 use abi::signals::PEER_CLOSED;
 use ipc::{Bytes, IpcError};
 use proto::fs::{FsError, SocketConnection, SocketDatagram, SocketPeer, socket_event, socket_kind};
-use rt::object::{Channel, Handle};
+use runtime::object::{Channel, Handle};
 
 use filesystem::tree::NodeId;
 

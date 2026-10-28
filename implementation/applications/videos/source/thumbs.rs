@@ -16,10 +16,10 @@ use std::sync::Arc;
 use abi::map_flags;
 use proto::fs::{open_flags, vfs};
 use proto::media::{MediaInfo, OpenOptions, open_flags as media_open};
-use rt::object::Event;
-use rt::println;
-use rt::sync::Mutex;
-use rt::vm::Mapping;
+use runtime::object::Event;
+use runtime::println;
+use runtime::sync::Mutex;
+use runtime::vm::Mapping;
 
 use crate::decoder::{self, Decoder, Image};
 
@@ -105,7 +105,7 @@ pub fn start(decoder: String) -> Option<Arc<Shared>> {
         ready: Event::create().ok()?,
     });
     let ours = shared.clone();
-    rt::thread::Builder::new()
+    runtime::thread::Builder::new()
         .name("thumbnails")
         .priority(abi::priority::NORMAL - 2)
         .stack_size(256 << 10)
@@ -135,7 +135,7 @@ impl Worker {
             let next = self.shared.queue.lock().pop_front();
             let Some(request) = next else {
                 let deadline =
-                    if self.decoder.is_some() { rt::time::now_ns() + IDLE_NS } else { abi::DEADLINE_INFINITE };
+                    if self.decoder.is_some() { runtime::time::now_ns() + IDLE_NS } else { abi::DEADLINE_INFINITE };
                 if self.shared.wake.wait(abi::signals::SIGNALED, deadline).is_err() {
                     // Nothing to do for a while: the decoder goes.
                     self.decoder = None;

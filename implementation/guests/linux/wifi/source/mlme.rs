@@ -24,7 +24,7 @@ use proto::wlan::{
     Band, ChannelInfo, KeyKind, MLME_EVENT, MlmeEvent, PhyError, PhyInfo, PhyStats, channel_flags, phy_caps,
     wlanmlme_ctl,
 };
-use rt::object::Channel;
+use runtime::object::Channel;
 
 use crate::nl80211::{self, Bss, Event, Nl80211};
 

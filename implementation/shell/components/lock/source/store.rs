@@ -21,8 +21,8 @@ use lock_core::password::{MAX_RECORD, Record, RecordError};
 use lock_core::throttle::Throttle;
 use proto::fs::FsError;
 use proto::vfs;
-use rt::object::Vmo;
-use rt::println;
+use runtime::object::Vmo;
+use runtime::println;
 
 /// The lock service's private directory.
 const DIR: &str = "/home/.private/lock";

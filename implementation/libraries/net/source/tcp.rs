@@ -10,8 +10,8 @@ use core::net::SocketAddr;
 use abi::RawHandle;
 use ipc::{Bytes, IpcError};
 use proto::net::{MAX_SEND, NetError, SocketEvent, SocketRequest, TcpOptions};
-use rt::object::Channel;
-use rt::time::Duration;
+use runtime::object::Channel;
+use runtime::time::Duration;
 
 use crate::{CONNECT_TIMEOUT, deadline, send_request, with_client};
 
@@ -56,7 +56,7 @@ impl TcpStream {
         let mut opts = *opts;
         opts.connect_timeout_ms = timeout.as_millis().min(u32::MAX as u128) as u32;
         let mut s = Self::begin_connect(addr, &opts)?;
-        let end = rt::time::deadline_after(timeout);
+        let end = runtime::time::deadline_after(timeout);
         loop {
             if s.poll_connect()? {
                 return Ok(s);
@@ -70,11 +70,11 @@ impl TcpStream {
     /// Resolves `host` and connects to the first address that answers,
     /// within `timeout` overall.
     pub fn connect_host(host: &str, port: u16, timeout: Duration) -> Result<TcpStream, NetError> {
-        let start = rt::time::now_ns();
+        let start = runtime::time::now_ns();
         let addrs = crate::lookup(host, crate::AddrFamily::Any, timeout.min(crate::RESOLVE_TIMEOUT))?.addresses;
         let mut last = NetError::NameNotFound;
         for (i, ip) in addrs.iter().enumerate() {
-            let spent = Duration::from_nanos(rt::time::now_ns() - start);
+            let spent = Duration::from_nanos(runtime::time::now_ns() - start);
             let Some(left) = timeout.checked_sub(spent) else { break };
             // Leave time for the remaining addresses.
             let share = if i + 1 < addrs.len() { left / 2 } else { left };

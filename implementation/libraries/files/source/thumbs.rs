@@ -18,8 +18,8 @@ use alloc::vec::Vec;
 
 use abi::RawHandle;
 use gfx::Bitmap;
-use rt::object::Event;
-use rt::sync::{Condvar, Mutex};
+use runtime::object::Event;
+use runtime::sync::{Condvar, Mutex};
 
 use crate::fs::Fs;
 
@@ -49,7 +49,7 @@ impl Thumbnailer {
         let shared =
             Arc::new(Shared { queue: Mutex::new(VecDeque::new()), wake: Condvar::new(), done: Mutex::new(Vec::new()) });
         let worker_shared = shared.clone();
-        rt::thread::Builder::new()
+        runtime::thread::Builder::new()
             .name("thumbnails")
             .stack_size(512 * 1024)
             .spawn(move || worker(worker_shared, theirs, max_w, max_h))

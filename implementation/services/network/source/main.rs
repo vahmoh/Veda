@@ -59,12 +59,12 @@ use proto::net::{
     RESOLVE_RESULT, RouteInfo, Scope, SocketEvent, SocketInfo, TcpOptions, format_mac, net, netdev,
 };
 use proto::netring::{self, LinkEndpoints, SlotMeta, kind};
-use rt::object::{Channel, Socket};
-use rt::println;
+use runtime::object::{Channel, Socket};
+use runtime::println;
 
 use socket::{Conn, Events, Turn};
 
-rt::entry!(main);
+runtime::entry!(main);
 
 /// `net` connections, of all processes and of one.
 const MAX_CLIENTS: usize = 256;
@@ -258,7 +258,7 @@ struct Network {
 }
 
 fn now_us() -> u64 {
-    rt::time::now_ns() / 1000
+    runtime::time::now_ns() / 1000
 }
 
 /// Whether `who` may attach network devices: the device manager (whose
@@ -275,7 +275,7 @@ fn manages(who: &ClientIdentity) -> bool {
 
 /// The time now, in Unix seconds.
 fn unix_s() -> u64 {
-    rt::time::unix_time_ns() / 1_000_000_000
+    runtime::time::unix_time_ns() / 1_000_000_000
 }
 
 fn protocol_name(p: FirewallProtocol) -> &'static str {
@@ -839,7 +839,7 @@ impl Network {
                 self.check_manager()?;
                 // The stack's clock is the network service's: when each
                 // happened, in Unix time.
-                let (now, unix_s) = (now_us(), rt::time::unix_time_ns() / 1_000_000_000);
+                let (now, unix_s) = (now_us(), runtime::time::unix_time_ns() / 1_000_000_000);
                 let at = |us: u64| unix_s.saturating_sub(now.saturating_sub(us) / 1_000_000);
                 Ok(self
                     .network
@@ -1029,14 +1029,14 @@ impl Network {
 
     fn run(&mut self) -> ! {
         loop {
-            if rt::time::now_ns().saturating_sub(self.last_reseed) >= RESEED_NS {
+            if runtime::time::now_ns().saturating_sub(self.last_reseed) >= RESEED_NS {
                 // The stack is seeded already: a reseed the kernel cannot
                 // give now waits for the next.
                 let mut seed = [0u8; 32];
-                if rt::object::try_random_bytes(&mut seed).is_ok() {
+                if runtime::object::try_random_bytes(&mut seed).is_ok() {
                     self.stack.add_entropy(&seed);
                 }
-                self.last_reseed = rt::time::now_ns();
+                self.last_reseed = runtime::time::now_ns();
             }
             // Frames in and out, timers, housekeeping; then the clients.
             self.stack.poll(now_us(), &mut DeviceLinks(&mut self.devices));
@@ -1263,7 +1263,7 @@ fn summary(c: &FirewallConfig) -> String {
 
 fn main() -> i32 {
     let mut seed = [0u8; 64];
-    rt::object::random_bytes(&mut seed);
+    runtime::object::random_bytes(&mut seed);
     let mut stack = Stack::new(&seed, now_us());
     // Until the saved settings are read, the defaults: nothing comes in
     // that this machine did not ask for.
@@ -1293,7 +1293,7 @@ fn main() -> i32 {
         lingering: BTreeMap::new(),
         events: Events::new(),
         next_key: 16,
-        last_reseed: rt::time::now_ns(),
+        last_reseed: runtime::time::now_ns(),
         firewall,
         settings_read: store.is_none(),
         store,

@@ -7,7 +7,7 @@
 //! root resource and handles to the boot modules; every other process is
 //! created from user space. Like every Veda program, `init` is a
 //! position-independent ELF64 executable: the kernel places it at a random
-//! address and relocates it there, as `rt::process` does the others.
+//! address and relocates it there, as `runtime::process` does the others.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;

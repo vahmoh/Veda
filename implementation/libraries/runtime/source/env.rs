@@ -4,14 +4,14 @@
 //! Program arguments, environment and the handles received at startup.
 //!
 //! A Veda program reads them from the startup message on the bootstrap
-//! channel ([`adopt`], which `rt`'s entry point calls). A program on the
-//! standard library (`target_os = "veda"`) does not: the C library's POSIX
-//! layer has read it, and keeps the descriptors, the terminal and the
-//! registry for itself. Its arguments, environment and working directory
-//! are then the standard library's, a handle of an application's role
-//! (`role::USER` and above) is the layer's to give, and a registry channel
-//! is one of the program's own, which the layer asks `init` for: what goes
-//! through it is the program's, as through the layer's.
+//! channel ([`adopt`], which `runtime`'s entry point calls). A program on
+//! the standard library (`target_os = "veda"`) does not: the C library's
+//! POSIX layer has read it, and keeps the descriptors, the terminal and
+//! the registry for itself. Its arguments, environment and working
+//! directory are then the standard library's, a handle of an application's
+//! role (`role::USER` and above) is the layer's to give, and a registry
+//! channel is one of the program's own, which the layer asks `init` for:
+//! what goes through it is the program's, as through the layer's.
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -150,7 +150,7 @@ pub fn handle_roles() -> Vec<u32> {
 
 /// Reads the startup message from the bootstrap channel the kernel passed
 /// the process and keeps what it says for [`args`], [`vars`], [`cwd`] and
-/// [`take_handle`]. `rt`'s entry point does this for Rust programs; C
+/// [`take_handle`]. `runtime`'s entry point does this for Rust programs; C
 /// programs' POSIX layer, which has an entry point of its own, calls it.
 #[cfg(not(target_os = "veda"))]
 pub fn adopt(bootstrap: RawHandle) {

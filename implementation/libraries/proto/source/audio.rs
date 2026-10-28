@@ -60,8 +60,8 @@ use alloc::string::String;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use ipc::{enumeration, message, protocol};
-use rt::object::{Event, Vmo};
-use rt::vm::Mapping;
+use runtime::object::{Event, Vmo};
+use runtime::vm::Mapping;
 
 enumeration! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -884,7 +884,7 @@ impl OutputStream {
             if free >= frames.min(self.ring.capacity()) {
                 return free;
             }
-            if self.event.wait(abi::signals::SIGNALED, deadline).is_err() || rt::time::now_ns() >= deadline {
+            if self.event.wait(abi::signals::SIGNALED, deadline).is_err() || runtime::time::now_ns() >= deadline {
                 return self.free();
             }
         }
@@ -906,7 +906,7 @@ impl OutputStream {
 
     /// Frames played right now (see [`OutputStream::played_at`]).
     pub fn played_now(&self) -> u64 {
-        self.played_at(rt::time::now_ns())
+        self.played_at(runtime::time::now_ns())
     }
 }
 
@@ -988,7 +988,7 @@ impl InputStream {
             if n >= frames.min(self.ring.capacity()) {
                 return n;
             }
-            if self.event.wait(abi::signals::SIGNALED, deadline).is_err() || rt::time::now_ns() >= deadline {
+            if self.event.wait(abi::signals::SIGNALED, deadline).is_err() || runtime::time::now_ns() >= deadline {
                 return self.available();
             }
         }
