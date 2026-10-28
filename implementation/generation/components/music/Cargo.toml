@@ -2,30 +2,22 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "videogen"
-description = "Films and encodes the sample videos shipped with Veda"
+name = "musicgen"
+description = "Composes and renders the sample music shipped with Veda"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
 
 [[bin]]
-name = "videogen"
+name = "musicgen"
 path = "source/main.rs"
 
 [dependencies]
 # What the generators share (a host library of implementation/generation/).
-gencommon = { path = "../common" }
-rav1e = { workspace = true }
-md-5 = { workspace = true }
+gencommon = { path = "../../libraries" }
 audio = { workspace = true }
-font = { workspace = true }
-gfx = { workspace = true }
 image = { workspace = true, features = ["encode"] }
-fastnoise-lite = { workspace = true }
-rand = { workspace = true }
-rand_pcg = { workspace = true }
-raster = { workspace = true }
 
 [lints]
 workspace = true

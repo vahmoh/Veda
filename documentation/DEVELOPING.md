@@ -229,7 +229,7 @@ Linux's first commit kept the firmware's setup if it logs
 `keeping the firmware's pipe bpp 24` and no
 `PPS 0 turn panel power off`. The startup's look is in
 `implementation/services/compositor/source/startup.rs`, its sound in
-`implementation/generation/music/source/songs/startup.rs`.
+`implementation/generation/components/music/source/songs/startup.rs`.
 
 | `dmesg` | Shows |
 |---------|-------|
@@ -486,7 +486,7 @@ in: `videos --decoder /system/bin/fakedec FILE` plays a text file of
 timecode and a tone, crashing, hanging or falling behind when the clip
 asks (`verification/ui/videos-fake.vts`).
 
-`implementation/generation/videos` makes the sample videos
+`implementation/generation/components/videos` makes the sample videos
 (`samples/Videos`, copied to `~/Videos`) with rav1e (AV1, on the build
 machine only) and a FLAC encoder of its own, and writes
 `/system/tests/videos/Countdown.md5`, every picture's MD5, for `systest`

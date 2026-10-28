@@ -33,7 +33,7 @@ packages = { workspace = true, features = ["std"] }
 getrandom = { workspace = true }
 zeroize = { workspace = true, features = ["alloc"] }
 # The generators' manifests, which the image is packed from.
-gencommon = { path = "../implementation/generation/common" }
+gencommon = { path = "../implementation/generation/libraries" }
 
 [dev-dependencies]
 # The checks of screenshots are tested on pictures the tests make.

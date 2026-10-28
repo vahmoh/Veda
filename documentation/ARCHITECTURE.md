@@ -978,8 +978,8 @@ by `cargo automation linux`.
   allocate nothing once they run.
 - **The `audio` library** holds the formats (WAV, QOA), resampling,
   mixing, an FFT, the synthesiser and sequencer with which
-  `implementation/generation/music` renders the album and the startup
-  sound, and voice processing:
+  `implementation/generation/components/music` renders the album and the
+  startup sound, and voice processing:
 
 | Part | What it does |
 |------|--------------|

@@ -78,10 +78,10 @@ members = [
     "implementation/shell/components/welcome",
     "implementation/shell/libraries",
     "implementation/services/audio",
-    "implementation/generation/assets",
-    "implementation/generation/common",
-    "implementation/generation/music",
-    "implementation/generation/videos",
+    "implementation/generation/components/assets",
+    "implementation/generation/components/music",
+    "implementation/generation/components/videos",
+    "implementation/generation/libraries",
     "implementation/drivers/nvme",
     "verification/systest",
     "verification/nettest",
@@ -193,14 +193,14 @@ webpki-roots = { version = "1.0.9", default-features = false }
 aes-gcm = { version = "0.11.1", default-features = false, features = ["aes", "zeroize"] }
 chacha20poly1305 = { version = "0.11", default-features = false, features = ["zeroize"] }
 x25519-dalek = { version = "3", default-features = false, features = ["static_secrets", "zeroize"] }
-# MD5 for implementation/generation/videos only: FLAC's STREAMINFO
-# signature and the sample videos' picture fingerprints (what FFmpeg's
-# decoder checks them against).
+# MD5 for implementation/generation/components/videos only: FLAC's
+# STREAMINFO signature and the sample videos' picture fingerprints (what
+# FFmpeg's decoder checks them against).
 md-5 = { version = "0.11.0", default-features = false }
-# AV1 encoding for implementation/generation/videos only (the sample
-# videos, made on the build machine; never in the image): Veda decodes
-# AV1, but has no encoder of its own. No assembly, no threads, so it
-# encodes the same everywhere.
+# AV1 encoding for implementation/generation/components/videos only (the
+# sample videos, made on the build machine; never in the image): Veda
+# decodes AV1, but has no encoder of its own. No assembly, no threads, so
+# it encodes the same everywhere.
 rav1e = { version = "0.8.1", default-features = false }
 # Ed25519 signatures: certificates' in TLS, and repositories' indexes
 # (implementation/libraries/packages), which it signs the same every time.

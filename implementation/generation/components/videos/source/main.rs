@@ -48,9 +48,9 @@ use std::time::{Duration, Instant};
 use gencommon::output;
 
 /// The fonts the countdown is set in.
-pub const INTER: &[u8] = include_bytes!("../../../ports/fonts/Inter-Regular.otf");
-pub const INTER_SEMIBOLD: &[u8] = include_bytes!("../../../ports/fonts/Inter-SemiBold.otf");
-pub const MONO: &[u8] = include_bytes!("../../../ports/fonts/JetBrainsMono-Regular.ttf");
+pub const INTER: &[u8] = include_bytes!("../../../../ports/fonts/Inter-Regular.otf");
+pub const INTER_SEMIBOLD: &[u8] = include_bytes!("../../../../ports/fonts/Inter-SemiBold.otf");
+pub const MONO: &[u8] = include_bytes!("../../../../ports/fonts/JetBrainsMono-Regular.ttf");
 
 const VIDEOS: &str = "samples/Videos";
 const TESTS: &str = "tests/videos";

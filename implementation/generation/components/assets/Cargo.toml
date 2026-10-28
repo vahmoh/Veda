@@ -15,7 +15,7 @@ path = "source/main.rs"
 
 [dependencies]
 # What the generators share (a host library of implementation/generation/).
-gencommon = { path = "../common" }
+gencommon = { path = "../../libraries" }
 image = { workspace = true, features = ["encode"] }
 
 [lints]
