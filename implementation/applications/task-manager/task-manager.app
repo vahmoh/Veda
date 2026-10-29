@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 name=Task Manager
-exe=/system/bin/taskmgr
+exe=/system/bin/task-manager
 icon=monitor
 category=System
 description=Processes, CPU and memory usage

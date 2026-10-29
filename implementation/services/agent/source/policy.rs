@@ -199,7 +199,7 @@ mod tests {
             },
         );
         apps.insert(
-            "taskmgr".to_string(),
+            "task-manager".to_string(),
             AppAgentInfo {
                 summary: String::new(),
                 actions: alloc::vec![action("end_task", Risk::Destructive)],
@@ -210,7 +210,7 @@ mod tests {
         assert!(known_key("system.files.write", &apps) && known_key("system.wifi.off", &apps));
         for k in [
             "terminal.clear",
-            "taskmgr.end_task",
+            "task-manager.end_task",
             "editor.save",
             "system.files.empty_trash",
             "system.system.shutdown",
@@ -224,7 +224,7 @@ mod tests {
         }
         // A planted file allows nothing it should not.
         let planted = r#"{"always":[{"key":"terminal.run_command","label":"Terminal"},
-            {"key":"taskmgr.end_task","label":"End tasks"},{"key":"system.files.empty_trash","label":"Empty"},
+            {"key":"task-manager.end_task","label":"End tasks"},{"key":"system.files.empty_trash","label":"Empty"},
             {"key":"anything.at_all","label":"x"}]}"#;
         let p = Permissions::from_json(planted, &|k| known_key(k, &apps));
         assert_eq!(p.list(), alloc::vec![("terminal.run_command".to_string(), "Terminal".to_string())]);

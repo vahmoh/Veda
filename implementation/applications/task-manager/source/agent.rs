@@ -293,7 +293,7 @@ impl TaskManager {
                  applications for the agent"
             ));
         }
-        if t.name == "taskmgr" {
+        if t.name == "task-manager" {
             return Err("that is Task Manager itself: close its window instead".into());
         }
         // The window's question about this process is answered.

@@ -877,7 +877,7 @@ impl Icon {
             "video" | "videos" | "film" | "movie" => Icon::Video,
             "terminal" => Icon::Terminal,
             "settings" => Icon::Settings,
-            "monitor" | "sysmon" | "taskmgr" => Icon::Chart,
+            "monitor" | "sysmon" | "task-manager" => Icon::Chart,
             "gamepad" | "game" => Icon::Gamepad,
             "car" => Icon::Car,
             "siren" | "police" | "interceptor" => Icon::Siren,

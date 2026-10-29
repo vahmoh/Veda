@@ -883,7 +883,7 @@ impl Settings {
         y = card.bottom() + 20;
         let b1 = Rect::new(r.x, y, 190, 38);
         if ui.button_full(b1, Some(Icon::Chart), "Task Manager", ButtonKind::Secondary) {
-            self.launch_app("taskmgr", &[]);
+            self.launch_app("task-manager", &[]);
         }
         let b2 = Rect::new(b1.right() + 12, y, 160, 38);
         if ui.button_full(b2, Some(Icon::Terminal), "Terminal", ButtonKind::Secondary) {

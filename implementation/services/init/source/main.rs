@@ -102,7 +102,7 @@ struct Child {
 /// The applications through which the user manages the system, which may
 /// end its processes as well as applications: Task Manager, and the
 /// Terminal's `kill -f` (the programs the Terminal starts speak for it).
-const MANAGERS: [&str; 2] = ["taskmgr", "terminal"];
+const MANAGERS: [&str; 2] = ["task-manager", "terminal"];
 
 /// Connections that may wait for a service to register: from one process,
 /// and from all together. A connection beyond them is refused.

@@ -112,7 +112,7 @@ pub const PROGRAMS: &[Program] = &[
     Program::std("videos"),
     Program::std("photos"),
     Program::std("terminal"),
-    Program::std("taskmgr"),
+    Program::std("task-manager"),
     Program::std("filemgr").named("files"),
     Program::std("settings"),
     Program::std("editor"),

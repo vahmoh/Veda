@@ -19,7 +19,7 @@ const ORDER: [&str; 11] = [
     "calculator",
     "terminal",
     "settings",
-    "taskmgr",
+    "task-manager",
     "interceptor",
 ];
 
@@ -38,7 +38,7 @@ pub fn tile_colors(id: &str) -> (Color, Color) {
         "videos" => (Color::hex(0x3CC8F0), Color::hex(0x2563D9)),
         "terminal" => (Color::hex(0x454B59), Color::hex(0x1C1F26)),
         "settings" => (Color::hex(0x98A2B8), Color::hex(0x56607A)),
-        "taskmgr" => (Color::hex(0x35D9AE), Color::hex(0x10897A)),
+        "task-manager" => (Color::hex(0x35D9AE), Color::hex(0x10897A)),
         "calculator" => (Color::hex(0x7A8CA8), Color::hex(0x3A4660)),
         "paint" => (Color::hex(0xFFA34D), Color::hex(0xE0457B)),
         "about" => (Color::hex(0x8C7CFF), Color::hex(0x4B3FD1)),

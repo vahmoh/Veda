@@ -56,7 +56,7 @@ members = [
     "implementation/applications/music",
     "implementation/applications/videos",
     "implementation/applications/terminal",
-    "implementation/applications/taskmgr",
+    "implementation/applications/task-manager",
     "implementation/applications/files",
     "implementation/applications/settings",
     "implementation/applications/interceptor",

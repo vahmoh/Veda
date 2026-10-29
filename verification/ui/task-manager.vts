@@ -4,9 +4,9 @@
 # Task Manager (1280x800 with the taskbar): the process table (search,
 # sorting, context menu), ending an application with confirmation, the
 # extra warning for system processes, and the performance graphs.
-boot-cmdline "run=taskmgr"
+boot-cmdline "run=task-manager"
 wait-serial "desktop ready" 90
-wait-serial "started taskmgr" 60
+wait-serial "started task-manager" 60
 wait 3
 # Maximise the window (Super+Up): the positions below assume it.
 key meta_l-up
@@ -18,7 +18,7 @@ type "about"
 key ret
 wait-serial "started about" 30
 wait 3
-shot target/veda/taskmgr-1-processes.png
+shot target/veda/task-manager-1-processes.png
 # Search for it (the search box is right of About's window), select it with
 # Enter, end it with Delete and confirm.
 click 0.795 0.081
@@ -28,7 +28,7 @@ key ret
 wait 1
 key delete
 wait 1
-shot target/veda/taskmgr-2-confirm.png
+shot target/veda/task-manager-2-confirm.png
 key ret
 wait-serial "about exited with code -1002" 30
 # A system process asks with a stronger warning; Esc cancels.
@@ -40,7 +40,7 @@ key ret
 wait 1
 key delete
 wait 1
-shot target/veda/taskmgr-3-system.png
+shot target/veda/task-manager-3-system.png
 key esc
 wait 1
 reject-serial "filesystem exited"
@@ -51,15 +51,15 @@ key esc
 wait 1
 click 0.8375 0.1375
 wait 2
-shot target/veda/taskmgr-4-by-memory.png
+shot target/veda/task-manager-4-by-memory.png
 click 0.2 0.224 right
 wait 1
-shot target/veda/taskmgr-5-menu.png
+shot target/veda/task-manager-5-menu.png
 key esc
 # The Performance tab: CPU, then Memory.
 key ctrl-2
 wait 5
-shot target/veda/taskmgr-6-cpu.png
+shot target/veda/task-manager-6-cpu.png
 click 0.098 0.275
 wait 2
-shot target/veda/taskmgr-7-memory.png
+shot target/veda/task-manager-7-memory.png

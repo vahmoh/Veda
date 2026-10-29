@@ -370,7 +370,7 @@ impl App for TaskManager {
 fn main() {
     let tm = TaskManager::new();
     let mut spec = WindowSpec::new("Task Manager", 900, 600);
-    spec.app_id = "taskmgr".into();
+    spec.app_id = "task-manager".into();
     spec.min_width = 640;
     spec.min_height = 420;
     std::process::exit(ui::run(spec, tm));
