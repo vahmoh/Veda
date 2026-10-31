@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Tests of the media decoder (`/system/bin/mediadec`, FFmpeg and dav1d)
+//! Tests of the media decoder (`/system/bin/media-decoder`, FFmpeg and dav1d)
 //! and the libraries it is built from, when the image has them (the cross
 //! toolchain built them):
 //!
@@ -32,7 +32,7 @@ use runtime::vm;
 use crate::posix::run_c_for;
 use crate::{TestResult, check, vfs_client};
 
-const DECODER: &str = "/system/bin/mediadec";
+const DECODER: &str = "/system/bin/media-decoder";
 const COUNTDOWN: &str = "/system/samples/Videos/Countdown.mkv";
 const COUNTDOWN_MD5: &str = "/system/tests/videos/Countdown.md5";
 
@@ -85,7 +85,7 @@ fn start_decoder(fs: &vfs::Client) -> Result<Decoder, String> {
     let image = vm::Mapping::new(vmo, size as usize, map_flags::READ).map_err(s)?;
     let (ours, theirs) = Channel::create().map_err(s)?;
     // SAFETY: a read-only mapping of the VFS's copy of the program.
-    let process = Spawn::new("mediadec")
+    let process = Spawn::new("media-decoder")
         .path(DECODER)
         .handle(media::CONTROL_ROLE, theirs.into_handle())
         .start(unsafe { image.as_slice() })

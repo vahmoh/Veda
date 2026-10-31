@@ -1,19 +1,19 @@
 # SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 # SPDX-License-Identifier: GPL-3.0-only
 
-# Videos with its decoder (mediadec: FFmpeg and dav1d) on the sample videos
-# in ~/Videos (1280x800 with the taskbar): the library, then Countdown (AV1
-# and FLAC, a flash and a beep on every second) played, paused, sought with
-# keys and the seek bar, stepped a picture each way, its volume changed and
-# muted, full screen and back, and played to its end with its sound in step
-# with the pictures; then the portrait video, which has no sound. The
+# Videos with its decoder (media-decoder: FFmpeg and dav1d) on the sample
+# videos in ~/Videos (1280x800 with the taskbar): the library, then Countdown
+# (AV1 and FLAC, a flash and a beep on every second) played, paused, sought
+# with keys and the seek bar, stepped a picture each way, its volume changed
+# and muted, full screen and back, and played to its end with its sound in
+# step with the pictures; then the portrait video, which has no sound. The
 # window's client area starts at (90, 54).
 requires media
 boot-cmdline "startup-sound=off"
 boot-cmdline "run=videos"
 fail-on "PANIC"
 fail-on "videos: panic:"
-fail-on "mediadec: panic:"
+fail-on "media-decoder: panic:"
 wait-serial "videos: decoder: FFmpeg" 90
 wait-serial "videos: library: 3 videos in /home/user/Videos" 30
 wait 6

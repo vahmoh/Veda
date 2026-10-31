@@ -15,7 +15,7 @@
 //!   which the system image installs in `/system` (`gcc`, `as`, `ld`, the C
 //!   library and its headers);
 //! * the **media libraries**, dav1d and FFmpeg built with the cross
-//!   toolchain, which `mediadec` (the decoder of Videos) is linked with;
+//!   toolchain, which `media-decoder` (the decoder of Videos) is linked with;
 //! * **Rust**: its compiler, which runs on this machine, and its standard
 //!   library for this machine and for Veda's own target
 //!   (`architecture::STD_TARGET`), where it stands on the C library (see
@@ -738,17 +738,17 @@ fn without_c_comments(text: &str) -> String {
     }
 }
 
-/// The media decoder (`implementation/services/mediadec`) for the system
-/// image, if the cross toolchain and the media libraries are built: its
-/// Rust half (built for the architecture's bare target and made one object
-/// exporting `mediadec_main` alone), its C shim, FFmpeg and dav1d, linked
-/// by the cross GCC as a static position-independent program. Built again
-/// when any of it changed.
-fn mediadec() -> Result<Option<Vec<u8>>> {
+/// The media decoder (`implementation/services/media-decoder`) for the
+/// system image, if the cross toolchain and the media libraries are built:
+/// its Rust half (built for the architecture's bare target and made one
+/// object exporting `media_decoder_main` alone), its C shim, FFmpeg and
+/// dav1d, linked by the cross GCC as a static position-independent program.
+/// Built again when any of it changed.
+fn media_decoder() -> Result<Option<Vec<u8>>> {
     let (Some(gcc), Some(libraries)) = (cross_gcc(), media_libraries()) else { return Ok(None) };
-    let crate_dir = util::workspace_root().join("implementation").join("services").join("mediadec");
-    let shim = crate_dir.join("shim");
-    let header = shim.join("vmd.h");
+    let crate_dir = util::workspace_root().join("implementation").join("services").join("media-decoder");
+    let source_dir = crate_dir.join("source");
+    let header = source_dir.join("vmd.h");
     // No floating point crosses the shim: the Rust half passes it otherwise.
     let text = util::read_to_string(&header)?;
     let code = without_c_comments(&text);
@@ -759,19 +759,19 @@ fn mediadec() -> Result<Option<Vec<u8>>> {
     util::run(util::cargo_for(BARE_TARGET).args([
         "rustc",
         "--package",
-        "mediadec",
+        "media-decoder",
         "--target",
         BARE_TARGET,
         "--release",
         "--crate-type",
         "staticlib",
     ]))?;
-    let rust_lib = util::target_dir().join(BARE_TARGET).join("release").join("libmediadec.a");
-    let out = root().join("build").join("mediadec");
+    let rust_lib = util::target_dir().join(BARE_TARGET).join("release").join("libmedia_decoder.a");
+    let out = root().join("build").join("media-decoder");
     util::create_dir_all(&out)?;
-    let rust_obj = out.join("mediadec-rs.o");
+    let rust_obj = out.join("media-decoder-rs.o");
     {
-        isolated_object(&rust_lib, &rust_obj, &["mediadec_main"])?;
+        isolated_object(&rust_lib, &rust_obj, &["media_decoder_main"])?;
         // What it defines globally must be that and nothing else.
         let nm = Command::new(cross_tool("nm"))
             .args(["-g", "--defined-only", "--format=just-symbols"])
@@ -779,17 +779,17 @@ fn mediadec() -> Result<Option<Vec<u8>>> {
             .output()
             .map_err(|e| format!("running nm: {e}"))?;
         let defined: Vec<String> = String::from_utf8_lossy(&nm.stdout).lines().map(str::to_string).collect();
-        if defined != ["mediadec_main"] {
+        if defined != ["media_decoder_main"] {
             util::remove_file(&rust_obj)?;
-            return Err(format!("the media decoder's Rust half exports more than mediadec_main: {defined:?}"));
+            return Err(format!("the media decoder's Rust half exports more than media_decoder_main: {defined:?}"));
         }
     }
     let media = media_root();
     let includes =
         [media.join("ffmpeg").join("system").join("include"), media.join("dav1d").join("system").join("include")];
     let libc = root().join("cross").join("sysroot").join("system").join("lib").join("libc.a");
-    let sources = util::files_in(&shim, &["c"])?;
-    let headers: Vec<PathBuf> = ["vmd.h", "vmd_internal.h"].iter().map(|h| shim.join(h)).collect();
+    let sources = util::files_in(&source_dir, &["c"])?;
+    let headers: Vec<PathBuf> = ["vmd.h", "vmd_internal.h"].iter().map(|h| source_dir.join(h)).collect();
     let mut objects = Vec::new();
     for source in &sources {
         let object = out.join(source.file_name().unwrap()).with_extension("o");
@@ -809,8 +809,8 @@ fn mediadec() -> Result<Option<Vec<u8>>> {
         }
         objects.push(object);
     }
-    let exe = out.join("mediadec");
-    let unstripped = out.join("mediadec.debug");
+    let exe = out.join("media-decoder");
+    let unstripped = out.join("media-decoder.debug");
     let mut inputs: Vec<&Path> = vec![&rust_obj, &libc, &gcc];
     inputs.extend(objects.iter().map(PathBuf::as_path));
     inputs.extend(libraries.iter().map(PathBuf::as_path));
@@ -930,13 +930,13 @@ fn native_files() -> Result<Vec<(String, Vec<u8>)>> {
 /// test programs (`tests/c`, `tests/rust`), the native toolchain (as
 /// `/system` has it), the system's shared libraries (`lib/libc.so`, the C
 /// library's shared object, which is the dynamic linker, and GCC's
-/// runtime's), and the media decoder (`bin/mediadec`) and its
-/// libraries' tests (`tests/media`) if `with_mediadec`, with the licence
+/// runtime's), and the media decoder (`bin/media-decoder`) and its
+/// libraries' tests (`tests/media`) if `with_media_decoder`, with the licence
 /// texts of the ports these have (`licences/<port>`). The POSIX layer
 /// goes into the C library once, first; all of it is made while this
 /// build holds the toolchain's lock. Says what is missing, and whether
 /// the toolchain is older than its ports.
-pub fn image_files(with_mediadec: bool) -> Result<Vec<(String, Vec<u8>)>> {
+pub fn image_files(with_media_decoder: bool) -> Result<Vec<(String, Vec<u8>)>> {
     if cross_gcc().is_none() && !built("native toolchain") {
         util::status("Note", "no C toolchain, C tests or media decoder in the image (`cargo automation toolchain`)");
         return Ok(Vec::new());
@@ -969,8 +969,8 @@ pub fn image_files(with_mediadec: bool) -> Result<Vec<(String, Vec<u8>)>> {
         files.retain(|(p, _)| *p != path);
         files.push((path, library));
     }
-    if with_mediadec {
-        let decoder = mediadec()?;
+    if with_media_decoder {
+        let decoder = media_decoder()?;
         if decoder.is_none() {
             util::status(
                 "Note",
@@ -982,7 +982,7 @@ pub fn image_files(with_mediadec: bool) -> Result<Vec<(String, Vec<u8>)>> {
         if decoder.is_some() || !tests.is_empty() {
             licensed.extend(["ffmpeg", "dav1d"]);
         }
-        files.extend(decoder.map(|exe| ("bin/mediadec".to_string(), exe)));
+        files.extend(decoder.map(|exe| ("bin/media-decoder".to_string(), exe)));
         files.extend(tests.into_iter().map(|(name, exe)| (format!("tests/media/{name}"), exe)));
     }
     for port in licensed {

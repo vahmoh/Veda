@@ -139,7 +139,7 @@ pub fn build(o: &Options) -> Result<System> {
     // What the toolchain makes for the image: the C and Rust test programs,
     // the C toolchain itself (gcc, as, ld, the C library and its headers, as
     // /system has them), the media decoder and its libraries' tests.
-    let toolchain = toolchain::image_files(!o.skip.iter().any(|s| s == "mediadec"))?;
+    let toolchain = toolchain::image_files(!o.skip.iter().any(|s| s == "media-decoder"))?;
     // The system's repository, its configuration, and the tests'
     // repositories, whose packages' programs are the C test program
     // `hello` and the Calculator's.
@@ -151,8 +151,8 @@ pub fn build(o: &Options) -> Result<System> {
     if !toolchain.is_empty() || !on_std.is_empty() {
         bare.push("posix");
     }
-    if toolchain.iter().any(|(path, _)| path == "bin/mediadec") {
-        bare.push("mediadec");
+    if toolchain.iter().any(|(path, _)| path == "bin/media-decoder") {
+        bare.push("media-decoder");
     }
     groups.push(notices::Group::new(architecture::BARE_TARGET, &bare));
     add_all(&mut initrd, &mut licensed, toolchain);

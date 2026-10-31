@@ -990,17 +990,17 @@ by `cargo automation linux`.
 ## Video
 
 Videos (`implementation/applications/videos`) plays videos with FFmpeg and
-dav1d, decoded in a sandboxed process, `mediadec`
-(`implementation/services/mediadec`), over `proto::media`. In the app, the
-window shows pictures, an engine thread runs the decoder, an audio thread
-feeds the audio service and keeps the clock, and a second decoder makes
-thumbnails. In `mediadec`, a Rust half serves the protocol and a C shim is
-the only code that calls FFmpeg.
+dav1d, decoded in a sandboxed process, `media-decoder`
+(`implementation/services/media-decoder`), over `proto::media`. In the app,
+the window shows pictures, an engine thread runs the decoder, an audio
+thread feeds the audio service and keeps the clock, and a second decoder
+makes thumbnails. In `media-decoder`, a Rust half serves the protocol and a
+C shim is the only code that calls FFmpeg.
 
-- **The sandbox.** `mediadec` starts with one handle, its control channel,
-  and no registry: it reaches nothing but a read-only channel to the one
-  file it is sent. Before it reads anything, it gives up the kernel log,
-  processes and new executable memory, for good.
+- **The sandbox.** `media-decoder` starts with one handle, its control
+  channel, and no registry: it reaches nothing but a read-only channel to
+  the one file it is sent. Before it reads anything, it gives up the kernel
+  log, processes and new executable memory, for good.
 - **A decoder that fails** is killed and started again at the picture on
   the screen: one that crashes, does not answer a call in time, stops
   counting its *heartbeat* (a shared page) for 5 s, or takes more than half
@@ -1023,7 +1023,7 @@ the only code that calls FFmpeg.
 - **Seeking** starts a new *generation* of the pool and the ring, so that
   what the decoder made for an older one is passed over.
 - **Playback** is a state machine in `videos-core`, tested on the host.
-  `verification/fakedec` stands in for `mediadec`, crashing, hanging or
+  `verification/fakedec` stands in for `media-decoder`, crashing, hanging or
   falling behind when asked; `systest` checks the real decoder (`checkasm`,
   and a sample video against its encoder's MD5s).
 

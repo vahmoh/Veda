@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 # Videos without its decoder (as in an image built without the C
-# toolchain, where /system/bin/mediadec is missing; here a decoder that does
-# not exist is named): a video opened says that playback isn't available and
-# why, and the library says so above the videos.
+# toolchain, where /system/bin/media-decoder is missing; here a decoder
+# that does not exist is named): a video opened says that playback isn't
+# available and why, and the library says so above the videos.
 boot-cmdline "run=videos:--decoder,/system/bin/nodecoder,/system/tests/videos/fake/pattern.mkv"
 fail-on "PANIC"
 fail-on "videos: panic:"

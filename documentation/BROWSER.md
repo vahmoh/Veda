@@ -527,7 +527,7 @@ and WebM, Ogg, WAV; MP3, AAC and FLAC streams), parses, decodes, converts
 and plays it.
 
 * **Codecs** are FFmpeg's, through gst-libav, as Videos' decoder's are
-  (`mediadec`): AV1 (dav1d), VP9, VP8 and H.264 pictures; Opus, Vorbis,
+  (`media-decoder`): AV1 (dav1d), VP9, VP8 and H.264 pictures; Opus, Vorbis,
   AAC, MP3 and FLAC sound, and PCM in WAV. `canPlayType` and
   `MediaSource.isTypeSupported` answer what these can, as WebKit asks
   GStreamer's registry. The processor decodes (there is no hardware

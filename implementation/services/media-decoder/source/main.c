@@ -2,8 +2,8 @@
  * SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
  * SPDX-License-Identifier: GPL-3.0-only
  *
- * main.c - mediadec's entry point, FFmpeg's log, and what the shim's files
- * share.
+ * main.c - media-decoder's entry point, FFmpeg's log, and what the shim's
+ * files share.
  *
  * The program starts in C, as every program on musl does; main() hands it
  * to the Rust half. FFmpeg's messages go to the system log (the process's
@@ -122,5 +122,5 @@ void vmd_copy_text(char *dst, size_t cap, const char *src)
 
 int main(void)
 {
-	return mediadec_main();
+	return media_decoder_main();
 }

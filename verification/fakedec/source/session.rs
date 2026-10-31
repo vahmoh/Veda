@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! A decoding session: the protocol's calls ([`media::Server`]) and the work
-//! the loop does between them, one piece at a time, as `mediadec`'s session
-//! does them (`implementation/services/mediadec/source/session.rs`, which
-//! this follows call for call). Its "decoders" make each picture and each
-//! record of sound from the clip's description at once, where `mediadec`'s
+//! the loop does between them, one piece at a time, as `media-decoder`'s
+//! session does them
+//! (`implementation/services/media-decoder/source/session.rs`, which this
+//! follows call for call). Its "decoders" make each picture and each record
+//! of sound from the clip's description at once, where `media-decoder`'s
 //! decode packets.
 //!
 //! The work, in order of preference: put a decoded picture into a free slot
@@ -17,9 +18,9 @@
 //! record of sound holding the time crashes the decoder, or hangs it, and
 //! each picture decoded takes `slow_ms`.
 //!
-//! Where it differs from `mediadec`: a new source does not inherit an exact
-//! seek's target, the skip level holds for every source opened after it
-//! (FFmpeg's decoders start again from none), the pictures it leaves out
+//! Where it differs from `media-decoder`: a new source does not inherit an
+//! exact seek's target, the skip level holds for every source opened after
+//! it (FFmpeg's decoders start again from none), the pictures it leaves out
 //! count as skipped, and `decode_us` is measured.
 
 use alloc::collections::VecDeque;
@@ -44,7 +45,7 @@ use runtime::time::Duration;
 use crate::clip::{self, Clip, Fault, HEAD_BYTES, Picture, Secs};
 use crate::{picture, sound};
 
-/// The largest picture unless the player asks for more (as `mediadec`).
+/// The largest picture unless the player asks for more (as `media-decoder`).
 const DEFAULT_MAX: (u32, u32) = (4096, 2304);
 /// Sound decoded ahead while stopped (µs).
 const STOPPED_SOUND_US: i64 = 500_000;
@@ -154,7 +155,7 @@ pub struct Session {
     last: Option<(Picture, SlotMeta)>,
     /// No picture (sound) of this generation was published yet.
     /// The pictures ended: the pool's end is set once those waiting are
-    /// published (as `mediadec`).
+    /// published (as `media-decoder`).
     video_end: bool,
     first_picture: bool,
     first_sound: bool,
@@ -188,7 +189,7 @@ impl Session {
     // ---- the work ------------------------------------------------------------
 
     /// The player is about to run out of sound: it comes before pictures
-    /// (as in `mediadec`).
+    /// (as in `media-decoder`).
     fn sound_low(&self) -> bool {
         let Some(out) = &self.audio_out else { return false };
         let ended = self.opened.as_ref().and_then(|o| o.audio.as_ref()).is_none_or(|t| t.ended);
@@ -197,7 +198,8 @@ impl Session {
     }
 
     /// Hidden, no picture is decoded: once the sound (if any) is past them,
-    /// the pictures end (`mediadec` reads through to the end of the file).
+    /// the pictures end (`media-decoder` reads through to the end of the
+    /// file).
     fn end_hidden(&mut self) -> bool {
         if self.skip != SkipLevel::Hidden {
             return false;
@@ -400,7 +402,7 @@ impl Session {
         let mut samples = Vec::with_capacity(frames as usize * 2);
         sound::fill(&mut samples, first, frames, rate);
         track.next_us = end_us;
-        // Hidden, the pictures' packets go by unread (as in `mediadec`):
+        // Hidden, the pictures' packets go by unread (as in `media-decoder`):
         // shown again without a seek, they start at the next key frame.
         if hidden
             && let Some(video) = opened.video.as_mut()
@@ -689,7 +691,7 @@ impl media::media::Server for Session {
             MediaError::Corrupt
         })?;
         // More pixels than the player takes are refused (FFmpeg's
-        // `max_pixels`, as `mediadec` sets it).
+        // `max_pixels`, as `media-decoder` sets it).
         let max_w = if options.max_width == 0 { DEFAULT_MAX.0 } else { options.max_width.min(media::MAX_SIDE) };
         let max_h = if options.max_height == 0 { DEFAULT_MAX.1 } else { options.max_height.min(media::MAX_SIDE) };
         if clip.width as u64 * clip.height as u64 > max_w as u64 * max_h as u64 {
@@ -806,12 +808,12 @@ impl media::media::Server for Session {
         let (w, h) = media::fit(dw, dh, max_width.clamp(1, MAX_THUMBNAIL), max_height.clamp(1, MAX_THUMBNAIL));
         let clip = &opened.clip;
         // The picture shown at `at_us`, decoded from the key frame before it
-        // (as `mediadec` decodes it, at most 90 pictures on).
+        // (as `media-decoder` decodes it, at most 90 pictures on).
         let key = clip.key_before(clip.frame_at(at_us.max(0)));
         let picture = clip.picture(clip.frame_at(at_us.max(0)).min(key + 89));
         decode_picture(clip, &picture);
-        // As `mediadec`'s, which seeks its source to the picture: decoding
-        // carries on from there, in the same generation.
+        // As `media-decoder`'s, which seeks its source to the picture:
+        // decoding carries on from there, in the same generation.
         if let Some(video) = opened.video.as_mut() {
             *video = VideoTrack { next: picture.index + 1, ended: false };
         }

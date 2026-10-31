@@ -39,7 +39,7 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("bootinfo", &[]),
     ("elf", &[]),
     ("posix", &[]),
-    ("mediadec", &[]),
+    ("media-decoder", &[]),
     ("initrd", &["std"]),
     ("heap", &[]),
     ("frames", &[]),

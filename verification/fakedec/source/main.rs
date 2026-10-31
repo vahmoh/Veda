@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `fakedec` — a stand-in for the media decoder, `mediadec`: it speaks
-//! [`proto::media`] as `mediadec` does, with pictures it draws and a tone
-//! in place of a file's, so that Videos' playback, pacing, seeking, crash
-//! recovery and agent can be developed and tested without FFmpeg.
+//! `fakedec` — a stand-in for the media decoder, `media-decoder`: it speaks
+//! [`proto::media`] as `media-decoder` does, with pictures it draws and a
+//! tone in place of a file's, so that Videos' playback, pacing, seeking,
+//! crash recovery and agent can be developed and tested without FFmpeg.
 //!
-//! Videos starts it as it starts `mediadec` (`/system/bin/fakedec`),
+//! Videos starts it as it starts `media-decoder` (`/system/bin/fakedec`),
 //! with nothing but the control channel ([`proto::media::CONTROL_ROLE`]);
-//! as `mediadec`, it ends when the player goes away, even hung.
+//! as `media-decoder`, it ends when the player goes away, even hung.
 //! The videos it opens are text files ([`clip`]):
 //!
 //! ```text
@@ -26,7 +26,7 @@
 //! their timing checked, on the screen and in the log of a test.
 //!
 //! * [`session`]: the protocol's calls and the work between them, as
-//!   `mediadec`'s session does them.
+//!   `media-decoder`'s session does them.
 //! * [`clip`]: what a fake video is, and the times of its pictures and
 //!   sound.
 //! * [`picture`]: the pictures, drawn.
@@ -51,22 +51,22 @@ use crate::session::Session;
 runtime::entry!(main);
 
 /// Answers the player and decodes until the player closes the control
-/// channel (as `mediadec_main` does).
+/// channel (as `media_decoder_main` does).
 fn main() -> i32 {
     let Some(control) = runtime::env::take_handle(media::CONTROL_ROLE) else {
         println!("started without a control channel");
         return 1;
     };
     let control = Channel::from_handle(control);
-    // As `mediadec`'s watchdog: the player gone, the decoder ends, hung or
-    // not.
+    // As `media-decoder`'s watchdog: the player gone, the decoder ends, hung
+    // or not.
     let handle = control.raw();
     let watchdog =
         runtime::thread::Builder::new().name("watchdog").stack_size(16 << 10).spawn(move || media::watchdog(handle));
     if watchdog.is_err() {
         println!("cannot start its watchdog");
     }
-    // As `mediadec` does, before reading anything.
+    // As `media-decoder` does, before reading anything.
     if let Err(e) = runtime::process::restrict(abi::restrict::ALL) {
         println!("cannot give up what it does without ({e:?})");
         return 1;

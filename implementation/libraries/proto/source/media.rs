@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The media protocol: how an application has videos and sounds decoded by
-//! `mediadec`, a sandboxed decoder process (FFmpeg and dav1d, see
-//! `implementation/services/mediadec`).
+//! `media-decoder`, a sandboxed decoder process (FFmpeg and dav1d, see
+//! `implementation/services/media-decoder`).
 //!
 //! The application starts the decoder itself, handing it nothing but the
 //! control channel ([`CONTROL_ROLE`]): no registry, so no file system,

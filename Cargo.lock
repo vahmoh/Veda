@@ -1574,7 +1574,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mediadec"
+name = "media-decoder"
 version = "0.1.0"
 dependencies = [
  "abi",

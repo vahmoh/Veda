@@ -2,16 +2,17 @@
  * SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
  * SPDX-License-Identifier: GPL-3.0-only
  *
- * vmd.h - mediadec's shim: the only code of Veda's that calls FFmpeg.
+ * vmd.h - media-decoder's shim: the only code of Veda's that calls FFmpeg.
  *
- * mediadec is a Rust program in C's world (a static ELF program on musl):
- * its Rust half (../source) speaks the media protocol, fills the shared
- * frame pool and sound ring and schedules the work; this shim opens,
- * demuxes, decodes (AV1 through dav1d), converts and fingerprints with
- * FFmpeg, behind plain integers and opaque objects. No floating-point value
- * crosses it: the Rust half is built for the architecture's bare target
- * (<architecture>-unknown-none), which may pass them otherwise than GCC
- * (`cargo automation` refuses `float` and `double` here).
+ * media-decoder is a Rust program in C's world (a static ELF program on
+ * musl): its Rust half (the .rs files here) speaks the media protocol,
+ * fills the shared frame pool and sound ring and schedules the work; this
+ * shim opens, demuxes, decodes (AV1 through dav1d), converts and
+ * fingerprints with FFmpeg, behind plain integers and opaque objects. No
+ * floating-point value crosses it: the Rust half is built for the
+ * architecture's bare target (<architecture>-unknown-none), which may pass
+ * them otherwise than GCC (`cargo automation` refuses `float` and `double`
+ * here).
  *
  * Times are microseconds. Objects are made by the shim and freed by it.
  */
@@ -222,6 +223,6 @@ int32_t vmd_frame_md5(const struct vmd_frame *frame, uint8_t md5[16]);
 /* ---- the program -------------------------------------------------------- */
 
 /* The Rust half: the program after main() set the shim up. */
-int32_t mediadec_main(void);
+int32_t media_decoder_main(void);
 
 #endif

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 # SPDX-License-Identifier: GPL-3.0-only
 
-# FFmpeg: the demuxers, decoders, scaler and resampler of mediadec, the
+# FFmpeg: the demuxers, decoders, scaler and resampler of media-decoder, the
 # sandboxed decoder that Videos plays videos with (built LGPL: no GPL or
 # non-free parts; build.sh checks).
 name = "ffmpeg"

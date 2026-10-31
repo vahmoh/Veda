@@ -56,7 +56,7 @@ the release vendors.
 | `musl` | 1.2.6 | MIT | The C library |
 | `rust` | 1.99.0 | MIT OR Apache-2.0; its LLVM Apache-2.0 WITH LLVM-exception | Compiler, standard library for Veda's target, Clippy |
 | `dav1d` | 1.5.4 | BSD-2-Clause | AV1, in FFmpeg |
-| `ffmpeg` | 9.0.2 | LGPL-2.1-or-later | `mediadec`, the sandboxed decoder of Videos |
+| `ffmpeg` | 9.0.2 | LGPL-2.1-or-later | `media-decoder`, the sandboxed decoder of Videos |
 
 And the data the C library reads, which the image installs with the
 toolchain (`automation/source/databases.rs`, which writes the user
@@ -130,9 +130,9 @@ What the patches change:
 
 dav1d (8- and 16-bit) and FFmpeg are built static, with the architecture's
 assembler (nasm on AMD64) and their `checkasm` (static, position-independent
-programs), which `systest` runs on Veda, into `target/toolchain/media`, as only `mediadec` links them. FFmpeg
+programs), which `systest` runs on Veda, into `target/toolchain/media`, as only `media-decoder` links them. FFmpeg
 has only the demuxers, decoders (AV1 through dav1d), parsers, bitstream
-filter, scaler and resampler that `mediadec` uses. It stays LGPL:
+filter, scaler and resampler that `media-decoder` uses. It stays LGPL:
 `build.sh` checks that `config.h` has `CONFIG_GPL 0` and
 `CONFIG_NONFREE 0`, and that the assembly, threads and dav1d were found.
 

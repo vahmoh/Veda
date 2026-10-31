@@ -295,7 +295,7 @@ settings (`implementation/ports/architectures/<architecture>/settings.sh`) in
 |-----------|---------------|
 | `cross/` | The cross toolchain for this machine (on AMD64 `x86_64-veda-gcc`, `x86_64-veda-g++` with libstdc++, and binutils) and a sysroot laid out like Veda's `/system`. Its C++ compiler also builds the native GCC, which is written in C++ |
 | `native/system/` | The toolchain that runs inside Veda: GCC, binutils, GMP, MPFR and MPC, the C library and its headers |
-| `media/` | dav1d and FFmpeg, which the video decoder (`mediadec`) links |
+| `media/` | dav1d and FFmpeg, which the video decoder (`media-decoder`) links |
 | `rust/` | Rust ([Rust on Veda](RUST.md#the-toolchain)) |
 
 Later builds redo what changed: each stage keeps a fingerprint of what

@@ -10,11 +10,11 @@
 //!   video was left remembered between runs (`~/.config/videos/state`).
 //!   While a video plays, the screen does not lock for want of input
 //!   (`Ui::keep_awake`).
-//! * The decoding is done by `mediadec` (FFmpeg and dav1d) in a process of
-//!   its own that reaches nothing but what it is sent ([`engine`]); pictures
-//!   come through shared memory and are shown in time with the sound
-//!   ([`player`], [`audio`]); a second decoder makes the library's pictures
-//!   ([`thumbs`]).
+//! * The decoding is done by `media-decoder` (FFmpeg and dav1d) in a process
+//!   of its own that reaches nothing but what it is sent ([`engine`]);
+//!   pictures come through shared memory and are shown in time with the
+//!   sound ([`player`], [`audio`]); a second decoder makes the library's
+//!   pictures ([`thumbs`]).
 //! * A second `videos FILE` hands the file to the running player
 //!   (`proto::instance`); [`agent`] lets the voice agent play and control
 //!   videos.
@@ -24,7 +24,7 @@
 //!
 //! Usage: `videos [--decoder PATH] [FILE | FOLDER]`: a file plays at once,
 //! and its folder (or the folder given) is the library in place of
-//! `~/Videos`; `--decoder` names a stand-in for `mediadec`, such as the
+//! `~/Videos`; `--decoder` names a stand-in for `media-decoder`, such as the
 //! tests' `fakedec`.
 //!
 //! Keyboard in the player: Space or K play/pause, J/L back/forward 10 s,

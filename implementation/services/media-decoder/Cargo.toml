@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "mediadec"
+name = "media-decoder"
 description = "The media decoder: FFmpeg and dav1d in a sandboxed process, which Videos plays videos with"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 # Built for the architecture's bare target as a static library and linked
-# with the C shim (shim/) and FFmpeg by Veda's GCC:
+# with the C shim (source/*.c) and FFmpeg by Veda's GCC:
 # automation/source/toolchain.rs.
 [lib]
 path = "source/lib.rs"

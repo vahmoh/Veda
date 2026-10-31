@@ -19,7 +19,7 @@ wait-serial "videos: first frame in" 10
 wait 4
 key alt-tab
 wait 2
-type "kill -f mediadec"
+type "kill -f media-decoder"
 key ret
 wait-serial "videos: decoder stopped (exit" 20
 wait-serial "videos: decoder restarted in" 10

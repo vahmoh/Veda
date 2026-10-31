@@ -3,7 +3,7 @@
 
 //! The engine thread: the decoder's keeper.
 //!
-//! It starts the decoder (`mediadec`, or a stand-in named on the command
+//! It starts the decoder (`media-decoder`, or a stand-in named on the command
 //! line) with nothing but its control channel, opens videos with it, makes
 //! the frame pool the window shows pictures from and the ring the audio
 //! thread plays sound from, and carries out what the window asks (seek,
@@ -41,7 +41,7 @@ use crate::audio;
 use crate::decoder::{self, Decoder, Image};
 
 /// The decoder, unless the command line names another.
-pub const DECODER: &str = "/system/bin/mediadec";
+pub const DECODER: &str = "/system/bin/media-decoder";
 /// How long a call may take: opening reads and probes the file.
 const OPEN_TIMEOUT_NS: u64 = 15_000_000_000;
 const CALL_TIMEOUT_NS: u64 = 3_000_000_000;
@@ -294,7 +294,7 @@ impl Engine {
             self.image = Some(Image::read(vfs, &path)?);
         }
         let Some(image) = &self.image else { return Err("the decoder could not be read".into()) };
-        let d = decoder::start(image, "mediadec", CALL_TIMEOUT_NS)?;
+        let d = decoder::start(image, "media-decoder", CALL_TIMEOUT_NS)?;
         let build = d.build.clone();
         self.beat = (d.heartbeat.count(), runtime::time::now_ns());
         self.decoder = Some(d);

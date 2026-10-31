@@ -26,7 +26,7 @@
 #   cross/           the cross toolchain ($TARGET-gcc, -g++ ...) for this
 #                    machine; cross/sysroot is laid out like Veda's /system
 #   native/system/   the toolchain built for Veda, as /system has it
-#   media/           the media libraries, for mediadec
+#   media/           the media libraries, for media-decoder
 #   rust/            Rust, as its releases install: the compiler for this
 #                    machine, the standard library for it and for Veda
 #                    ($RUST_TARGET)
@@ -211,10 +211,10 @@ stage_gcc_runtime_cross() {
 }
 stage gcc_runtime_cross gcc_cross musl
 
-# --- the media libraries, for mediadec ---------------------------------------
+# --- the media libraries, for media-decoder ----------------------------------
 
 # dav1d and FFmpeg, static and position independent, for the sandboxed
-# decoder of Videos (implementation/services/mediadec, which
+# decoder of Videos (implementation/services/media-decoder, which
 # `cargo automation` links). They go to a prefix of their own: the sysroot
 # is copied into the image, these are not. They are compiled with the C
 # library as built (they link nothing but their checkasm programs), so a new
@@ -278,8 +278,8 @@ stage_dav1d() {
 stage dav1d src_dav1d gcc_cross musl @DAV1D_OPTIONS @ROOT @DAV1D_BINARIES @MESON_CPU_FAMILY @MESON_CPU
 
 # LGPL (no --enable-gpl, nothing non-free: checked below), only what
-# mediadec decodes: the demuxers, decoders (AV1 through dav1d), parsers and
-# the scaler and resampler; no programs, devices, filters, network or
+# media-decoder decodes: the demuxers, decoders (AV1 through dav1d), parsers
+# and the scaler and resampler; no programs, devices, filters, network or
 # libraries found by themselves; the architecture's assembly
 # (FFMPEG_ARCH_OPTIONS).
 FFMPEG_OPTIONS=(
@@ -315,7 +315,7 @@ stage_ffmpeg() {
 	chmod +x "$BUILD/ffmpeg-tools/pkg-config"
 	cd "$b"
 	# Found on the path, so that the configuration FFmpeg records (and
-	# mediadec carries) names no directory of this machine's.
+	# media-decoder carries) names no directory of this machine's.
 	PATH="$BUILD/ffmpeg-tools:$PATH" quiet configure.log "$SRC/ffmpeg/configure" "${FFMPEG_OPTIONS[@]}" \
 		--pkg-config=pkg-config
 	expect_defines config.h "HAVE_PTHREADS 1" "${FFMPEG_ARCH_DEFINES[@]}" \
@@ -589,7 +589,7 @@ stage rust src_rust rust_stage0 @RUST_HOST @RUST_TARGET @RUST_LLVM_TARGETS @TARG
 # ask of whoever passes on what the image has of them. The image has every
 # port above: GCC's runtime (libgcc, libstdc++, libatomic) and musl in every
 # C program and every program on Rust's standard library, binutils, GCC,
-# GMP, MPFR and MPC as its C toolchain, FFmpeg and dav1d in mediadec, and
+# GMP, MPFR and MPC as its C toolchain, FFmpeg and dav1d in media-decoder, and
 # Rust's standard library in its programs: Rust's own parts, and LLVM's
 # unwinder, which the driver VM's programs link (Rust's release for Linux
 # on musl has it). Each port has its texts here, and Rust's also those of

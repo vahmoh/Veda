@@ -1,14 +1,15 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `mediadec` — the media decoder: FFmpeg and dav1d in a sandboxed process,
-//! which Videos plays videos with (`proto::media`).
+//! `media-decoder` — the media decoder: FFmpeg and dav1d in a sandboxed
+//! process, which Videos plays videos with (`proto::media`).
 //!
 //! The program is C's world (a static ELF program on musl, over Veda's POSIX
 //! layer), as FFmpeg needs; this crate is its Rust half, built for the
 //! architecture's bare target (`<architecture>-unknown-none`) and linked
-//! with the C shim (`shim/`, the only code calling FFmpeg) by Veda's GCC.
-//! `main()` in the shim hands the program to [`mediadec_main`].
+//! with the C shim (the `.c` files here, the only code calling FFmpeg) by
+//! Veda's GCC. `main()` in the shim hands the program to
+//! [`media_decoder_main`].
 //!
 //! The player starts it with one handle, the control channel
 //! ([`proto::media::CONTROL_ROLE`]), and no registry: it reaches no file,
@@ -26,9 +27,9 @@
 //! * [`ffi`]: the shim's interface.
 //!
 //! Its Rust and the C library each keep their own: this half is made one
-//! object that exports nothing but [`mediadec_main`] (as the POSIX layer is),
-//! allocates with musl's `malloc`, and creates its one thread of its own,
-//! the watchdog, with the C library's `pthread_create` (a thread of
+//! object that exports nothing but [`media_decoder_main`] (as the POSIX
+//! layer is), allocates with musl's `malloc`, and creates its one thread of
+//! its own, the watchdog, with the C library's `pthread_create` (a thread of
 //! `runtime`'s would have no C thread state).
 
 #![no_std]
@@ -156,7 +157,7 @@ mod program {
     /// The program, from the shim's `main()`: answers the player and decodes
     /// until the player closes the control channel.
     #[unsafe(no_mangle)]
-    pub extern "C" fn mediadec_main() -> i32 {
+    pub extern "C" fn media_decoder_main() -> i32 {
         // SAFETY: once, before FFmpeg is used.
         unsafe { crate::ffi::vmd_setup(MAX_ALLOC) };
         let mut raw = 0;

@@ -118,7 +118,7 @@ On AMD64 (`automation/source/architectures/amd64` names them for the build):
 | `implementation/kernel/` | `x86_64-unknown-none` | Freestanding, soft-float, an ELF64 executable linked at its address |
 | User space on `runtime` alone (`implementation/libraries/`, the system services in `implementation/services/`, `implementation/drivers/`) | `x86_64-unknown-linux-musl`, `#![no_std]` | Hard-float SSE2, position-independent ELF64 executables with nothing of Linux's or musl's, linked by `rust-lld` |
 | User space on the standard library (`implementation/applications/`, the services that use it) | `x86_64-unknown-veda` (the `rust` port's) | Static position-independent ELF executables on the C library, linked by `x86_64-veda-gcc`; Veda's libraries in them as they are, `no_std` |
-| `implementation/libraries/posix` (in the C library), `implementation/services/mediadec`'s Rust half | `x86_64-unknown-none` | The System V ABI of C programs; linked into musl's `libc.a` |
+| `implementation/libraries/posix` (in the C library), `implementation/services/media-decoder`'s Rust half | `x86_64-unknown-none` | The System V ABI of C programs; linked into musl's `libc.a` |
 | C programs | `x86_64-veda` (GCC) | Static ELF executables on musl |
 | The standard library's tests (`verification/rust`) | `x86_64-unknown-veda` | As above, each also at a fixed address |
 | The driver VM's programs (`implementation/guests/linux/`) | `x86_64-unknown-linux-musl` | Static, on Linux; built from `implementation/guests/linux/` (its `.cargo/config.toml`) into `target/guest` |

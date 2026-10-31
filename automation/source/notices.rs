@@ -63,7 +63,7 @@ const PARTS: &[(&str, &str, &str)] = &[
     ("gmp", "GMP", "Arithmetic in any precision, in the C compiler"),
     ("mpfr", "MPFR", "Floating-point arithmetic in any precision, in the C compiler"),
     ("mpc", "MPC", "Complex arithmetic in any precision, in the C compiler"),
-    ("ffmpeg", "FFmpeg", "The demuxers, decoders, scaler and resampler of the video decoder, mediadec"),
+    ("ffmpeg", "FFmpeg", "The demuxers, decoders, scaler and resampler of the video decoder, media-decoder"),
     ("dav1d", "dav1d", "The AV1 decoder, in the video decoder"),
     (
         "rust",

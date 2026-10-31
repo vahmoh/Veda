@@ -195,7 +195,7 @@ impl Worker {
             self.open = None;
         }
         if self.decoder.is_none() {
-            self.decoder = Some(decoder::start(self.image.as_ref().unwrap(), "mediadec-thumbs", TIMEOUT_NS)?);
+            self.decoder = Some(decoder::start(self.image.as_ref().unwrap(), "media-decoder-thumbs", TIMEOUT_NS)?);
         }
         Ok(self.decoder.as_ref().unwrap())
     }

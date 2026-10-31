@@ -304,7 +304,7 @@ from this machine.
 | The system's repository (`automation/source/packages.rs`): its index, signed and offering nothing yet; its configuration, with the public key the index is checked against; what the system provides (`veda` at its version) | `/system/packages/index.vidx`, `/system/etc/packages/repositories/system.repo`, `/system/etc/packages/provides` |
 | The tests' repositories, signed by a key whose secret is no secret, with their public key; their packages hold the C test program `hello`, and the Calculator's program as an application's (`apps`) | `/system/tests/packages/` |
 | The certificate authorities OpenSSL trusts (Mozilla's list, from the `ca-certificates` port), once the web engine or Python is built | `/system/etc/ssl/cert.pem` |
-| `mediadec`, the video decoder (its Rust half, the C shim, FFmpeg, dav1d), and the libraries' `checkasm` programs | `/system/bin/mediadec`, `/system/tests/media/` |
+| `media-decoder`, the video decoder (its Rust half, the C shim, FFmpeg, dav1d), and the libraries' `checkasm` programs | `/system/bin/media-decoder`, `/system/tests/media/` |
 | `verification/fakedec/clips/*`, for the stand-in decoder | `/system/tests/videos/fake/` |
 | The driver VM's Linux, once built: its kernel (a bzImage on AMD64) and the programs of `implementation/guests/linux/` | `/system/linux/kernel`, `/system/linux/initramfs.cpio` |
 
@@ -475,10 +475,10 @@ choice of pictures, skipping, layout and memory, and the audio output that
 outlives the audio service, which Music shares. It speaks `proto::media`
 with its decoder (a heartbeat, a frame pool, a sound ring).
 
-The decoder, `implementation/services/mediadec`, is a C program: its Rust
+The decoder, `implementation/services/media-decoder`, is a C program: its Rust
 half, built for the bare target (`x86_64-unknown-none` on AMD64), is
 linked with its C shim, FFmpeg and dav1d by the cross compiler
-(`mediadec()` in `automation/source/toolchain.rs`), once `toolchain` has
+(`media_decoder()` in `automation/source/toolchain.rs`), once `toolchain` has
 built the media libraries (`doctor` says whether it has). Scripts that
 need it say `requires media`. Without it, `verification/fakedec` stands
 in: `videos --decoder /system/bin/fakedec FILE` plays a text file of

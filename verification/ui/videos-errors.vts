@@ -9,7 +9,7 @@ requires media
 boot-cmdline "run=terminal"
 fail-on "PANIC"
 fail-on "videos: panic:"
-fail-on "mediadec: panic:"
+fail-on "media-decoder: panic:"
 wait-serial "desktop ready" 90
 wait-serial "started terminal" 60
 wait 3

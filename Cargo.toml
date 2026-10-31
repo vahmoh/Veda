@@ -41,7 +41,7 @@ members = [
     "implementation/libraries/iommu",
     "implementation/libraries/packages",
     "implementation/services/init",
-    "implementation/services/mediadec",
+    "implementation/services/media-decoder",
     "implementation/services/filesystem",
     "implementation/services/device-manager",
     "implementation/services/compositor",
