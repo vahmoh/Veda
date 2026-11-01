@@ -319,15 +319,21 @@ pub fn screen(o: &Options, live: bool) -> (u32, u32) {
     o.resolution.unwrap_or(if live { LARGE_SCREEN } else { SCRIPTED_SCREEN })
 }
 
-/// The boot configuration of `o` (screen resolution and kernel command
-/// line), for the disk image or for the live system. The loader takes a
-/// command line of [`bootinfo::CMDLINE_MAX`] bytes at most: a longer one is
-/// an error, not one cut short.
+/// How long the live system's boot menu waits for a key (seconds) before
+/// the system starts by itself.
+const MENU_SECONDS: u32 = 10;
+
+/// The boot configuration of `o` (screen resolution, boot menu and kernel
+/// command line), for the disk image or for the live system, which alone
+/// has a menu: a disk's system is installed. The loader takes a command
+/// line of [`bootinfo::CMDLINE_MAX`] bytes at most: a longer one is an
+/// error, not one cut short.
 pub fn boot_config(o: &Options, live: bool) -> Result<String> {
     let tz = if live { None } else { util::host_utc_offset() };
     let cmdline = cmdline(&o.cmdline, live, tz.as_deref())?;
     let (w, h) = screen(o, live);
-    Ok(format!("# Veda boot configuration (read by the UEFI loader)\nresolution={w}x{h}\ncmdline={cmdline}\n"))
+    let menu = if live { format!("menu={MENU_SECONDS}\n") } else { String::new() };
+    Ok(format!("# Veda boot configuration (read by the UEFI loader)\nresolution={w}x{h}\n{menu}cmdline={cmdline}\n"))
 }
 
 /// The kernel command line of `given`: on the live system with `live`
@@ -447,5 +453,12 @@ mod tests {
         assert!(error.contains("258 bytes, more than the 256"), "{error}");
         // The time zone the build adds counts too.
         assert!(cmdline(&at_most, false, Some("+01:00")).is_err());
+    }
+
+    #[test]
+    fn only_the_live_system_has_a_boot_menu() {
+        let o = crate::cli::parse_options(&[]).unwrap();
+        assert!(boot_config(&o, true).unwrap().contains("\nmenu=10\n"));
+        assert!(!boot_config(&o, false).unwrap().contains("menu="));
     }
 }

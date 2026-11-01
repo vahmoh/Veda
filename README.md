@@ -105,9 +105,9 @@ Try *"Play Neon Horizon"*, *"Show me the lighthouse photo, full screen"* or
 *"Delete the City Lights photo"* (it asks you first).
 
 **On a PC:** `cargo automation iso` writes a live system for a USB stick.
-Start it in UEFI mode, with VT-x and VT-d on and Secure Boot off. It runs
-from memory and leaves the PC's disks alone; see
-[what it supports](documentation/DRIVERVM.md#status).
+Start it in UEFI mode, with VT-x and VT-d on and Secure Boot off, and choose
+**Try without installing** in its boot menu. It runs from memory and leaves
+the PC's disks alone; see [what it supports](documentation/DRIVERVM.md#status).
 
 ## Make an app agentic
 

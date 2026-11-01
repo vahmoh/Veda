@@ -5,19 +5,19 @@
 //!
 //! Responsibilities, in order:
 //!
-//! 1. read `\VEDA\BOOT.CFG`, `KERNEL.ELF` and `INITRD.IMG` from the boot
-//!    volume,
-//! 2. pick and set a graphics mode (of the display's own shape, where the
+//! 1. read `\VEDA\BOOT.CFG` from the boot volume,
+//! 2. show the boot menu, if it asks for one ([`menu`]),
+//! 3. pick and set a graphics mode (of the display's own shape, where the
 //!    firmware gives its EDID) and clear the screen: it stays blank until
 //!    the window system's splash fades in,
-//! 3. load the kernel's segments (an ELF64 executable's) into fresh
-//!    physical pages,
-//! 4. build the initial page tables (identity map, direct map, kernel image),
-//! 5. read the firmware's variables that an operating system may read
+//! 4. read `KERNEL.ELF` and `INITRD.IMG`, and load the kernel's segments
+//!    (an ELF64 executable's) into fresh physical pages,
+//! 5. build the initial page tables (identity map, direct map, kernel image),
+//! 6. read the firmware's variables that an operating system may read
 //!    ([`bootinfo::variables`]),
-//! 6. exit boot services, translate the firmware memory map into the
+//! 7. exit boot services, translate the firmware memory map into the
 //!    [`bootinfo`] format, and
-//! 7. switch to the new address space and jump to the kernel.
+//! 8. switch to the new address space and jump to the kernel.
 
 #![no_std]
 #![no_main]
@@ -27,6 +27,7 @@
 mod architecture;
 mod blank;
 mod config;
+mod menu;
 mod uefi;
 
 /// Logs a formatted line to the serial console (`architecture::serial`).
@@ -692,6 +693,10 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
         }
         None => config::Config::default(),
     };
+
+    if let Some(seconds) = cfg.menu {
+        menu::show(fw, seconds);
+    }
 
     let (framebuffer, screen) = setup_graphics(fw, cfg.resolution)?;
     log!(

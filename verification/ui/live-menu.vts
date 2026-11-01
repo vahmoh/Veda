@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The live system's boot menu, from a PC's USB keyboard: Install Veda can
+# be selected and does nothing yet, a key stops the countdown, so that the
+# menu waits as long as it takes, and Try without installing starts the
+# live system, as it does by itself if no key is pressed (live-usb.vts).
+# The keys go by QMP: `key` waits for Veda's keyboard, and until the
+# loader has finished, it is the firmware's.
+live
+input usb
+fail-on "PANIC"
+wait-serial "menu: Try without installing starts in 10 s" 30
+shot target/veda/live-menu.png
+qmp send-key '{"keys":[{"type":"qcode","data":"down"}]}'
+wait-serial "menu: Install Veda selected" 10
+shot target/veda/live-menu-install.png
+qmp send-key '{"keys":[{"type":"qcode","data":"ret"}]}'
+wait-serial "menu: Install Veda chosen, which does nothing yet" 10
+wait 11
+reject-serial "bootloader] framebuffer"
+qmp send-key '{"keys":[{"type":"qcode","data":"up"}]}'
+wait-serial "menu: Try without installing selected" 10
+shot target/veda/live-menu-try.png
+expect-different target/veda/live-menu-install.png target/veda/live-menu-try.png
+qmp send-key '{"keys":[{"type":"qcode","data":"ret"}]}'
+wait-serial "menu: Try without installing chosen" 10
+reject-serial "menu: no key pressed"
+wait-serial "desktop ready" 120
+expect-serial "home directory in memory (live system)"

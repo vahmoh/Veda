@@ -6,6 +6,7 @@
 //! ```text
 //! # comment
 //! resolution=1280x800
+//! menu=10
 //! cmdline=log=debug
 //! ```
 
@@ -13,13 +14,16 @@ use bootinfo::CMDLINE_MAX;
 
 pub struct Config {
     pub resolution: Option<(u32, u32)>,
+    /// The boot menu's seconds without a key before the system starts by
+    /// itself (`crate::menu`); `None`: no menu.
+    pub menu: Option<u32>,
     pub cmdline: [u8; CMDLINE_MAX],
     pub cmdline_len: usize,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { resolution: Some((1280, 800)), cmdline: [0; CMDLINE_MAX], cmdline_len: 0 }
+        Config { resolution: Some((1280, 800)), menu: None, cmdline: [0; CMDLINE_MAX], cmdline_len: 0 }
     }
 }
 
@@ -40,6 +44,7 @@ impl Config {
             let Some((key, value)) = line.split_once('=') else { continue };
             match key.trim() {
                 "resolution" => cfg.resolution = parse_resolution(value),
+                "menu" => cfg.menu = value.trim().parse().ok(),
                 "cmdline" => {
                     let v = value.trim().as_bytes();
                     let n = v.len().min(CMDLINE_MAX);

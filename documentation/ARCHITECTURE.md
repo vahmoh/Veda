@@ -32,10 +32,11 @@ who may call what, and links to each subsystem's own document.
 1. The firmware (OVMF under QEMU) loads the loader
    (`implementation/bootloader/`) from UEFI's boot path for the architecture
    (`\EFI\BOOT\BOOTX64.EFI` on AMD64) on the EFI system partition.
-2. The loader reads `\VEDA\BOOT.CFG`, `KERNEL.ELF` and `INITRD.IMG`, picks a
-   GOP mode near `BOOT.CFG`'s size in the display's own shape, and clears
-   the screen through a write-combining mapping. It loads the kernel,
-   builds its page tables (identity map, direct map at
+2. The loader reads `\VEDA\BOOT.CFG`, shows the boot menu if it asks for
+   one, picks a GOP mode near `BOOT.CFG`'s size in the display's own shape,
+   and clears the screen through a write-combining mapping. It reads
+   `KERNEL.ELF` and `INITRD.IMG`, loads the kernel, builds its page tables
+   (identity map, direct map at
    `0xFFFF800000000000`, kernel at `0xFFFFFFFF80000000`, each page with its
    segment's permissions), reads the firmware variables an operating system
    may read (`bootinfo::variables`), exits boot services and jumps to the
@@ -80,7 +81,11 @@ that starts the same way from a disc, or from a USB stick it is written to
 or copied onto (as Rufus does). `live` on the kernel command line makes
 `device-manager` start no disk driver and `filesystem` keep `/home` in
 memory, so the computer's disks are never read or written; the stick keeps
-the system's logs (see [the driver VM](DRIVERVM.md)).
+the system's logs (see [the driver VM](DRIVERVM.md)). Its `BOOT.CFG` asks
+for the boot menu (`menu=`, `implementation/bootloader/source/menu.rs`),
+on the firmware's text console and keyboard: **Try without installing**
+starts the live system, by itself once 10 seconds have passed without a
+key, and **Install Veda** does nothing yet. A disk's system has no menu.
 
 ## The kernel
 

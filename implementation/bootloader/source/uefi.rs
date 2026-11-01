@@ -72,7 +72,7 @@ pub struct SystemTable {
     pub firmware_vendor: *const u16,
     pub firmware_revision: u32,
     pub console_in_handle: Handle,
-    pub con_in: *mut c_void,
+    pub con_in: *mut SimpleTextInput,
     pub console_out_handle: Handle,
     pub con_out: *mut SimpleTextOutput,
     pub standard_error_handle: Handle,
@@ -206,10 +206,56 @@ pub struct RuntimeServices {
     pub get_next_variable_name: unsafe extern "efiapi" fn(*mut usize, *mut u16, *mut Guid) -> Status,
 }
 
+/// `EFI_INPUT_KEY`: a key without a character has a scan code instead.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct InputKey {
+    pub scan_code: u16,
+    pub unicode_char: u16,
+}
+
+pub const SCAN_UP: u16 = 1;
+pub const SCAN_DOWN: u16 = 2;
+pub const CARRIAGE_RETURN: u16 = 0x0D;
+
+#[repr(C)]
+pub struct SimpleTextInput {
+    /// `Reset(This, ExtendedVerification)`.
+    pub reset: unsafe extern "efiapi" fn(*mut SimpleTextInput, bool) -> Status,
+    pub read_key_stroke: unsafe extern "efiapi" fn(*mut SimpleTextInput, *mut InputKey) -> Status,
+    pub wait_for_key: *mut c_void,
+}
+
+/// `SetAttribute`'s colours: grey on black, white on black, black on grey.
+pub const TEXT_GREY: usize = 0x07;
+pub const TEXT_WHITE: usize = 0x0F;
+pub const TEXT_INVERSE: usize = 0x70;
+
 #[repr(C)]
 pub struct SimpleTextOutput {
     pub reset: usize,
     pub output_string: unsafe extern "efiapi" fn(*mut SimpleTextOutput, *const u16) -> Status,
+    pub test_string: usize,
+    /// `QueryMode(This, ModeNumber, Columns, Rows)`.
+    pub query_mode: unsafe extern "efiapi" fn(*mut SimpleTextOutput, usize, *mut usize, *mut usize) -> Status,
+    pub set_mode: usize,
+    pub set_attribute: unsafe extern "efiapi" fn(*mut SimpleTextOutput, usize) -> Status,
+    pub clear_screen: unsafe extern "efiapi" fn(*mut SimpleTextOutput) -> Status,
+    /// `SetCursorPosition(This, Column, Row)`.
+    pub set_cursor_position: unsafe extern "efiapi" fn(*mut SimpleTextOutput, usize, usize) -> Status,
+    pub enable_cursor: unsafe extern "efiapi" fn(*mut SimpleTextOutput, bool) -> Status,
+    pub mode: *mut SimpleTextOutputMode,
+}
+
+/// `SIMPLE_TEXT_OUTPUT_MODE`
+#[repr(C)]
+pub struct SimpleTextOutputMode {
+    pub max_mode: i32,
+    pub mode: i32,
+    pub attribute: i32,
+    pub cursor_column: i32,
+    pub cursor_row: i32,
+    pub cursor_visible: bool,
 }
 
 #[repr(C)]

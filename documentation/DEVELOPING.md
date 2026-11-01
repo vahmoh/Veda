@@ -108,6 +108,13 @@ from a virtual USB stick (`target/veda/stick.iso`), and so do scripts with
 a `live` line, on a machine with a disk for it to leave alone
 (`verification/ui/live-usb.vts`).
 
+It starts with the boot menu, which `menu=` in its `BOOT.CFG` asks for:
+**Try without installing** starts it, by itself once 10 seconds have
+passed without a key, and **Install Veda** does nothing yet. So a script's
+`live` boot takes those 10 seconds. The menu's keys are the firmware's, so
+a script sends them with `qmp send-key`, as `key` waits for Veda's
+keyboard (`verification/ui/live-menu.vts`).
+
 The stick keeps the logs of the last eight starts, synced every second, so
 they hold what happened even when the screen showed nothing:
 `VEDA/LOGS/NNNN/VEDA.TXT` (Veda's log, with Linux's console) and
