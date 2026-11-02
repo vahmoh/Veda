@@ -131,6 +131,12 @@ pub fn unmap(root: u64, virt: u64) -> Option<u64> {
     Some(frame)
 }
 
+/// Whether the kernel's copies may touch memory mapped with `flags`: all
+/// of it.
+pub fn kernel_copies(_flags: &Flags) -> bool {
+    true
+}
+
 /// Translates `virt`, returning the physical address and the mapping's
 /// flags.
 pub fn translate(root: u64, virt: u64) -> Option<(u64, Flags)> {
@@ -198,10 +204,12 @@ pub fn kernel_root() -> u64 {
 }
 
 /// Begins the kernel's address space: the tables of the shared kernel
-/// half, and the direct map of physical memory below `direct_map_limit`
-/// (1 GiB pages when the processor has them, otherwise 2 MiB pages). What
-/// else the kernel maps goes in with [`map`] before [`install_kernel_space`].
-pub fn new_kernel_space(direct_map_limit: u64) -> u64 {
+/// half, and the direct map of physical memory below the limit the
+/// loader gave (1 GiB pages when the processor has them, otherwise 2 MiB
+/// pages). What else the kernel maps goes in with [`map`] before
+/// [`install_kernel_space`].
+pub fn new_kernel_space(boot: &bootinfo::BootInfo) -> u64 {
+    let direct_map_limit = boot.hhdm_limit;
     let pml4 = phys::alloc_zeroed().expect("out of memory for the kernel PML4");
     let pml4_t = table(pml4);
     for entry in &mut pml4_t[256..512] {

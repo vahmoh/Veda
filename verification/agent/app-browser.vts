@@ -69,6 +69,9 @@ agent-result '"found":1'
 shot target/veda/agent-app-browser-pdf.png
 agent-call use_app '{"app":"browser","action":"find","arguments":{"text":""}}' 30
 agent-call use_app '{"app":"browser","action":"back"}' 30
+# Back on the test page, once it has loaded (going back does not wait).
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result '"title":"Veda test page"'
 # Tabs.
 agent-call use_app '{"app":"browser","action":"new_tab"}' 30
 agent-result '"tabs":2'

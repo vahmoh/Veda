@@ -5,7 +5,10 @@
 # service. A game whose window is not in front waits, paused: a chase the
 # agent started pauses itself when the Terminal takes the keyboard, the
 # agent cannot resume it until it brings its window to the front, and then
-# it goes on (the computer drives, F8). About shows its licences.
+# it goes on (the computer drives, F8). About shows its licences. Its city
+# takes longer to make than the agent waits for an application (6 s) where
+# QEMU emulates the processors.
+requires native-speed
 fail-on "PANIC"
 wait-serial "desktop ready" 120
 mic-silence 1

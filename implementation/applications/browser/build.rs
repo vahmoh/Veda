@@ -81,6 +81,11 @@ fn main() {
     assert!(status.success(), "archiving the engine's bridge failed");
 
     // Every library in one group: they need each other, in no one order.
+    // Static, every one, as the program is: Rust leaves the linker taking
+    // shared libraries (`-Bdynamic`) after its own, and the toolchain has
+    // shared copies of some of these (libstdc++, libatomic, the C library)
+    // for dynamically linked programs.
+    println!("cargo:rustc-link-arg=-Wl,-Bstatic");
     println!("cargo:rustc-link-arg=-Wl,--start-group");
     println!("cargo:rustc-link-arg={}", archive.display());
     for lib in &libs {

@@ -157,7 +157,8 @@ fn fingerprint() -> Result<String> {
     for name in CRATES {
         let dir = ports.join(name);
         files.push(dir.join("port.toml"));
-        let patches = [dir.join("veda.patch"), dir.join("architectures").join(architecture::NAME).join("veda.patch")];
+        let patches =
+            [dir.join("veda.patch"), dir.join("architectures").join(architecture::current().name).join("veda.patch")];
         files.extend(patches.into_iter().filter(|p| p.is_file()));
     }
     let mut hash = Sha256::new();
@@ -202,7 +203,7 @@ fn unpack(root: &Path) -> Result {
             .arg(ports.join("crates.sh"))
             .args(CRATES)
             .env("VEDA_PORTS", &ports)
-            .env("VEDA_ARCH", architecture::NAME)
+            .env("VEDA_ARCH", architecture::current().name)
             .env("VEDA_CRATES", root),
     )
 }

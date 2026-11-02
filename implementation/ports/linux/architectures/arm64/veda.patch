@@ -1,0 +1,476 @@
+--- a/arch/arm64/Kconfig
++++ b/arch/arm64/Kconfig
+@@ -1611,6 +1611,18 @@
+ 	def_bool y
+ 	depends on ARM_PMU
+ 
++config VEDA_GUEST
++	bool "Veda driver VM support"
++	depends on SMP && OF
++	select IRQ_MSI_LIB if PCI_MSI
++	help
++	  This option allows Linux to run as the driver VM of the Veda
++	  operating system: on Veda's paravirtual platform, which has
++	  processors with a GICv3 and the architecture's timer, and memory,
++	  and no emulated hardware. The console writes and the PCI functions
++	  Veda gives the guest are reached through hypercalls; a device tree
++	  describes the machine.
++
+ # Supported by clang >= 7.0 or GCC >= 12.0.0
+ config CC_HAVE_SHADOW_CALL_STACK
+ 	def_bool $(cc-option, -fsanitize=shadow-call-stack -ffixed-x18)
+--- a/arch/arm64/kernel/Makefile
++++ b/arch/arm64/kernel/Makefile
+@@ -56,6 +56,7 @@
+ obj-$(CONFIG_ACPI_NUMA)			+= acpi_numa.o
+ obj-$(CONFIG_ARM64_ACPI_PARKING_PROTOCOL)	+= acpi_parking_protocol.o
+ obj-$(CONFIG_PARAVIRT)			+= paravirt.o
++obj-$(CONFIG_VEDA_GUEST)		+= veda.o
+ obj-$(CONFIG_RANDOMIZE_BASE)		+= kaslr.o
+ obj-$(CONFIG_HIBERNATION)		+= hibernate.o hibernate-asm.o
+ obj-$(CONFIG_ELF_CORE)			+= elfcore.o
+--- a/drivers/pci/controller/Kconfig
++++ b/drivers/pci/controller/Kconfig
+@@ -144,6 +144,13 @@
+ 	depends on OF
+ 	default ARCH_GEMINI
+ 
++config PCI_VEDA
++	bool "PCI functions of Veda's driver VM"
++	depends on VEDA_GUEST && PCI_MSI && OF
++	help
++	  The PCI functions the Veda operating system gives its driver VM,
++	  whose configuration space and MSIs are its platform's hypercalls.
++
+ config PCI_HOST_GENERIC
+ 	tristate "Generic PCI host controller"
+ 	depends on OF
+--- a/drivers/pci/controller/Makefile
++++ b/drivers/pci/controller/Makefile
+@@ -13,6 +13,7 @@
+ obj-$(CONFIG_PCIE_RENESAS_RZG3S_HOST) += pcie-rzg3s-host.o
+ obj-$(CONFIG_PCI_HOST_COMMON) += pci-host-common.o
+ obj-$(CONFIG_PCI_HOST_GENERIC) += pci-host-generic.o
++obj-$(CONFIG_PCI_VEDA) += pci-veda.o
+ obj-$(CONFIG_PCI_HOST_THUNDER_ECAM) += pci-thunder-ecam.o
+ obj-$(CONFIG_PCI_HOST_THUNDER_PEM) += pci-thunder-pem.o
+ obj-$(CONFIG_PCIE_XILINX) += pcie-xilinx.o
+--- /dev/null
++++ b/arch/arm64/include/asm/veda_para.h
+@@ -0,0 +1,108 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * Veda's paravirtual platform, on which Linux runs as Veda's driver VM:
++ * its hypercalls. The definitions are Veda's own
++ * (implementation/libraries/hv/source/platform.rs in Veda's tree).
++ *
++ * A hypercall is hvc with the call in x0 and its arguments in x1 to x5; the
++ * result comes back in x0, negative for an error.
++ */
++#ifndef _ASM_ARM64_VEDA_PARA_H
++#define _ASM_ARM64_VEDA_PARA_H
++
++#include <linux/types.h>
++
++#define VEDA_HC_CONSOLE_WRITE	1	/* x1: bytes (<= 32), x2..x5: them */
++#define VEDA_HC_POWER		3	/* x1: VEDA_POWER_* */
++#define VEDA_HC_WALLCLOCK	4	/* returns ns since 1970 (UTC) */
++#define VEDA_HC_BRIDGE		5	/* x1: operation, x2: its request */
++/* x1: the function (bus << 8 | devfn), x2: the offset, x3: the width */
++#define VEDA_HC_PCI_CONFIG_READ	6	/* returns the value (all ones: none) */
++#define VEDA_HC_PCI_CONFIG_WRITE 7	/* x4: the value */
++/*
++ * x1: the function, x2: the MSI's index, x3: the processor's number, x4:
++ * the interrupt, an SPI's INTID (0: the MSI reaches nothing any more).
++ * Returns the message: the data in the top 16 bits, the address below.
++ */
++#define VEDA_HC_PCI_MSI		8
++/*
++ * x1: a global system interrupt (a GSI, below VEDA_GSIS), x2: the
++ * processor's number, x3: the interrupt, an SPI's INTID (0: it reaches
++ * nothing, masked). GSIs from VEDA_PLATFORM_GSIS are lines of the
++ * platform's (the interrupts of GPIO pins).
++ */
++#define VEDA_HC_GSI		9
++#define VEDA_GSIS		512
++#define VEDA_PLATFORM_GSIS	256
++/*
++ * x1: a GPIO controller of the platform's (its _UID), x2: the pin, x3:
++ * VEDA_GPIO_*, x4: a level. Returns the level, 1 if the pin is an output
++ * (0: an input), or 0.
++ */
++#define VEDA_HC_GPIO		10
++#define VEDA_GPIO_READ		0	/* made an input if it is neither */
++#define VEDA_GPIO_WRITE		1	/* made an output */
++#define VEDA_GPIO_INPUT		2
++#define VEDA_GPIO_DIRECTION	3
++/*
++ * x1: VEDA_VARIABLE_*, x2: a struct veda_variable (guest-physical). The
++ * machine's firmware variables that an operating system may read,
++ * read-only: VEDA_VARIABLE_GET does what UEFI's GetVariable does,
++ * VEDA_VARIABLE_NEXT what GetNextVariableName does. Returns 0,
++ * VEDA_ERR_NOT_FOUND, VEDA_ERR_TOO_SMALL (the request then holds the size
++ * needed) or VEDA_ERR_INVALID.
++ */
++#define VEDA_HC_FIRMWARE_VARIABLE 11
++#define VEDA_VARIABLE_GET	0
++#define VEDA_VARIABLE_NEXT	1
++
++struct veda_variable {
++	u8 guid[16];		/* the vendor, as UEFI lays it out */
++	u64 name;		/* UTF-16, NUL-terminated, */
++	u64 name_size;		/* in a buffer of this many bytes */
++	u64 data;		/* VEDA_VARIABLE_GET's buffer, */
++	u64 data_size;		/* of this many bytes */
++	u32 attributes;		/* from VEDA_VARIABLE_GET */
++	u32 reserved;
++};
++
++#define VEDA_ERR_UNKNOWN	(-1)	/* no such hypercall */
++#define VEDA_ERR_INVALID	(-2)
++#define VEDA_ERR_NOT_FOUND	(-3)
++#define VEDA_ERR_TOO_SMALL	(-4)
++
++#define VEDA_POWER_OFF		0
++#define VEDA_POWER_RESTART	1
++#define VEDA_POWER_CRASHED	2
++
++static inline long veda_hypercall(unsigned long nr, unsigned long a1,
++				  unsigned long a2, unsigned long a3,
++				  unsigned long a4, unsigned long a5)
++{
++	register unsigned long x0 asm("x0") = nr;
++	register unsigned long x1 asm("x1") = a1;
++	register unsigned long x2 asm("x2") = a2;
++	register unsigned long x3 asm("x3") = a3;
++	register unsigned long x4 asm("x4") = a4;
++	register unsigned long x5 asm("x5") = a5;
++
++	asm volatile("hvc #0"
++		     : "+r" (x0)
++		     : "r" (x1), "r" (x2), "r" (x3), "r" (x4), "r" (x5)
++		     : "memory");
++	return x0;
++}
++
++/* The interrupt of the bridge's callback: its SPI's INTID. */
++#define VEDA_CALLBACK_VECTOR	32
++
++/* This kernel is built for Veda's driver VM, and runs nowhere else. */
++static inline bool veda_platform(void)
++{
++	return true;
++}
++
++/* What the callback interrupt calls (the bridge's ring). */
++void veda_set_callback(void (*handler)(void));
++
++#endif /* _ASM_ARM64_VEDA_PARA_H */
+--- /dev/null
++++ b/arch/arm64/kernel/veda.c
+@@ -0,0 +1,69 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Veda's paravirtual platform: Linux as Veda's driver VM, on arm64.
++ *
++ * The device tree says what the machine is: its processors, which start and
++ * stop through PSCI, its GICv3 and timer, and its PCI root
++ * (drivers/pci/controller/pci-veda.c). What is left for here is what those
++ * do not cover: the time of day, a crash reported as one, and the bridge's
++ * callback, the interrupt of the /hypervisor node.
++ */
++
++#include <linux/init.h>
++#include <linux/interrupt.h>
++#include <linux/notifier.h>
++#include <linux/of.h>
++#include <linux/of_irq.h>
++#include <linux/panic_notifier.h>
++#include <linux/timekeeping.h>
++#include <asm/veda_para.h>
++
++static void (*veda_callback)(void);
++
++void veda_set_callback(void (*handler)(void))
++{
++	WRITE_ONCE(veda_callback, handler);
++}
++EXPORT_SYMBOL_GPL(veda_set_callback);
++
++static irqreturn_t veda_interrupt(int irq, void *data)
++{
++	void (*handler)(void) = READ_ONCE(veda_callback);
++
++	if (handler)
++		handler();
++	return IRQ_HANDLED;
++}
++
++static int veda_panic(struct notifier_block *nb, unsigned long action, void *data)
++{
++	veda_hypercall(VEDA_HC_POWER, VEDA_POWER_CRASHED, 0, 0, 0, 0);
++	return NOTIFY_DONE;
++}
++
++static struct notifier_block veda_panic_block = {
++	.notifier_call	= veda_panic,
++};
++
++static int __init veda_init(void)
++{
++	struct device_node *node = of_find_compatible_node(NULL, NULL, "veda,platform");
++	struct timespec64 now;
++	int irq, err;
++
++	if (!node)
++		return -ENODEV;
++	now = ns_to_timespec64(veda_hypercall(VEDA_HC_WALLCLOCK, 0, 0, 0, 0, 0));
++	do_settimeofday64(&now);
++	atomic_notifier_chain_register(&panic_notifier_list, &veda_panic_block);
++	irq = irq_of_parse_and_map(node, 0);
++	of_node_put(node);
++	if (!irq)
++		return -EINVAL;
++	/* The monitor raises it on the first processor. */
++	err = request_irq(irq, veda_interrupt, IRQF_NOBALANCING | IRQF_NO_THREAD, "veda", NULL);
++	if (err)
++		return err;
++	return irq_set_affinity(irq, cpumask_of(0));
++}
++core_initcall(veda_init);
+--- /dev/null
++++ b/drivers/pci/controller/pci-veda.c
+@@ -0,0 +1,233 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * PCI on Veda's paravirtual platform: the PCI functions Veda gives its
++ * driver VM, on bus 0 of segment 0, on arm64.
++ *
++ * Their configuration space is read and written through hypercalls, and is
++ * the functions' own but for what the platform owns: the memory BARs hold
++ * the addresses Veda mapped them at, which stay; there is no expansion ROM
++ * or I/O BAR. The device tree's "veda,pci" node gives the root's windows,
++ * which hold the BARs.
++ *
++ * MSIs and MSI-X go through this driver's MSI parent domain, above the GIC:
++ * each is an SPI of the GIC's it allocates. The message a function sends is
++ * the platform's: a hypercall routes the function's interrupt to the
++ * processor and SPI, and returns it (the machine's ITS turns it into the
++ * interrupt the host raises here, whatever else the function writes). A
++ * move to another processor routes it again, and the message stays the same.
++ */
++
++#include <linux/bitmap.h>
++#include <linux/irq.h>
++#include <linux/irqchip/irq-msi-lib.h>
++#include <linux/irqdomain.h>
++#include <linux/msi.h>
++#include <linux/of.h>
++#include <linux/of_irq.h>
++#include <linux/pci.h>
++#include <linux/platform_device.h>
++#include <linux/spinlock.h>
++#include <asm/cputype.h>
++#include <asm/smp_plat.h>
++#include <asm/veda_para.h>
++
++/* The SPIs of MSIs: above the platform's lines. */
++#define VEDA_MSI_FIRST	128
++#define VEDA_MSI_COUNT	128
++
++static DECLARE_BITMAP(veda_msi_used, VEDA_MSI_COUNT);
++static DEFINE_SPINLOCK(veda_msi_lock);
++
++static unsigned long veda_pci_function(unsigned int bus, unsigned int devfn)
++{
++	return bus << 8 | devfn;
++}
++
++static int veda_pci_read(struct pci_bus *bus, unsigned int devfn, int where, int size, u32 *val)
++{
++	*val = veda_hypercall(VEDA_HC_PCI_CONFIG_READ, veda_pci_function(bus->number, devfn), where, size, 0, 0);
++	return PCIBIOS_SUCCESSFUL;
++}
++
++static int veda_pci_write(struct pci_bus *bus, unsigned int devfn, int where, int size, u32 val)
++{
++	long r = veda_hypercall(VEDA_HC_PCI_CONFIG_WRITE, veda_pci_function(bus->number, devfn), where, size, val, 0);
++
++	return r ? PCIBIOS_SET_FAILED : PCIBIOS_SUCCESSFUL;
++}
++
++static struct pci_ops veda_pci_ops = {
++	.read	= veda_pci_read,
++	.write	= veda_pci_write,
++};
++
++static unsigned long veda_msi_function(struct msi_desc *desc)
++{
++	struct pci_dev *dev = msi_desc_to_pci_dev(desc);
++
++	return veda_pci_function(dev->bus->number, dev->devfn);
++}
++
++/* The platform's number of the processor `cpu`. */
++static unsigned long veda_processor(unsigned int cpu)
++{
++	u64 mpidr = cpu_logical_map(cpu);
++
++	return MPIDR_AFFINITY_LEVEL(mpidr, 0) | MPIDR_AFFINITY_LEVEL(mpidr, 1) << 4;
++}
++
++static void veda_msi_compose(struct irq_data *data, struct msi_msg *msg)
++{
++	struct msi_desc *desc = irq_data_get_msi_desc(data);
++	unsigned int cpu = cpumask_first(irq_data_get_effective_affinity_mask(data));
++	long m;
++
++	if (cpu >= nr_cpu_ids)
++		cpu = 0;
++	m = veda_hypercall(VEDA_HC_PCI_MSI, veda_msi_function(desc), desc->msi_index, veda_processor(cpu),
++			   data->hwirq, 0);
++	if (m < 0 && m >= VEDA_ERR_TOO_SMALL) {
++		pr_err_ratelimited("veda: %s: MSI %u cannot be routed\n", pci_name(msi_desc_to_pci_dev(desc)),
++				   desc->msi_index);
++		m = 0;
++	}
++	msg->address_hi = upper_32_bits(m) & 0xffff;
++	msg->address_lo = lower_32_bits(m);
++	msg->data = (unsigned long)m >> 48;
++}
++
++static struct irq_chip veda_msi_chip = {
++	.name			= "Veda-MSI",
++	.irq_mask		= irq_chip_mask_parent,
++	.irq_unmask		= irq_chip_unmask_parent,
++	.irq_eoi		= irq_chip_eoi_parent,
++	.irq_set_affinity	= irq_chip_set_affinity_parent,
++	.irq_compose_msi_msg	= veda_msi_compose,
++};
++
++#define VEDA_MSI_FLAGS_SUPPORTED	(MSI_GENERIC_FLAGS_MASK | MSI_FLAG_PCI_MSIX)
++#define VEDA_MSI_FLAGS_REQUIRED		(MSI_FLAG_USE_DEF_DOM_OPS | MSI_FLAG_USE_DEF_CHIP_OPS | \
++					 MSI_FLAG_PCI_MSI_MASK_PARENT)
++
++static const struct msi_parent_ops veda_msi_parent_ops = {
++	.supported_flags	= VEDA_MSI_FLAGS_SUPPORTED,
++	.required_flags		= VEDA_MSI_FLAGS_REQUIRED,
++	.chip_flags		= MSI_CHIP_FLAG_SET_EOI,
++	.bus_select_token	= DOMAIN_BUS_NEXUS,
++	.bus_select_mask	= MATCH_PCI_MSI,
++	.prefix			= "Veda-",
++	.init_dev_msi_info	= msi_lib_init_dev_msi_info,
++};
++
++static int veda_msi_alloc(struct irq_domain *d, unsigned int virq, unsigned int nr_irqs, void *arg)
++{
++	struct irq_fwspec spec;
++	unsigned int i;
++	int offset, err;
++
++	spin_lock(&veda_msi_lock);
++	offset = bitmap_find_next_zero_area(veda_msi_used, VEDA_MSI_COUNT, 0, nr_irqs, 0);
++	if (offset < VEDA_MSI_COUNT)
++		bitmap_set(veda_msi_used, offset, nr_irqs);
++	spin_unlock(&veda_msi_lock);
++	if (offset >= VEDA_MSI_COUNT)
++		return -ENOSPC;
++	for (i = 0; i < nr_irqs; i++) {
++		irq_hw_number_t spi = VEDA_MSI_FIRST + offset + i;
++		struct irq_data *parent;
++
++		spec.fwnode = d->parent->fwnode;
++		spec.param_count = 3;
++		spec.param[0] = 0;
++		spec.param[1] = spi - 32;
++		spec.param[2] = IRQ_TYPE_EDGE_RISING;
++		err = irq_domain_alloc_irqs_parent(d, virq + i, 1, &spec);
++		if (err)
++			goto fail;
++		parent = irq_domain_get_irq_data(d->parent, virq + i);
++		parent->chip->irq_set_type(parent, IRQ_TYPE_EDGE_RISING);
++		irq_domain_set_hwirq_and_chip(d, virq + i, spi, &veda_msi_chip, NULL);
++	}
++	return 0;
++fail:
++	irq_domain_free_irqs_parent(d, virq, i);
++	spin_lock(&veda_msi_lock);
++	bitmap_clear(veda_msi_used, offset, nr_irqs);
++	spin_unlock(&veda_msi_lock);
++	return err;
++}
++
++/* The function's message for the MSI reaches nothing from now on. */
++static void veda_msi_free(struct irq_domain *d, unsigned int virq, unsigned int nr_irqs)
++{
++	struct irq_data *data = irq_domain_get_irq_data(d, virq);
++	unsigned int i;
++
++	for (i = 0; i < nr_irqs; i++) {
++		struct msi_desc *desc = irq_data_get_msi_desc(irq_domain_get_irq_data(d, virq + i));
++
++		if (desc && dev_is_pci(desc->dev))
++			veda_hypercall(VEDA_HC_PCI_MSI, veda_msi_function(desc), desc->msi_index, 0, 0, 0);
++	}
++	spin_lock(&veda_msi_lock);
++	bitmap_clear(veda_msi_used, data->hwirq - VEDA_MSI_FIRST, nr_irqs);
++	spin_unlock(&veda_msi_lock);
++	irq_domain_free_irqs_parent(d, virq, nr_irqs);
++}
++
++static const struct irq_domain_ops veda_msi_domain_ops = {
++	.select	= msi_lib_irq_domain_select,
++	.alloc	= veda_msi_alloc,
++	.free	= veda_msi_free,
++};
++
++static struct irq_domain *veda_msi_domain(struct device *dev)
++{
++	struct device_node *gic = of_irq_find_parent(dev->of_node);
++	struct irq_domain_info info = {
++		.fwnode	= of_fwnode_handle(dev->of_node),
++		.ops	= &veda_msi_domain_ops,
++		.parent	= irq_find_host(gic),
++	};
++	struct irq_domain *domain;
++
++	of_node_put(gic);
++	if (!info.parent)
++		return NULL;
++	domain = msi_create_parent_irq_domain(&info, &veda_msi_parent_ops);
++	return domain;
++}
++
++static int veda_pci_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct pci_host_bridge *bridge = devm_pci_alloc_host_bridge(dev, 0);
++	struct irq_domain *domain;
++
++	if (!bridge)
++		return -ENOMEM;
++	domain = veda_msi_domain(dev);
++	if (!domain)
++		return -ENODEV;
++	/* The BARs stay where the platform mapped them. */
++	pci_add_flags(PCI_PROBE_ONLY);
++	bridge->ops = &veda_pci_ops;
++	bridge->msi_domain = true;
++	dev_set_msi_domain(&bridge->dev, domain);
++	return pci_host_probe(bridge);
++}
++
++static const struct of_device_id veda_pci_ids[] = {
++	{ .compatible = "veda,pci" },
++	{ }
++};
++
++static struct platform_driver veda_pci_driver = {
++	.driver = {
++		.name = "pci-veda",
++		.of_match_table = veda_pci_ids,
++		.suppress_bind_attrs = true,
++	},
++	.probe = veda_pci_probe,
++};
++builtin_platform_driver(veda_pci_driver);

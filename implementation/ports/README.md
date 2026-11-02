@@ -70,7 +70,8 @@ What the patches change:
 
 * **binutils**: `veda` in `config.sub`; on AMD64, `x86_64-veda` in BFD
   (`x86_64_elf64_vec`), gas and ld (`elf_x86_64`, with code on pages of its
-  own, as on Linux).
+  own, as on Linux); on ARM64, `aarch64-veda` in the same places
+  (`aarch64_elf64_le_vec`, `aarch64elf`).
 * **gcc**: Veda's target in `config.sub`, `gcc/config.gcc`,
   `libgcc/config.host`, `gcc/config/veda.h` (`/system/lib`, musl's types;
   static linking by default, `rcrt1.o` for `-static-pie`; `-pie` a
@@ -89,7 +90,8 @@ What the patches change:
   sees the C library's GNU extensions (`_GNU_SOURCE`), as on GNU/Linux;
   libatomic is built, as for any POSIX system. On AMD64,
   `gcc/config/i386/veda.h`: the System V x86-64 ABI, the stack
-  protector's canary where musl keeps it.
+  protector's canary where musl keeps it. On ARM64,
+  `gcc/config/aarch64/veda.h`: the AAPCS64, as on GNU/Linux.
 * **gmp**, **mpfr**, **mpc**: `config.sub` knows `veda`.
 * **musl**: `__init_libc` sets the POSIX layer up, `posix_spawn` asks it to
   start the program, `dl_iterate_phdr` names the program by `AT_EXECFN`
@@ -111,14 +113,16 @@ What the patches change:
   (`__tz.c`, from the layer's `__veda_tz`). On AMD64, system calls,
   `_start` (the bootstrap channel, which a dynamically linked program's
   dynamic linker takes: `Scrt1.o` leaves it) and the thread routines
-  (`src/thread/x86_64/*.s`) go through the layer; `vfork` takes the
+  (`src/thread/x86_64/*.s`) go through the layer, as on ARM64
+  (`src/thread/aarch64/*.s`); `vfork` takes the
   generic version, which fails: there is no `fork`. See
   [C on Veda](../../documentation/C.md#how-it-works).
 * **rust**: Veda's target in the compiler (`Os::Veda`,
   `spec/base/veda.rs`, with dynamic linking: programs with
   `-C target-feature=-crt-static`, and `cdylib` and `dylib` crates, which
   `rustc_session` never links with the static C library; on AMD64
-  `x86_64-unknown-veda`, linked by `x86_64-veda-gcc`, in
+  `x86_64-unknown-veda`, linked by `x86_64-veda-gcc`, on ARM64
+  `aarch64-unknown-veda`, linked by `aarch64-veda-gcc`, both in
   `STAGE0_MISSING_TARGETS`) and in `library/std`,
   which takes the code of the systems whose C library has what Veda's has;
   Linux's definitions on musl in the vendored `libc` (`vendor/libc-*`;
@@ -129,7 +133,7 @@ What the patches change:
 * **ffmpeg**: `veda` as a `--target-os` in `configure`. **dav1d**: none.
 
 dav1d (8- and 16-bit) and FFmpeg are built static, with the architecture's
-assembler (nasm on AMD64) and their `checkasm` (static, position-independent
+assembler (nasm on AMD64, GCC's on ARM64) and their `checkasm` (static, position-independent
 programs), which `systest` runs on Veda, into `target/toolchain/media`, as only `media-decoder` links them. FFmpeg
 has only the demuxers, decoders (AV1 through dav1d), parsers, bitstream
 filter, scaler and resampler that `media-decoder` uses. It stays LGPL:
@@ -152,7 +156,7 @@ gathers the kernel's and Mesa's licence texts ([Licences](#licences)).
 What the patches change:
 
 * **linux**: the Veda platform (`veda.patch`, and
-  `architectures/amd64/veda.patch`), whose files
+  `architectures/<architecture>/veda.patch`), whose files
   [The pieces](../../documentation/DRIVERVM.md#the-pieces) lists. The
   kernel is `allnoconfig` with the options of `veda.config` and
   `architectures/<architecture>/veda.config`, and the build fails if one
@@ -309,7 +313,14 @@ What the patches change:
   setting says, where WebKit 2.54.1 tells every page the opposite, that
   the user prefers reduced motion (`SystemSettingsManagerProxyWPE.cpp`):
   WebKit's own fix ([bug 325212](https://bugs.webkit.org/show_bug.cgi?id=325212)),
-  which the patch drops once a release has it. See
+  which the patch drops once a release has it. On ARM64
+  (`architectures/arm64/veda.patch`), JavaScriptCore's JIT as on Linux:
+  the instruction cache made to see the code it writes
+  (`ARM64Assembler.h`), the processor's features from `AT_HWCAP` and
+  `AT_HWCAP2` (`MacroAssemblerARM64.cpp`), x18 one of the registers it
+  allocates, Veda keeping no platform register (`ARM64Registers.h`), the
+  interpreter's global addresses through the GOT (`offlineasm/arm64.rb`),
+  and the DFG (`PlatformEnable.h`). See
   [WebKit on Veda](../../documentation/BROWSER.md#webkit-on-veda).
 * **icu**: Veda as a Linux-like platform in its build, and the system's
   time zone named by the tz database's zone of its offset
@@ -324,7 +335,11 @@ What the patches change:
   program's own `eglGetProcAddress` (the `egl` crate's), to which it
   refers weakly.
 * **openssl**: Veda's configuration (`Configurations/50-veda.conf`):
-  threads, no shared libraries or modules.
+  threads, no shared libraries or modules. On ARM64
+  (`architectures/arm64/veda.patch`), the processor's features from
+  `AT_HWCAP` and `AT_HWCAP2` (`crypto/armcap.c`), where OpenSSL would
+  otherwise try instructions and catch `SIGILL`: on Veda an instruction the
+  processor lacks ends the program.
 * **fontconfig**: Veda's `statfs` is Linux's (`fcstat.c`); `fonts.conf`,
   beside the port, is Veda's configuration: the fonts in `/system/fonts`,
   the generic families and the languages' CJK faces, and the cache in
@@ -343,7 +358,11 @@ What the patches change:
   and where they run (`src/closures.c`), never in memory both writable and
   executable; **libgcrypt**, **libgpg-error**,
   **libtasn1**, **icu**: `config.sub` knows Veda; **libgpg-error**: the
-  lock type of musl's threads (`lock-obj-pub.x86_64-pc-veda.h`).
+  lock type of musl's threads (`lock-obj-pub.x86_64-pc-veda.h`, and on ARM64
+  `lock-obj-pub.aarch64-unknown-veda.h`).
+* **opus**: on ARM64 (`architectures/arm64/veda.patch`), the processor's
+  features from `AT_HWCAP` (`celt/arm/armcpu.c`), where Opus reads Linux's
+  `/proc/cpuinfo`, which Veda has not.
 * The others: none.
 
 ## Python
@@ -377,7 +396,7 @@ What the patch changes:
 
 * **python**: Veda as a platform of CPython's build (`configure.ac`, and
   `configure`, generated from it by Autoconf 2.72; `config.sub`,
-  `Misc/platform_triplet.c`): `x86_64-veda`, its modules built into the
+  `Misc/platform_triplet.c`): `x86_64-veda` or `aarch64-veda`, its modules built into the
   interpreter, without the functions musl has that Veda does not carry
   out (`fork`, `exec*`, links, pseudo-terminals, `if_nameindex`), its
   shared libraries linked as GNU/Linux's (`LDSHARED`, `CCSHARED`,

@@ -355,7 +355,7 @@ pub mod prio {
 /// Signals.
 pub mod sig {
     /// The layer's panic handler's, which only Veda's build has.
-    #[cfg_attr(not(target_os = "none"), allow(dead_code))]
+    #[cfg_attr(not(feature = "layer"), allow(dead_code))]
     pub const ABRT: u32 = linux_raw_sys::general::SIGABRT;
     pub const KILL: u32 = linux_raw_sys::general::SIGKILL;
     pub const PIPE: u32 = linux_raw_sys::general::SIGPIPE;

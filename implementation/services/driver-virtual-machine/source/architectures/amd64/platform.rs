@@ -9,6 +9,7 @@
 
 use alloc::format;
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use abi::{VcpuExit, vcpu_exit};
@@ -19,7 +20,12 @@ use runtime::sync::Mutex;
 
 use super::i8042::{self, I8042};
 use crate::lines::Lines;
-use crate::machine::exit_code;
+use crate::machine::{Machine, exit_code};
+
+/// Answers a hypercall that is not one of the platform's: there are none.
+pub fn call(_machine: &Arc<Machine>, _data: &[u64; 7]) -> u64 {
+    hv::platform::error::UNKNOWN
+}
 
 pub struct Platform {
     /// The keyboard controller, if the guest has it.

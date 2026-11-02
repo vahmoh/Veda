@@ -1,0 +1,45 @@
+--- a/bfd/config.bfd
++++ b/bfd/config.bfd
+@@ -249,7 +249,7 @@
+     targ_archs="$targ_archs bfd_i386_arch bfd_powerpc_arch bfd_rs6000_arch"
+     want64=true
+     ;;
+-  aarch64-*-elf | aarch64-*-linux* | aarch64-*-netbsd* | aarch64-*-gnu* | aarch64-*-nto* | aarch64-*-rtems* | aarch64-*-genode*)
++  aarch64-*-elf | aarch64-*-linux* | aarch64-*-netbsd* | aarch64-*-gnu* | aarch64-*-nto* | aarch64-*-rtems* | aarch64-*-genode* | aarch64-*-veda*)
+     targ_defvec=aarch64_elf64_le_vec
+     targ_selvecs="aarch64_elf64_be_vec aarch64_elf32_le_vec aarch64_elf32_be_vec arm_elf32_le_vec arm_elf32_be_vec aarch64_pei_le_vec aarch64_pe_le_vec"
+     want64=true
+--- a/gas/configure.tgt
++++ b/gas/configure.tgt
+@@ -130,6 +130,7 @@
+   aarch64*-*-fuchsia*)			fmt=elf;;
+   aarch64*-*-haiku*)			fmt=elf em=haiku ;;
+   aarch64*-*-genode*)			fmt=elf;;
++  aarch64*-*-veda*)			fmt=elf;;
+   aarch64*-*-linux*)			fmt=elf em=linux
+     case ${cpu}-${os} in
+       aarch64*-linux-gnu_ilp32)		arch=aarch64:32 ;;
+--- a/ld/configure.tgt
++++ b/ld/configure.tgt
+@@ -89,6 +89,9 @@
+ 			targ_emul=aarch64elf
+ 			targ_extra_emuls="aarch64elf32 aarch64elf32b aarch64elfb armelf armelfb"
+ 			;;
++aarch64-*-veda*)	targ_emul=aarch64linux
++			targ_extra_emuls="aarch64elf"
++			;;
+ aarch64-*-freebsd*)	targ_emul=aarch64fbsd
+ 			targ_extra_emuls="aarch64fbsdb aarch64elf"
+ 			;;
+@@ -1104,9 +1107,9 @@
+   ;;
+ esac
+ 
+-# Enable -z separate-code and --warn-textrel by default for Linux/x86.
++# Enable -z separate-code and --warn-textrel by default for Linux/x86 and Veda.
+ case "${target}" in
+-i[3-7]86-*-linux-* | x86_64-*-linux-*)
++i[3-7]86-*-linux-* | x86_64-*-linux-* | aarch64-*-veda*)
+   if test ${ac_default_ld_z_separate_code} = unset; then
+     ac_default_ld_z_separate_code=1
+   fi

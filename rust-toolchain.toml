@@ -5,10 +5,17 @@
 # targets automatically on first use: UEFI's, of the loader; the bare-metal
 # one of the kernel and of the POSIX layer in the C library; and Linux's on
 # musl, of user-space programs (its ELF64 executables, without Linux's or
-# musl's code) and of the driver VM's programs. They are the AMD64 targets
-# (automation/source/architectures/amd64 names them for the build); rustup
-# reads them from this file only.
+# musl's code) and of the driver VM's programs. Each architecture's
+# (automation/source/architectures/<architecture> names them for the build)
+# are here: rustup reads them from this file only.
 [toolchain]
 channel = "stable"
-targets = ["x86_64-unknown-uefi", "x86_64-unknown-none", "x86_64-unknown-linux-musl"]
+targets = [
+    "x86_64-unknown-uefi",
+    "x86_64-unknown-none",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-uefi",
+    "aarch64-unknown-none-softfloat",
+    "aarch64-unknown-linux-musl",
+]
 components = ["rustfmt", "clippy"]

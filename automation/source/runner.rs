@@ -152,9 +152,15 @@ pub fn test(o: &Options) -> Result {
     // network interfaces, a card's link as the network service was told
     // it, Wi-Fi's frames, devices served again after their threads end), on
     // Linux as they run.
-    let mut guest = linux::guest_cargo(&["test", "--quiet", "--target", architecture::GUEST_TARGET]);
+    let mut guest = linux::guest_cargo(&["test", "--quiet", "--target", architecture::current().guest_target]);
     for package in GUEST_TESTED {
         guest.args(["--package", package]);
+    }
+    // They are programs of the architecture's, which only one of its
+    // machines runs.
+    if !architecture::is_build_machine() {
+        util::status("Note", "the driver VM's programs' tests are compiled, and do not run on this machine");
+        guest.arg("--no-run");
     }
     util::run(&mut guest)?;
     opengl_tests()?;
@@ -245,7 +251,7 @@ fn opengl_tests() -> Result {
             )?;
             drop(server);
         }
-        if linux::intel_gpu() {
+        if architecture::current().intel_gpus && linux::intel_gpu() {
             util::status("Testing", "OpenGL ES through Veda's renderer (Mesa's iris, on this machine's Intel GPU)");
             // Interceptor's game too: its shadows, sparks and cars on the
             // GPU.
@@ -292,7 +298,7 @@ fn ui_scripts() -> Result<Vec<PathBuf>> {
     let mut scripts = Vec::new();
     for group in ["ui", "agent"] {
         let dir = util::workspace_root().join("verification").join(group);
-        for dir in [dir.clone(), dir.join("architectures").join(architecture::NAME)] {
+        for dir in [dir.clone(), dir.join("architectures").join(architecture::current().name)] {
             let Ok(entries) = std::fs::read_dir(&dir) else { continue };
             let mut found: Vec<PathBuf> =
                 entries.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "vts")).collect();
@@ -337,18 +343,29 @@ pub fn scripts(o: &Options, files: &[PathBuf]) -> Result {
 }
 
 /// Why a script cannot run on this machine, if it cannot: the part of the
-/// toolchain it needs is not built, or QEMU has not the 3D GPU it asks for.
+/// toolchain it needs is not built, QEMU has not the 3D GPU it asks for or
+/// emulates processors it needs at their own speed, or the screen is not
+/// the size the script is laid out for.
 fn unrunnable(script: &Script, gl_gpu: impl Fn() -> bool) -> Option<String> {
     use crate::script::Requirement;
+    if let Some((w, h)) = architecture::current().qemu.fixed_screen
+        && (w, h) != system::SCRIPTED_SCREEN
+        && script.is_laid_out()
+    {
+        let (want_w, want_h) = system::SCRIPTED_SCREEN;
+        return Some(format!("is laid out for a {want_w}x{want_h} screen, and this machine's is {w}x{h}"));
+    }
     if script.boot.requires.contains(&Requirement::Web) && !crate::web::built() {
         return Some("needs the web engine: `cargo automation web`".into());
     }
     if script.boot.requires.contains(&Requirement::Python) && !crate::python::built() {
         return Some("needs Python: `cargo automation python`".into());
     }
-    let toolchain_parts = script.boot.requires.iter().filter(|r| !matches!(r, Requirement::Web | Requirement::Python));
-    if let Some(what) = toolchain_parts.clone().find(|r| !toolchain::built(r.part())) {
-        return Some(format!("needs the {}: `cargo automation toolchain`", what.part()));
+    if let Some(part) = script.boot.requires.iter().filter_map(|r| r.part()).find(|&part| !toolchain::built(part)) {
+        return Some(format!("needs the {part}: `cargo automation toolchain`"));
+    }
+    if script.boot.requires.contains(&Requirement::NativeSpeed) && qemu::emulated() {
+        return Some("needs the processors at their own speed, and QEMU emulates them here".into());
     }
     if script.boot.gpu == Some(true) && !gl_gpu() {
         return Some("needs QEMU's 3D GPU (virtio-gpu-gl-pci), which this QEMU has not".into());
@@ -616,12 +633,13 @@ fn script_on(o: &Options, script: &Script, prebuilt: Option<&Path>) -> Result {
     Ok(())
 }
 
-/// The ACPI tables `names` (the machine's: `architecture::acpitest`),
+/// The ACPI tables `names` (the machine's: `Architecture::acpi_tests`),
 /// written out for QEMU.
 fn acpi_tables(names: &[String]) -> Result<Vec<PathBuf>> {
     let mut tables = Vec::new();
     for name in names {
-        let table = architecture::acpitest::table(name).ok_or_else(|| format!("no ACPI table '{name}'"))?;
+        let table =
+            (architecture::current().acpi_tests.table)(name).ok_or_else(|| format!("no ACPI table '{name}'"))?;
         let path = util::out_dir().join(format!("acpi-{name}.aml"));
         util::create_dir_all(&util::out_dir())?;
         util::write(&path, table)?;

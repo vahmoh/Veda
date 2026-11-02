@@ -5,7 +5,8 @@
 //!
 //! Each architecture's IOMMU is in
 //! `implementation/libraries/iommu/source/architectures/<architecture>/`:
-//! [`amd64`], Intel VT-d. The kernel drives the units with it (its
+//! [`amd64`], Intel VT-d; [`arm64`], Arm's SMMUv3. The kernel drives the
+//! units with it (its
 //! architecture's `iommu`), and `device-manager` reads what the firmware's
 //! tables say of them; the host's unit tests check the encodings against
 //! the specification.
@@ -18,3 +19,5 @@ extern crate std;
 
 #[path = "architectures/amd64/mod.rs"]
 pub mod amd64;
+#[path = "architectures/arm64/mod.rs"]
+pub mod arm64;

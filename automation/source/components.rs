@@ -29,7 +29,7 @@
 
 use std::path::PathBuf;
 
-use crate::architecture::{KERNEL_TARGET, STD_TARGET, UEFI_TARGET, USER_TARGET};
+use crate::architecture;
 use crate::toolchain;
 use crate::util::{self, Result};
 
@@ -178,14 +178,15 @@ fn build_programs(profile: Profile, skip: &[String]) -> Result<Vec<(Program, Pat
     let (on_std, native): (Vec<Program>, Vec<Program>) = programs.into_iter().partition(|p| p.std);
     let mut built = Vec::new();
     if !native.is_empty() {
-        util::status("Building", format!("{} user-space programs ({USER_TARGET})", native.len()));
-        let mut cmd = util::cargo_for(USER_TARGET);
-        cmd.args(["build", "--target", USER_TARGET]).args(profile.cargo_flag());
+        let user_target = architecture::current().user_target;
+        util::status("Building", format!("{} user-space programs ({user_target})", native.len()));
+        let mut cmd = util::cargo_for(user_target);
+        cmd.args(["build", "--target", user_target]).args(profile.cargo_flag());
         for p in &native {
             cmd.args(["--package", p.package]);
         }
         util::run(&mut cmd)?;
-        let dir = target_dir().join(USER_TARGET).join(profile.dir());
+        let dir = target_dir().join(user_target).join(profile.dir());
         built.extend(native.iter().map(|p| (*p, dir.join(p.binary))));
     }
     if !on_std.is_empty() {
@@ -200,18 +201,19 @@ fn build_programs(profile: Profile, skip: &[String]) -> Result<Vec<(Program, Pat
 /// of their own, as the standard library's `crt-static` changes how every
 /// crate is compiled (and Cargo would build the others again for it).
 fn build_std_programs(programs: &[Program], profile: Profile) -> Result<Vec<(Program, PathBuf)>> {
+    let std_target = architecture::current().std_target;
     let (_lock, rust) = toolchain::std_rust()?;
     let (dynamic, programs): (Vec<Program>, Vec<Program>) = programs.iter().partition(|p| p.dynamic);
     let mut built = Vec::new();
     if !programs.is_empty() {
-        let dir = toolchain::std_target_dir().join(STD_TARGET).join(profile.dir());
+        let dir = toolchain::std_target_dir().join(std_target).join(profile.dir());
         // Linked again when the C library's POSIX layer has changed.
         toolchain::forget_old_links(&dir, &programs.iter().map(|p| p.binary).collect::<Vec<_>>())?;
-        util::status("Building", format!("{} programs on the standard library ({STD_TARGET})", programs.len()));
+        util::status("Building", format!("{} programs on the standard library ({std_target})", programs.len()));
         let mut cmd = rust.cargo_for_programs();
         // Where the web engine is, for the programs linked with it.
         cmd.env("VEDA_WEB", crate::web::root());
-        cmd.args(["build", "--target", STD_TARGET]).args(profile.cargo_flag());
+        cmd.args(["build", "--target", std_target]).args(profile.cargo_flag());
         for p in &programs {
             cmd.args(["--package", p.package]);
         }
@@ -222,13 +224,13 @@ fn build_std_programs(programs: &[Program], profile: Profile) -> Result<Vec<(Pro
         // The POSIX layer is the C library's shared object's: nothing of it
         // is in these programs to link again.
         let target_dir = toolchain::std_dynamic_target_dir();
-        let dir = target_dir.join(STD_TARGET).join(profile.dir());
-        util::status("Building", format!("{} dynamically linked programs ({STD_TARGET})", dynamic.len()));
+        let dir = target_dir.join(std_target).join(profile.dir());
+        util::status("Building", format!("{} dynamically linked programs ({std_target})", dynamic.len()));
         let mut cmd = rust.cargo_for_programs();
         cmd.env("CARGO_TARGET_DIR", &target_dir)
             .arg("--config")
-            .arg(format!("target.{STD_TARGET}.rustflags=[\"-C\", \"target-feature=-crt-static\"]"));
-        cmd.args(["build", "--target", STD_TARGET]).args(profile.cargo_flag());
+            .arg(format!("target.{std_target}.rustflags=[\"-C\", \"target-feature=-crt-static\"]"));
+        cmd.args(["build", "--target", std_target]).args(profile.cargo_flag());
         for p in &dynamic {
             cmd.args(["--package", p.package]);
         }
@@ -240,8 +242,9 @@ fn build_std_programs(programs: &[Program], profile: Profile) -> Result<Vec<(Pro
 
 /// Builds the loader, the kernel and the user-space programs (all but `skip`).
 pub fn build_all(profile: Profile, skip: &[String]) -> Result<Artifacts> {
-    let bootloader = build("bootloader", UEFI_TARGET, profile, "bootloader.efi")?;
-    let kernel = build("kernel", KERNEL_TARGET, profile, "kernel")?;
+    let arch = architecture::current();
+    let bootloader = build("bootloader", arch.uefi_target, profile, "bootloader.efi")?;
+    let kernel = build("kernel", arch.kernel_target, profile, "kernel")?;
     let programs = build_programs(profile, skip)?;
     Ok(Artifacts { bootloader, kernel, programs })
 }

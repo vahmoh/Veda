@@ -14,7 +14,7 @@ pub mod serial;
 pub use blank::clear_write_combining;
 pub use memtype::memory_type;
 
-use crate::FrameSource;
+use crate::{FrameSource, Ram};
 
 /// The direct map covers all RAM, and at least the low 4 GiB, where a PC's
 /// devices' registers are (the MMIO hole).
@@ -28,6 +28,10 @@ pub fn ticks() -> u64 {
     unsafe { core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nomem, nostack)) };
     (hi as u64) << 32 | lo as u64
 }
+
+/// `[base, base + len)` of memory now holds code: nothing to do, as the
+/// processor's instruction caches see what is written.
+pub fn code_written(_base: u64, _len: u64) {}
 
 fn read_msr(msr: u32) -> u64 {
     let (lo, hi): (u32, u32);
@@ -64,7 +68,7 @@ pub struct KernelSpace<'a, F: FrameSource> {
 }
 
 impl<'a, F: FrameSource> KernelSpace<'a, F> {
-    pub fn new(frames: &'a mut F, direct_map_limit: u64) -> Result<Self, &'static str> {
+    pub fn new(frames: &'a mut F, direct_map_limit: u64, _ram: &Ram) -> Result<Self, &'static str> {
         let mut pt = paging::PageTables::new(frames, supports_1g_pages())?;
         // Identity map (slot 0) and direct map (slot 256) share the same
         // tables; the direct map is additionally non-executable. The

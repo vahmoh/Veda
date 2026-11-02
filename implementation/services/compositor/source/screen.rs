@@ -54,7 +54,6 @@
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::sync::atomic::{Ordering, fence};
 
 use gfx::{Bitmap, Damage, Rect};
 use proto::displaydev::{self as dd, DisplayDevError, FlipState, Link, Shown};
@@ -210,7 +209,7 @@ impl Flips {
     fn queue(&mut self, picture: usize, now: u64) {
         // What was written reaches memory, out of the processor's
         // write-combining buffers, before the driver shows it.
-        fence(Ordering::SeqCst);
+        abi::barrier::device_complete();
         self.seq = self.seq.wrapping_add(1).max(1);
         self.state.queue(picture as u32, self.seq);
         let _ = self.request.signal();
@@ -529,7 +528,7 @@ impl Screen {
         if let Some(at) = self.flips.as_ref().and_then(|f| f.pictures.get(p)).and_then(|s| s.at(x, 0, 1)) {
             // SAFETY: a pixel of the mapping (`at` checked it).
             unsafe { core::ptr::write_volatile(at, value) };
-            fence(Ordering::SeqCst);
+            abi::barrier::device_complete();
         }
     }
 

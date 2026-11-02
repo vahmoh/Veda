@@ -25,7 +25,7 @@ pub fn dir() -> PathBuf {
 
 /// The ports' settings for the architecture built for.
 pub fn settings() -> PathBuf {
-    dir().join("architectures").join(architecture::NAME).join("settings.sh")
+    dir().join("architectures").join(architecture::current().name).join("settings.sh")
 }
 
 /// What every build of libraries for Veda (the web engine's, Python's)
@@ -127,7 +127,7 @@ impl Port {
         };
         let dir = dir().join(&self.name);
         let patches: Vec<String> =
-            ["veda.patch".to_string(), format!("architectures/{}/veda.patch", architecture::NAME)]
+            ["veda.patch".to_string(), format!("architectures/{}/veda.patch", architecture::current().name)]
                 .into_iter()
                 .filter(|patch| dir.join(patch).is_file())
                 .map(|patch| format!("implementation/ports/{}/{patch}", self.name))
@@ -377,7 +377,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let checkouts = [dir.join("one"), dir.join("elsewhere").join("two")];
         let architecture_patch =
-            |ports: &Path| ports.join("p").join("architectures").join(architecture::NAME).join("veda.patch");
+            |ports: &Path| ports.join("p").join("architectures").join(architecture::current().name).join("veda.patch");
         for ports in &checkouts {
             util::create_dir_all(architecture_patch(ports).parent().unwrap()).unwrap();
             util::copy(&super::dir().join("common.sh"), &ports.join("common.sh")).unwrap();
@@ -400,7 +400,7 @@ mod tests {
             let out = Command::new("bash")
                 .args(["-euo", "pipefail", "-c", script])
                 .env("PORTS", ports)
-                .env("VEDA_ARCH", architecture::NAME)
+                .env("VEDA_ARCH", architecture::current().name)
                 .env("STAMPS", &stamps)
                 .env("ROOT", &dir)
                 .env("RAN", &ran)

@@ -86,7 +86,7 @@ const BUILD_TOOLS: [&str; 14] =
 
 /// Where the web engine is built.
 pub fn root() -> PathBuf {
-    util::env_dir("VEDA_WEB", &["target", "web"])
+    util::architecture_dir("VEDA_WEB", "web")
 }
 
 /// The lock over the web engine's build.
@@ -213,7 +213,7 @@ pub fn command(args: &[String]) -> Result {
         Command::new("bash")
             .arg(ports.join("wpewebkit").join("build.sh"))
             .env("VEDA_PORTS", &ports)
-            .env("VEDA_ARCH", architecture::NAME)
+            .env("VEDA_ARCH", architecture::current().name)
             .env("VEDA_WEB", root())
             .env("VEDA_TOOLCHAIN", toolchain::root())
             .env("JOBS", jobs.to_string()),

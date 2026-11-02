@@ -39,6 +39,7 @@ use packages::keys::SecretKey;
 use packages::manifest::Manifest;
 use packages::{Digest, archive};
 
+use crate::architecture;
 use crate::util::{self, Result};
 
 /// The system's repository's name.
@@ -172,10 +173,11 @@ const COMMON: &str = "licence=GPL-3.0-only\nhomepage=https://www.vedaos.org\n";
 /// package whose file another's is, and one for a newer system than any.
 fn first_packages(hello: &[u8]) -> Result<Vec<(Offer, Vec<u8>)>> {
     let common = COMMON;
+    let architecture = architecture::current().name;
     Ok(vec![
         package(
             &format!(
-                "name=hello\nversion=1.0\narchitecture=amd64\nsummary=Says hello, for the tests\n{common}\
+                "name=hello\nversion=1.0\narchitecture={architecture}\nsummary=Says hello, for the tests\n{common}\
                  depends=libgreet (>= 1.0)\ndepends=veda (>= 0.1)\n"
             ),
             &[("bin/hello", hello), ("share/hello/README", b"hello 1.0, a package of Veda's tests.\n")],
@@ -204,10 +206,11 @@ fn first_packages(hello: &[u8]) -> Result<Vec<(Offer, Vec<u8>)>> {
 /// its first two, signed by `key`.
 fn test_repositories(hello: &[u8], key: &SecretKey) -> Result<Vec<(String, Vec<u8>)>> {
     let common = COMMON;
+    let architecture = architecture::current().name;
     let two = vec![
         package(
             &format!(
-                "name=hello\nversion=2.0\narchitecture=amd64\nsummary=Says hello, for the tests\n{common}\
+                "name=hello\nversion=2.0\narchitecture={architecture}\nsummary=Says hello, for the tests\n{common}\
                  depends=libgreet (>= 2.0)\ndepends=veda (>= 0.1)\n"
             ),
             &[
@@ -233,10 +236,11 @@ fn test_repositories(hello: &[u8], key: &SecretKey) -> Result<Vec<(String, Vec<u
 /// packages and the system.
 fn app_packages(calculator: &[u8]) -> Result<Vec<(Offer, Vec<u8>)>> {
     let common = COMMON;
+    let architecture = architecture::current().name;
     Ok(vec![
         package(
             &format!(
-                "name=abacus\nversion=1.0\narchitecture=amd64\nsummary=Sums, an application for the tests\n{common}\
+                "name=abacus\nversion=1.0\narchitecture={architecture}\nsummary=Sums, an application for the tests\n{common}\
                  depends=veda (>= 0.1)\n"
             ),
             &[
@@ -375,7 +379,7 @@ mod tests {
             }
         }
         // The application's package installs its manifest and its program.
-        let abacus = file("tests/packages/apps/abacus-1.0.amd64.vpkg");
+        let abacus = file(&format!("tests/packages/apps/abacus-1.0.{}.vpkg", architecture::current().name));
         let paths: Vec<String> = archive::Archive::open(abacus).unwrap().files.into_iter().map(|f| f.path).collect();
         assert_eq!(paths, ["apps/abacus.app", "bin/abacus"]);
         // The network's: one expires, one does not.

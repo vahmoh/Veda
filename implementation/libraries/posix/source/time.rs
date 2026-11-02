@@ -173,6 +173,8 @@ pub unsafe fn gettimeofday(tv: usize) -> SysResult {
     Ok(0)
 }
 
+/// `time` (x86-64's own system call: others have `clock_gettime`).
+#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
 pub unsafe fn time(out: usize) -> SysResult {
     let s = (realtime_ns() / 1_000_000_000) as i64;
     if out != 0 {

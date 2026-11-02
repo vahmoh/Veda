@@ -35,7 +35,10 @@ pub struct PowerInfo {
     pub reset: Option<(GenericAddressRaw, u8)>,
 }
 
+/// (The FADT's reset register, which only some architectures' machines
+/// reset through.)
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
 pub struct GenericAddressRaw {
     pub space: u8,
     pub address: u64,

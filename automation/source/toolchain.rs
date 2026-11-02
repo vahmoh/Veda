@@ -9,7 +9,7 @@
 //!
 //! * a **cross toolchain** that runs on this machine and makes Veda
 //!   programs (`<target>-gcc` and friends, for the architecture's target,
-//!   `architecture::C_TARGET`, with a sysroot laid out like Veda's
+//!   `architecture::current().c_target`, with a sysroot laid out like Veda's
 //!   `/system`), used to build the C tests and ports;
 //! * the **native toolchain**, the same compiler built to run inside Veda,
 //!   which the system image installs in `/system` (`gcc`, `as`, `ld`, the C
@@ -18,7 +18,7 @@
 //!   toolchain, which `media-decoder` (the decoder of Videos) is linked with;
 //! * **Rust**: its compiler, which runs on this machine, and its standard
 //!   library for this machine and for Veda's own target
-//!   (`architecture::STD_TARGET`), where it stands on the C library (see
+//!   (`architecture::current().std_target`), where it stands on the C library (see
 //!   `documentation/RUST.md`), with its Clippy and its standard library's
 //!   source; it builds Veda's programs on the standard library
 //!   ([`std_rust`]) and the Rust test programs.
@@ -39,14 +39,14 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::architecture::{self, BARE_TARGET};
+use crate::architecture;
 use crate::ports::{self, Port};
 use crate::util::{self, Recipe, Result};
 use crate::{databases, notices};
 
 /// Where the toolchain is built.
 pub fn root() -> PathBuf {
-    util::env_dir("VEDA_TOOLCHAIN", &["target", "toolchain"])
+    util::architecture_dir("VEDA_TOOLCHAIN", "toolchain")
 }
 
 /// The lock over the toolchain's directory.
@@ -87,7 +87,7 @@ pub fn rust_root() -> PathBuf {
 /// Veda's target.
 pub fn rustc() -> Option<PathBuf> {
     let rustc = rust_root().join("bin").join("rustc");
-    let std = rust_root().join("lib").join("rustlib").join(architecture::STD_TARGET).join("lib");
+    let std = rust_root().join("lib").join("rustlib").join(architecture::current().std_target).join("lib");
     (rustc.is_file() && std.is_dir()).then_some(rustc)
 }
 
@@ -100,14 +100,14 @@ pub struct StdRust {
 }
 
 impl StdRust {
-    /// Cargo for Veda's own target (`architecture::STD_TARGET`) with the
+    /// Cargo for Veda's own target (`architecture::current().std_target`) with the
     /// toolchain's compiler (build scripts and procedural macros too) and
     /// linker, in [`std_target_dir`], the build machine's paths remapped as
     /// for Veda's other programs.
     pub fn cargo_for_programs(&self) -> Command {
-        let mut cmd = util::cargo_for(architecture::STD_TARGET);
+        let mut cmd = util::cargo_for(architecture::current().std_target);
         cmd.env("RUSTC", &self.rustc)
-            .env(cargo_target_env(architecture::STD_TARGET, "LINKER"), &self.linker)
+            .env(cargo_target_env(architecture::current().std_target, "LINKER"), &self.linker)
             .env("CARGO_TARGET_DIR", std_target_dir());
         c_compilers(&mut cmd);
         cmd
@@ -128,7 +128,7 @@ impl StdRust {
         cmd.current_dir(util::workspace_root())
             .arg("clippy")
             .env("RUSTC", &self.rustc)
-            .env(cargo_target_env(architecture::STD_TARGET, "LINKER"), &self.linker)
+            .env(cargo_target_env(architecture::current().std_target, "LINKER"), &self.linker)
             .env("CARGO_TARGET_DIR", std_target_dir());
         c_compilers(&mut cmd);
         Ok(cmd)
@@ -138,7 +138,7 @@ impl StdRust {
     /// compiler's and its standard library's files for Veda (names, sizes,
     /// times), which a build of the same release does not otherwise change.
     fn fingerprint(&self) -> Result<String> {
-        let libs = rust_root().join("lib").join("rustlib").join(architecture::STD_TARGET).join("lib");
+        let libs = rust_root().join("lib").join("rustlib").join(architecture::current().std_target).join("lib");
         let mut files = util::files_under(&libs)?;
         files.push(self.rustc.clone());
         files.sort();
@@ -235,7 +235,7 @@ pub fn forget_old_links(profile_dir: &Path, binaries: &[&str]) -> Result {
 /// where the `cc` crate looks for them (`CC_<target>` and the others), so
 /// that a crate that compiles C or C++ for it compiles them for Veda.
 fn c_compilers(cmd: &mut Command) {
-    let target = architecture::STD_TARGET.replace('-', "_");
+    let target = architecture::current().std_target.replace('-', "_");
     for (variable, tool) in [("CC", "gcc"), ("CXX", "g++"), ("AR", "ar")] {
         cmd.env(format!("{variable}_{target}"), cross_tool(tool));
     }
@@ -284,7 +284,11 @@ pub fn rust_status() -> std::result::Result<String, String> {
         } else {
             ", without Clippy: `cargo automation toolchain` builds it again with it"
         };
-        return Ok(format!("Rust {version} for {} ({}){clippy}", architecture::STD_TARGET, rust_root().display()));
+        return Ok(format!(
+            "Rust {version} for {} ({}){clippy}",
+            architecture::current().std_target,
+            rust_root().display()
+        ));
     }
     let how = match shell() {
         Ok(_) => "`cargo automation toolchain` builds it (about half an hour)".to_string(),
@@ -328,13 +332,13 @@ pub fn media_status() -> std::result::Result<String, String> {
 
 /// The cross compiler, if it has been built.
 pub fn cross_gcc() -> Option<PathBuf> {
-    let gcc = root().join("cross").join("bin").join(format!("{}-gcc", architecture::C_TARGET));
+    let gcc = root().join("cross").join("bin").join(format!("{}-gcc", architecture::current().c_target));
     gcc.is_file().then_some(gcc)
 }
 
 /// A tool of the cross toolchain (`ld`, `objcopy`, `ar`, ...).
 fn cross_tool(name: &str) -> PathBuf {
-    root().join("cross").join("bin").join(format!("{}-{name}", architecture::C_TARGET))
+    root().join("cross").join("bin").join(format!("{}-{name}", architecture::current().c_target))
 }
 
 /// The symbols the POSIX layer gives the C library (and, for the `veda_`
@@ -386,18 +390,21 @@ const POSIX_LAYER_EXPORTS: [&str; 41] = [
 /// Builds the POSIX layer (`implementation/libraries/posix`) as a static
 /// library for the architecture's bare target; returns its path.
 pub fn posix_library() -> Result<PathBuf> {
-    util::status("Building", format!("the POSIX layer ({BARE_TARGET})"));
-    util::run(util::cargo_for(BARE_TARGET).args([
+    let bare_target = architecture::current().bare_target;
+    util::status("Building", format!("the POSIX layer ({bare_target})"));
+    util::run(util::cargo_for(bare_target).args([
         "rustc",
         "--package",
         "posix",
+        "--features",
+        "layer",
         "--target",
-        BARE_TARGET,
+        bare_target,
         "--release",
         "--crate-type",
         "staticlib",
     ]))?;
-    Ok(util::target_dir().join(BARE_TARGET).join("release").join("libposix.a"))
+    Ok(util::target_dir().join(bare_target).join("release").join("libposix.a"))
 }
 
 /// Links the POSIX layer's static library into the one relocatable object
@@ -559,7 +566,7 @@ fn c_tests() -> Result<Vec<(String, Vec<u8>)>> {
     let libc_so = shared_c_library();
     let runtimes = SHARED_RUNTIMES.map(shared_runtime);
     let src = util::workspace_root().join("verification").join("c");
-    let arch_headers = src.join("architectures").join(architecture::NAME);
+    let arch_headers = src.join("architectures").join(architecture::current().name);
     let headers = util::files_under(&arch_headers)?;
     let out = root().join("tests");
     util::create_dir_all(&out)?;
@@ -662,7 +669,7 @@ fn rust_tests() -> Result<Vec<(String, Vec<u8>)>> {
     let compile = |source: &Path, file: &Path, flags: &[&str]| -> Result {
         let mut compile = Command::new(&rustc);
         compile
-            .args(["--edition", "2024", "--target", architecture::STD_TARGET, "-D", "warnings"])
+            .args(["--edition", "2024", "--target", architecture::current().std_target, "-D", "warnings"])
             .args(["-C", "opt-level=2", "-C", "debuginfo=line-tables-only"])
             .arg(rust_path_remap())
             .arg("-C")
@@ -755,18 +762,21 @@ fn media_decoder() -> Result<Option<Vec<u8>>> {
     if code.split(|c: char| !c.is_alphanumeric() && c != '_').any(|w| w == "float" || w == "double") {
         return Err(format!("{}: no `float` or `double` may cross the shim", header.display()));
     }
-    util::status("Building", format!("the media decoder ({BARE_TARGET} and C)"));
-    util::run(util::cargo_for(BARE_TARGET).args([
+    let bare_target = architecture::current().bare_target;
+    util::status("Building", format!("the media decoder ({bare_target} and C)"));
+    util::run(util::cargo_for(bare_target).args([
         "rustc",
         "--package",
         "media-decoder",
+        "--features",
+        "layer",
         "--target",
-        BARE_TARGET,
+        bare_target,
         "--release",
         "--crate-type",
         "staticlib",
     ]))?;
-    let rust_lib = util::target_dir().join(BARE_TARGET).join("release").join("libmedia_decoder.a");
+    let rust_lib = util::target_dir().join(bare_target).join("release").join("libmedia_decoder.a");
     let out = root().join("build").join("media-decoder");
     util::create_dir_all(&out)?;
     let rust_obj = out.join("media-decoder-rs.o");
@@ -882,7 +892,7 @@ const SHARED_RUNTIMES: [&str; 3] = ["libgcc_s.so.1", "libstdc++.so.6", "libatomi
 
 /// Where the cross toolchain has the shared object of GCC's runtime `name`.
 fn shared_runtime(name: &str) -> PathBuf {
-    root().join("cross").join(architecture::C_TARGET).join("lib").join(name)
+    root().join("cross").join(architecture::current().c_target).join("lib").join(name)
 }
 
 /// The system's shared libraries for the image, at their paths in it: the
@@ -1104,7 +1114,7 @@ fn fetch_rust_stage0(downloads: &Path, host: &str) -> Result<Vec<String>> {
 /// The programs the build needs from the system: compilers and GNU tools,
 /// curl for the downloads, meson and ninja for the media libraries, CMake
 /// and Python for Rust's (its LLVM, its build program); and the
-/// architecture's own (`architecture::PORT_TOOLS`). `documentation/C.md`
+/// architecture's own (`architecture::current().port_tools`). `documentation/C.md`
 /// names the packages.
 const BUILD_TOOLS: [&str; 12] =
     ["gcc", "g++", "make", "m4", "bison", "flex", "patch", "curl", "meson", "ninja", "cmake", "python3"];
@@ -1114,12 +1124,12 @@ const BUILD_TOOLS: [&str; 12] =
 fn shell() -> Result<Command> {
     let missing: Vec<&str> = BUILD_TOOLS
         .iter()
-        .chain(architecture::PORT_TOOLS)
+        .chain(architecture::current().port_tools)
         .copied()
         .filter(|t| util::find_on_path(t).is_none())
         .collect();
     match missing.as_slice() {
-        [] => architecture::check_port_tools().map(|()| Command::new("bash")),
+        [] => (architecture::current().check_port_tools)().map(|()| Command::new("bash")),
         [tool] => {
             Err(format!("{tool} is missing: install it from the distribution's packages (see documentation/C.md)"))
         }
@@ -1167,7 +1177,7 @@ fn build(jobs: usize) -> Result {
     let script = ports::dir().join("build.sh");
     sh.arg(&script)
         .env("VEDA_PORTS", ports::dir())
-        .env("VEDA_ARCH", architecture::NAME)
+        .env("VEDA_ARCH", architecture::current().name)
         .env("VEDA_TOOLCHAIN", root())
         .env("VEDA_POSIX_LIB", &library)
         .env("VEDA_POSIX_EXPORTS", POSIX_LAYER_EXPORTS.join(" "))

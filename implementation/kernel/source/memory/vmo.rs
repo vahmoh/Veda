@@ -127,6 +127,12 @@ impl Vmo {
         self.committed.load(Ordering::Relaxed)
     }
 
+    /// Whether the kernel reaches `phys` of the VMO through the direct map,
+    /// which need not have a device's memory.
+    fn reachable(&self, phys: u64) -> bool {
+        !matches!(self.kind, VmoKind::Physical { .. }) || crate::architecture::memory::in_direct_map(phys)
+    }
+
     /// If the VMO is RAM mapped without the caches: makes memory hold what
     /// the kernel wrote to `len` bytes of it at `phys` through the direct
     /// map (write-back), and no cache keep a line of them. Such a line
@@ -208,6 +214,9 @@ impl Vmo {
             match self.page(pos, false) {
                 Some(f) => {
                     let at = f + in_page as u64;
+                    if !self.reachable(at) {
+                        return false;
+                    }
                     self.flush(at, n as u64);
                     // SAFETY: the frame is direct-mapped and `n` stays in the
                     // page.
@@ -244,6 +253,9 @@ impl Vmo {
                 return false;
             };
             let at = f + in_page as u64;
+            if !self.reachable(at) {
+                return false;
+            }
             // SAFETY: as in `read`.
             unsafe { core::ptr::copy_nonoverlapping(data.as_ptr().add(done), phys_to_virt(at) as *mut u8, n) };
             self.flush(at, n as u64);

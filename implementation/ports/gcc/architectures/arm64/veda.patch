@@ -1,0 +1,90 @@
+--- /dev/null
++++ b/gcc/config/aarch64/veda.h
+@@ -0,0 +1,43 @@
++/* Definitions for AArch64 Veda.
++   Copyright (C) 2026 Free Software Foundation, Inc.
++
++This file is part of GCC.
++
++GCC is free software; you can redistribute it and/or modify
++it under the terms of the GNU General Public License as published by
++the Free Software Foundation; either version 3, or (at your option)
++any later version.
++
++GCC is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with GCC; see the file COPYING3.  If not see
++<http://www.gnu.org/licenses/>.  */
++
++/* The AAPCS64, LP64 and little-endian, as on GNU/Linux.  */
++
++#undef  CC1_SPEC
++#define CC1_SPEC AARCH64_ERRATA_COMPILE_SPEC
++
++#undef  CC1PLUS_SPEC
++#define CC1PLUS_SPEC AARCH64_ERRATA_COMPILE_SPEC
++
++/* -ffast-math sets the flush-to-zero mode.  */
++#undef  ENDFILE_SPEC
++#define ENDFILE_SPEC \
++  "%{Ofast|ffast-math|funsafe-math-optimizations:%{!shared:crtfastmath.o%s}} " \
++  VEDA_ENDFILE_SPEC
++
++#define TARGET_ASM_FILE_END aarch64_file_end_indicate_exec_stack
++
++/* Uninitialized common symbols in non-PIE executables, even with
++   strong definitions in dependent shared libraries, will resolve
++   to COPY relocated symbol in the executable.  See PR65780.  */
++#undef  TARGET_BINDS_LOCAL_P
++#define TARGET_BINDS_LOCAL_P default_binds_local_p_2
++
++/* Static stack checking is supported by means of probes.  */
++#define STACK_CHECK_STATIC_BUILTIN 1
+--- a/gcc/config.gcc
++++ b/gcc/config.gcc
+@@ -1323,6 +1323,12 @@
+ 	done
+ 	TM_MULTILIB_CONFIG=`echo $TM_MULTILIB_CONFIG | sed 's/^,//'`
+ 	;;
++aarch64*-*-veda*)
++	tm_file="${tm_file} elfos.h glibc-stdint.h"
++	tm_file="${tm_file} aarch64/aarch64-elf.h aarch64/aarch64-errata.h veda.h aarch64/veda.h"
++	tmake_file="${tmake_file} aarch64/t-aarch64"
++	tm_defines="${tm_defines}  TARGET_DEFAULT_ASYNC_UNWIND_TABLES=1"
++	;;
+ aarch64*-*-gnu*)
+         tm_file="${tm_file} elfos.h gnu-user.h gnu.h glibc-stdint.h"
+         tm_file="${tm_file} aarch64/aarch64-elf.h aarch64/aarch64-errata.h aarch64/aarch64-gnu.h"
+--- a/gcc/config.host
++++ b/gcc/config.host
+@@ -100,7 +100,7 @@
+ 
+ case ${host} in
+   aarch64*-*-freebsd* | aarch64*-*-linux* | aarch64*-*-fuchsia* |\
+-  aarch64*-*-darwin*)
++  aarch64*-*-darwin* | aarch64*-*-veda*)
+     case ${target} in
+       aarch64*-*-*)
+ 	host_extra_gcc_objs="driver-aarch64.o"
+--- a/libgcc/config.host
++++ b/libgcc/config.host
+@@ -440,6 +440,15 @@
+ 	tmake_file="${tmake_file} t-dfprules"
+ 	tmake_file="${tmake_file} ${cpu_type}/t-heap-trampoline"
+ 	;;
++aarch64*-*-veda*)
++	extra_parts="$extra_parts crtfastmath.o"
++	md_unwind_def_header=aarch64/aarch64-unwind-def.h
++	md_unwind_header=aarch64/aarch64-unwind.h
++	tmake_file="${tmake_file} ${cpu_type}/t-aarch64"
++	tmake_file="${tmake_file} ${cpu_type}/t-lse"
++	tmake_file="${tmake_file} ${cpu_type}/t-softfp t-softfp t-crtfm"
++	tmake_file="${tmake_file} t-dfprules"
++	;;
+ aarch64*-*-gnu*)
+ 	extra_parts="$extra_parts crtfastmath.o"
+ 	md_unwind_def_header=aarch64/aarch64-unwind-def.h

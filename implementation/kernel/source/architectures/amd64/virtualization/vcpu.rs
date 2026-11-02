@@ -31,7 +31,8 @@ use core::arch::global_asm;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use abi::{Error, VcpuExit, VcpuSegment, VcpuState, vcpu_exit};
+use abi::amd64::VcpuSegment;
+use abi::{Error, VcpuExit, VcpuState, vcpu_exit};
 use hv::amd64::lapic::{self, Delivery, Ipi, Lapic};
 
 use super::vmx::{self, entry_ctl, field, proc, reason};

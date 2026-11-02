@@ -14,6 +14,8 @@
 
 #[path = "architectures/amd64/mod.rs"]
 pub mod amd64;
+#[path = "architectures/arm64/mod.rs"]
+pub mod arm64;
 
 /// The linker's arguments for a Veda program, beyond the target's (a static
 /// position-independent executable):
@@ -28,7 +30,7 @@ pub const LINK_ARGS: &[&str] = &["--entry=_rt_start", "-zpack-relative-relocs", 
 
 /// Whether `target` is one Veda programs are built for.
 fn is_user_target(target: &str) -> bool {
-    target == amd64::TARGET
+    target == amd64::TARGET || target == arm64::TARGET
 }
 
 /// Emits the linker arguments for a Veda user-space executable. Call this

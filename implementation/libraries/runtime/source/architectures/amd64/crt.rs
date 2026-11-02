@@ -183,17 +183,3 @@ strlen:
     .size strlen, . - strlen
 "#
 );
-
-/// The exception personality that the unwind tables of the precompiled
-/// `core` and `alloc` name. Never called: nothing unwinds.
-#[unsafe(no_mangle)]
-pub extern "C" fn rust_eh_personality() -> ! {
-    crate::sys::process_exit(-1)
-}
-
-/// Where the landing pads of the precompiled `core` and `alloc` resume
-/// unwinding. Never reached: nothing unwinds.
-#[unsafe(no_mangle)]
-pub extern "C" fn _Unwind_Resume() -> ! {
-    crate::sys::process_exit(-1)
-}

@@ -1,0 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Firmware for devices only ARM64's machines have: none yet (see
+# implementation/ports/linux/firmware.txt for the format).

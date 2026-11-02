@@ -197,11 +197,14 @@ pub unsafe fn statx(dirfd: i32, name: usize, flags: u32, mask: u32, buf: usize) 
         stat_path(&vfs::resolve_at(dirfd, path)?)?
     };
     let time = |t: Timespec| statx_timestamp { tv_sec: t.sec, tv_nsec: t.nsec as u32, __reserved: 0 };
+    // `stat` has it as wide as the architecture does.
+    #[allow(clippy::unnecessary_cast)]
+    let nlink = st.nlink as u32;
     // SAFETY: `struct statx` is plain integers, for which zero is valid.
     let mut sx: statx = unsafe { core::mem::zeroed() };
     sx.stx_mask = STATX_BASIC_STATS;
     sx.stx_blksize = st.blksize as u32;
-    sx.stx_nlink = st.nlink as u32;
+    sx.stx_nlink = nlink;
     sx.stx_uid = st.uid;
     sx.stx_gid = st.gid;
     sx.stx_mode = st.mode as u16;

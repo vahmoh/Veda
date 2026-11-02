@@ -1060,7 +1060,10 @@ impl VirglBackend {
     /// Whether the host has written a part's result
     /// (`struct virgl_host_query_state { u32 state; u32 size; u64 result; }`).
     fn part_done(&self, p: &QueryPart) -> bool {
-        self.shared_word(self.staging_size + p.slot * QUERY_SLOT) == QUERY_STATE_DONE
+        let done = self.shared_word(self.staging_size + p.slot * QUERY_SLOT) == QUERY_STATE_DONE;
+        // The result the state says is there is read after it.
+        core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
+        done
     }
 
     /// Whether samples passed, if the parts' results say yet.

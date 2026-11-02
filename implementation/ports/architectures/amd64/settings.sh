@@ -31,6 +31,14 @@ DAV1D_BINARIES="nasm = 'nasm'"
 FFMPEG_ARCH_OPTIONS=(--arch=x86_64 --x86asmexe=nasm)
 FFMPEG_ARCH_DEFINES=("HAVE_X86ASM 1" "HAVE_AVX2_EXTERNAL 1")
 
+# libjpeg-turbo's options for the architecture: its x86 code, which nasm
+# assembles.
+LIBJPEG_TURBO_ARCH_OPTIONS=(-DCMAKE_ASM_NASM_COMPILER=nasm)
+
+# Mesa's drivers: softpipe for tests, virgl for QEMU's virtio-gpu, iris for
+# Intel's GPUs.
+MESA_GALLIUM_DRIVERS=softpipe,virgl,iris
+
 # OpenSSL's name for the architecture, in its target for Veda
 # (veda-$OPENSSL_ARCH, which the openssl port adds): its assembly for it.
 OPENSSL_ARCH=x86_64
@@ -40,3 +48,6 @@ OPENSSL_ARCH=x86_64
 LINUX_ARCH=x86_64
 LINUX_IMAGE=bzImage
 LINUX_IMAGE_PATH=arch/x86/boot/bzImage
+# What comes before its compiler's name: nothing, as the build machine's own
+# compiles it.
+LINUX_CROSS_COMPILE=

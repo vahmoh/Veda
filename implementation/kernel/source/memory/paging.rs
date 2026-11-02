@@ -7,7 +7,8 @@
 //! the architecture's (`architecture::paging`).
 
 pub use crate::architecture::paging::{
-    activate, free_user_root, kernel_root, map, new_user_root, protect_range, translate, unmap, unmap_range,
+    activate, free_user_root, kernel_copies, kernel_root, map, new_user_root, protect_range, translate, unmap,
+    unmap_range,
 };
 
 use super::PAGE_SIZE;
@@ -47,7 +48,7 @@ pub enum MapError {
 /// the permissions the loader found for its pages
 /// (`bootinfo::KernelImage`). Then switches to it.
 pub fn init_kernel_space(boot: &bootinfo::BootInfo) {
-    let root = architecture::paging::new_kernel_space(boot.hhdm_limit);
+    let root = architecture::paging::new_kernel_space(boot);
     let k = &boot.kernel;
     for r in k.runs() {
         let flags = Flags {

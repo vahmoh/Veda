@@ -5,10 +5,10 @@
 //!
 //! Everything the kernel does that depends on the processor's architecture,
 //! or on the platform that comes with it, is implemented in
-//! `implementation/kernel/source/architectures/<architecture>/` (AMD64's in
-//! `implementation/kernel/source/architectures/amd64/`). The rest of the
-//! kernel reaches it only through the interface below, which every
-//! architecture provides with the same names and meanings:
+//! `implementation/kernel/source/architectures/<architecture>/` (`amd64/`
+//! and `arm64/`). The rest of the kernel reaches it only through the
+//! interface below, which every architecture provides with the same names
+//! and meanings:
 //!
 //! | Item | What it provides |
 //! |------|------------------|
@@ -24,7 +24,7 @@
 //! | `irq` | devices' interrupts: their vectors, lines and MSIs |
 //! | `timer`, `clock` | each CPU's one-shot timer; the clock's counter |
 //! | `serial` | the serial console the kernel log goes to |
-//! | `ioport` | I/O ports, for I/O port objects |
+//! | `ioport` | I/O ports, for I/O port objects (where the processor has them) |
 //! | `power` | powering off and resetting |
 //! | `virtualization` | virtual machines: guests' address translation, virtual processors |
 //! | `iommu` | the IOMMU: devices' DMA and interrupts remapped, devices given to guests |
@@ -40,5 +40,13 @@ pub use amd64::{
     thread, timer, tlb, trap, virtualization,
 };
 
-#[cfg(not(target_arch = "x86_64"))]
-compile_error!("the kernel supports AMD64 only (implementation/kernel/source/architectures/amd64)");
+#[cfg(target_arch = "aarch64")]
+pub(crate) mod arm64;
+#[cfg(target_arch = "aarch64")]
+pub use arm64::{
+    clock, cpu, init_cpu, init_platform, init_timer, iommu, ioport, irq, memory, paging, percpu, power, serial, smp,
+    thread, timer, tlb, trap, virtualization,
+};
+
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+compile_error!("the kernel supports AMD64 and ARM64 only (implementation/kernel/source/architectures)");

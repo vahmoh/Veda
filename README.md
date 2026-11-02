@@ -11,7 +11,7 @@ An operating system written in Rust, with a voice agent built into the system.
 
 [![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue)](LICENSE)
 [![Written in Rust](https://img.shields.io/badge/written%20in-Rust-b7410e?logo=rust&logoColor=white)](documentation/RUST.md)
-[![Runs on x86-64 PCs and QEMU](https://img.shields.io/badge/runs%20on-x86--64%20PCs%20%26%20QEMU-555)](#quick-start)
+[![Runs on x86-64 PCs and QEMU, and on ARM64 in QEMU](https://img.shields.io/badge/runs%20on-x86--64%20PCs%20%26%20QEMU%2C%20ARM64%20in%20QEMU-555)](#quick-start)
 
 [Screenshots](#screenshots) · [Quick start](#quick-start) · [Make an app agentic](#make-an-app-agentic) · [Architecture](#architecture) · [Documentation](#documentation)
 
@@ -108,6 +108,10 @@ Try *"Play Neon Horizon"*, *"Show me the lighthouse photo, full screen"* or
 Start it in UEFI mode, with VT-x and VT-d on and Secure Boot off, and choose
 **Try without installing** in its boot menu. It runs from memory and leaves
 the PC's disks alone; see [what it supports](documentation/DRIVERVM.md#status).
+
+**On ARM64:** add `--architecture arm64` to any command, on any build
+machine. It needs `qemu-system-arm` and `qemu-efi-aarch64`, and builds its
+own toolchain ([Developing](documentation/DEVELOPING.md#architectures)).
 
 ## Make an app agentic
 

@@ -6,6 +6,9 @@
 # refuses a second while one is on, and a mission not yet opened), pauses
 # and resumes it, changes the settings, starts a quick chase with the
 # choices given, and leaves for the menu; it says what it shows all along.
+# Its city takes longer to make than the agent waits for an application
+# (6 s) where QEMU emulates the processors.
+requires native-speed
 fail-on "PANIC"
 fail-on "shader:"
 fail-on "link: "

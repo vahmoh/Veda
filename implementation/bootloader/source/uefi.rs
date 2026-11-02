@@ -127,6 +127,9 @@ pub struct MemoryDescriptor {
     pub attribute: u64,
 }
 
+/// `MemoryDescriptor::attribute`: the memory can be cached write-back.
+pub const EFI_MEMORY_WB: u64 = 1 << 3;
+
 #[repr(C)]
 pub struct BootServices {
     pub hdr: TableHeader,

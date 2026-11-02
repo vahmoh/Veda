@@ -9,7 +9,7 @@ code follows, [Architecture](ARCHITECTURE.md) the design, and
 [Contributing](../CONTRIBUTING.md) how changes are proposed, tested and
 reviewed.
 
-**Contents:** [Commands](#commands) · [Running in QEMU](#running-in-qemu) · [The live system](#the-live-system) · [Scripts and tests](#scripts-and-tests) · [Reading the logs](#reading-the-logs) · [Builds](#builds) · [The system image](#the-system-image) · [Writing an application](#writing-an-application) · [Performance notes](#performance-notes)
+**Contents:** [Commands](#commands) · [Running in QEMU](#running-in-qemu) · [The live system](#the-live-system) · [Architectures](#architectures) · [Scripts and tests](#scripts-and-tests) · [Reading the logs](#reading-the-logs) · [Builds](#builds) · [The system image](#the-system-image) · [Writing an application](#writing-an-application) · [Performance notes](#performance-notes)
 
 ## Commands
 
@@ -123,12 +123,42 @@ debugging messages too). Its EFI system partition mounts as `VEDA` on any
 computer. Scripts boot from a writable stick with `live writable` and
 check its logs with `expect-stick` (`verification/ui/live-logs.vts`).
 
+## Architectures
+
+Veda is built for one architecture at a time: `amd64` or `arm64`, as
+`--architecture` or `$VEDA_ARCHITECTURE` says, otherwise the build
+machine's.
+
+```bash
+cargo automation --architecture arm64 run
+```
+
+What is built for AMD64 goes directly into `target/`, and what is built for
+ARM64 into `target/arm64/`: `toolchain`, `linux`, `web`, `python` and `veda`,
+which holds the image. So each architecture's heavy builds are its own, and
+neither disturbs the other's.
+
+QEMU's ARM64 machine is `virt`, with a GICv3 and its ITS, ACPI tables, an
+SMMUv3 and AAVMF for its firmware (`qemu-system-arm` and `qemu-efi-aarch64`
+on Debian and Ubuntu, `qemu-system-aarch64` and `edk2-aarch64` elsewhere). It
+differs from QEMU's PC in two ways:
+
+* **Speed.** On a PC, QEMU emulates the processor, EL2 included, so all of
+  Veda runs, driver VM too, at a fraction of its speed, and the scripts
+  whose programs keep deadlines of their own (`requires native-speed`)
+  are skipped. On an ARM64 machine KVM runs it without an EL2 of its own,
+  so it has no driver VM.
+* **The screen.** AAVMF gives a framebuffer only for `ramfb`, which is the
+  machine's memory, at 1024x768 at most. So `--resolution` goes no further,
+  the driver VM has no display to drive, and the scripts that point at parts
+  of the screen, which are laid out for 1280x800, are skipped.
+
 ## Scripts and tests
 
 `cargo automation test` runs the unit tests on the host, then `systest`
 inside Veda; `--ui` adds the scripts of `verification/ui/` (the desktop,
-the applications and the devices; `architectures/amd64/`: a PC's machine
-only) and `verification/agent/` (with a stand-in for Deepgram, and a
+the applications and the devices; `architectures/<architecture>/`: that
+machine's only) and `verification/agent/` (with a stand-in for Deepgram, and a
 microphone fed from the host by `testmic`). Those in `verification/real/`,
 run by hand, use the real Internet and Deepgram, with the key in
 `DEEPGRAM_API_KEY` ([The agent](AGENT.md#testing)).
@@ -163,18 +193,25 @@ the run, with its number.
 * **Python.** Its script says `requires python`, and is skipped where
   Python is not built; CPython's own tests run inside Veda in an image
   built with `--python-tests` ([Python on Veda](PYTHON.md#tests)).
+* **Speed.** A script whose programs keep deadlines of their own (the
+  agent's for an application to start, a call to the renderer) says
+  `requires native-speed`, and is skipped where QEMU emulates the
+  processors, many times slower than KVM runs them: ARM64's on a PC, or a
+  PC's without KVM.
 * **The browser.** Its scripts say `requires web`, and are skipped where
   the web engine is not built. `web-server` serves the host's test pages
   (`/page`, `/second`, `/zone`, `/cookie`, `/scripts`, in
   `automation/source/hostweb.rs`)
   at `{web}`, which the command line, typed text and the agent's calls
   name.
-* **Continuous integration.** GitHub's runners build Veda and run
+* **Continuous integration.** GitHub's runners build Veda for each
+  architecture and run
   `cargo automation test --net none --cmdline driver-virtual-machine=off`
   for every push and every pull request from a fork
-  (`.github/workflows/ci.yml`). They have KVM but cannot run the driver VM,
-  which needs VT-x nested in KVM: Veda boots without it and without a
-  network, so `systest` leaves out its checks of the network, as on any
+  (`.github/workflows/ci.yml`, `architecture.yml`). They have KVM but cannot
+  run the driver VM, which on AMD64 needs VT-x nested in KVM and on ARM64
+  would take too long under QEMU's emulator: Veda boots without it and
+  without a network, so `systest` leaves out its checks of the network, as on any
   machine without one, and the GUI and agent scripts are left to
   `test --ui`. The heavy builds (the toolchain, the driver VM's Linux and
   Mesa) are made there once for their ports, which takes hours, and kept in
@@ -461,6 +498,9 @@ AMD64), and the cross compiler links ([C on Veda](C.md),
 target/toolchain/cross/bin/x86_64-veda-gcc -O2 -Wall -o hello hello.c
 target/toolchain/rust/bin/rustc --edition 2024 --target x86_64-unknown-veda -C linker=target/toolchain/cross/bin/x86_64-veda-gcc -O -o hello hello.rs
 ```
+
+For ARM64 the toolchain is in `target/arm64/toolchain`, and the compilers
+are `aarch64-veda-gcc` and `aarch64-unknown-veda`.
 
 A program that loads libraries at run time is linked dynamically instead,
 with the C library's shared object: in C with `-fPIE -pie`, in Rust with

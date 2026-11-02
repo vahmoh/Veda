@@ -9,9 +9,11 @@
 //! exchanged through system calls. It contains no code that depends on being
 //! in the kernel or in user space.
 //!
-//! What depends on the processor's architecture is in [`architecture`]
+//! What depends on the processor's architecture is in [`amd64`] and
+//! [`arm64`]
 //! (`implementation/libraries/abi/source/architectures/<architecture>/`),
-//! and re-exported here: how system calls are made, the page size, the user
+//! that of the architecture compiled for in [`architecture`], and
+//! re-exported here: how system calls are made, the page size, the user
 //! address space, how threads start, and the registers and exits of virtual
 //! processors.
 //!
@@ -43,13 +45,23 @@
 
 #![no_std]
 
-#[cfg(target_arch = "x86_64")]
 #[path = "architectures/amd64/mod.rs"]
-pub mod architecture;
+pub mod amd64;
+#[path = "architectures/arm64/mod.rs"]
+pub mod arm64;
 pub mod startup;
 
+/// The architecture this code is compiled for: what the kernel and programs
+/// use. Each architecture's is public on every host, for what describes
+/// another's guests (`hv`) and for its tests.
+#[cfg(target_arch = "x86_64")]
+pub use amd64 as architecture;
+#[cfg(target_arch = "aarch64")]
+pub use arm64 as architecture;
+
+pub use architecture::barrier;
 pub use architecture::{
-    PAGE_SIZE, PROGRAM_BASE, PROGRAM_SPAN, ThreadState, USER_SPACE_END, USER_SPACE_START, VcpuSegment, VcpuState,
+    PAGE_SIZE, PROGRAM_BASE, PROGRAM_SPAN, ThreadState, USER_SPACE_END, USER_SPACE_START, VcpuState,
     entry_stack_pointer, vcpu_exit,
 };
 
@@ -1169,6 +1181,10 @@ pub struct SystemInfo {
     /// Timer interrupts taken across all CPUs since boot: how often they
     /// were woken or interrupted for a deadline or the end of a time slice.
     pub timer_interrupts: u64,
+    /// The processor's features, as `AT_HWCAP` and `AT_HWCAP2` give them to
+    /// programs, on an architecture where they cannot read them themselves
+    /// ([`arm64::hwcap`]); otherwise 0.
+    pub hwcap: [u64; 2],
 }
 
 impl Default for SystemInfo {
@@ -1185,6 +1201,7 @@ impl Default for SystemInfo {
             idle_time_ns: 0,
             cpu_brand: [0; 48],
             timer_interrupts: 0,
+            hwcap: [0; 2],
         }
     }
 }
@@ -1260,6 +1277,11 @@ pub struct KernelBootInfo {
     pub acpi_memory_count: u32,
     /// What the machine offers beyond what Veda needs ([`platform`]).
     pub platform: u32,
+    /// Where PCI configuration space of segment 0 is as memory (ECAM,
+    /// which the firmware's MCFG table gives; 0: not there), and its first
+    /// and last bus. A window for bus 0 starts here, whichever is first.
+    pub pci_config: u64,
+    pub pci_config_buses: [u8; 2],
 }
 
 /// Ranges of [`KernelBootInfo::acpi_memory`].

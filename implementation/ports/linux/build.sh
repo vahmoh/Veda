@@ -103,28 +103,6 @@ stage_libelf() {
 }
 stage libelf src_elfutils zlib @DEPS
 
-# Everything off but what the driver VM needs (veda.config, and the
-# architecture's: architectures/$VEDA_ARCH/veda.config), all of which must take:
-# Kconfig leaves out an option it does not know, or whose dependencies are
-# off, without a word.
-stage_config() {
-	cat "$PORTS/linux/veda.config" "$PORTS/linux/architectures/$VEDA_ARCH/veda.config" > "$BUILD/veda.config"
-	quiet "$BUILD/config.log" make -C "$SRC/linux" O="$BUILD/linux" ARCH="$LINUX_ARCH" \
-		KCONFIG_ALLCONFIG="$BUILD/veda.config" allnoconfig
-	local line missing=""
-	while IFS= read -r line; do
-		case $line in
-		CONFIG_*=n) if grep -q "^${line%=n}=" "$BUILD/linux/.config"; then missing="$missing $line"; fi ;;
-		CONFIG_*=*) if ! grep -qxF "$line" "$BUILD/linux/.config"; then missing="$missing $line"; fi ;;
-		esac
-	done < "$BUILD/veda.config"
-	if [ -n "$missing" ]; then
-		echo "veda.config: options that did not take (unknown, or their dependencies off):$missing" >&2
-		exit 1
-	fi
-}
-stage config src_linux "$PORTS/linux/veda.config" "$PORTS/linux/architectures/$VEDA_ARCH/veda.config" @LINUX_ARCH
-
 # --- the guest's C and C++ toolchain -------------------------------------------
 
 # The guest's programs in C and C++ (Mesa, for the renderer) are built by a
@@ -195,6 +173,29 @@ stage_musl() {
 }
 stage musl src_musl gcc
 
+# Everything off but what the driver VM needs (veda.config, and the
+# architecture's: architectures/$VEDA_ARCH/veda.config), all of which must take:
+# Kconfig leaves out an option it does not know, or whose dependencies are
+# off, without a word.
+stage_config() {
+	cat "$PORTS/linux/veda.config" "$PORTS/linux/architectures/$VEDA_ARCH/veda.config" > "$BUILD/veda.config"
+	quiet "$BUILD/config.log" make -C "$SRC/linux" O="$BUILD/linux" ARCH="$LINUX_ARCH" \
+		CROSS_COMPILE="$LINUX_CROSS_COMPILE" KCONFIG_ALLCONFIG="$BUILD/veda.config" allnoconfig
+	local line missing=""
+	while IFS= read -r line; do
+		case $line in
+		CONFIG_*=n) if grep -q "^${line%=n}=" "$BUILD/linux/.config"; then missing="$missing $line"; fi ;;
+		CONFIG_*=*) if ! grep -qxF "$line" "$BUILD/linux/.config"; then missing="$missing $line"; fi ;;
+		esac
+	done < "$BUILD/veda.config"
+	if [ -n "$missing" ]; then
+		echo "veda.config: options that did not take (unknown, or their dependencies off):$missing" >&2
+		exit 1
+	fi
+}
+stage config src_linux gcc "$PORTS/linux/veda.config" "$PORTS/linux/architectures/$VEDA_ARCH/veda.config" \
+	@LINUX_ARCH @LINUX_CROSS_COMPILE
+
 # Linux's interface for programs (its UAPI headers: linux/types.h, the
 # DRM's, ...), from the kernel the guest runs.
 stage_linux_headers() {
@@ -256,11 +257,12 @@ stage_mesa() {
 	rm -rf "$BUILD/mesa" "$BUILD/mesa-host"
 	quiet "$BUILD/mesa-setup.log" meson setup "$BUILD/mesa" "$SRC/mesa" --cross-file "$BUILD/mesa.cross" \
 		"${MESA_OPTIONS[@]}" -Dveda-renderer="$RENDERER" -Dveda-renderer-lib="$RENDERER_LIB" \
-		-Dgallium-drivers=softpipe,virgl,iris
+		-Dgallium-drivers="$MESA_GALLIUM_DRIVERS"
 	quiet "$BUILD/mesa-host-setup.log" meson setup "$BUILD/mesa-host" "$SRC/mesa" \
-		"${MESA_OPTIONS[@]}" -Dveda-renderer="$RENDERER" -Dgallium-drivers=softpipe,virgl,iris
+		"${MESA_OPTIONS[@]}" -Dveda-renderer="$RENDERER" -Dgallium-drivers="$MESA_GALLIUM_DRIVERS"
 }
-stage mesa src_mesa libstdcxx linux_headers @MESA_OPTIONS @RENDERER @RENDERER_LIB @MESON_CPU_FAMILY @MESON_CPU
+stage mesa src_mesa libstdcxx linux_headers @MESA_OPTIONS @MESA_GALLIUM_DRIVERS @RENDERER @RENDERER_LIB \
+	@MESON_CPU_FAMILY @MESON_CPU
 
 # --- the licences ----------------------------------------------------------------
 
@@ -296,6 +298,6 @@ stage licences src_linux src_mesa @LICENCE_FILES @LICENCE_PORTS @ROOT
 # make knows what changed.
 log Building linux
 quiet "$BUILD/linux.log" make -C "$SRC/linux" O="$BUILD/linux" ARCH="$LINUX_ARCH" \
-	HOSTPKG_CONFIG="$DEPS/bin/pkg-config" -j"$JOBS" "$LINUX_IMAGE"
+	CROSS_COMPILE="$LINUX_CROSS_COMPILE" HOSTPKG_CONFIG="$DEPS/bin/pkg-config" -j"$JOBS" "$LINUX_IMAGE"
 cp "$BUILD/linux/$LINUX_IMAGE_PATH" "$ROOT/kernel"
 log Finished "Linux $(port linux version) for the driver VM ($ROOT/kernel)"

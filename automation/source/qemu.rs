@@ -11,6 +11,19 @@ use std::process::Command;
 use crate::architecture;
 use crate::util::{self, Result};
 
+/// KVM, with which QEMU runs the machine's processors on the build
+/// machine's: its device, if this user may use it.
+pub fn kvm() -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new().read(true).write(true).open("/dev/kvm")
+}
+
+/// Whether QEMU emulates the machine's processors, many times slower than
+/// KVM runs them: another architecture's always, and the build machine's
+/// where KVM is not to be had.
+pub fn emulated() -> bool {
+    !architecture::is_build_machine() || kvm().is_err()
+}
+
 /// A path as the value of one of QEMU's options, where a comma ends the
 /// value unless it is doubled.
 pub fn option_path(path: &Path) -> String {
@@ -47,7 +60,7 @@ pub struct QemuInstall {
     pub firmware_code: PathBuf,
     pub firmware_vars_template: PathBuf,
     /// Memory the firmware needs blank at every reset (its start and size),
-    /// if any: see `architecture::qemu::blank_at_reset`.
+    /// if any: see `Qemu::blank_at_reset`.
     pub blank_at_reset: Option<(u64, u64)>,
 }
 
@@ -56,23 +69,22 @@ impl QemuInstall {
     /// via `$OVMF_CODE`/`$OVMF_VARS`, QEMU's data directory or where Linux
     /// distributions install it.
     pub fn locate() -> Result<Self> {
+        let machine = &architecture::current().qemu;
         let binary = std::env::var_os("QEMU")
             .map(PathBuf::from)
-            .or_else(|| util::find_on_path(architecture::qemu::BINARY))
+            .or_else(|| util::find_on_path(machine.binary))
             .ok_or("QEMU not found: install it or set the QEMU environment variable")?;
 
         let qemu_dir = binary.parent().unwrap_or(Path::new("."));
         let dirs = [qemu_dir.join("share"), qemu_dir.join("../share/qemu"), PathBuf::from("/usr/share/qemu")]
             .into_iter()
-            .chain(architecture::qemu::FIRMWARE_DIRS.iter().map(PathBuf::from));
+            .chain(machine.firmware_dirs.iter().map(PathBuf::from));
         let found = dirs
-            .flat_map(|d| {
-                architecture::qemu::FIRMWARE_FILES.iter().map(move |(code, vars)| (d.join(code), d.join(vars)))
-            })
+            .flat_map(|d| machine.firmware_files.iter().map(move |(code, vars)| (d.join(code), d.join(vars))))
             .find(|(code, vars)| code.is_file() && vars.is_file());
         let missing = format!(
             "the UEFI firmware was not found: install it ({}) or set OVMF_CODE and OVMF_VARS",
-            architecture::qemu::FIRMWARE_PACKAGES
+            machine.firmware_packages
         );
         let firmware_code = std::env::var_os("OVMF_CODE")
             .map(PathBuf::from)
@@ -81,7 +93,7 @@ impl QemuInstall {
         let firmware_vars_template =
             std::env::var_os("OVMF_VARS").map(PathBuf::from).or_else(|| found.map(|(_, vars)| vars)).ok_or(missing)?;
         let code = util::read(&firmware_code)?;
-        let blank_at_reset = architecture::qemu::blank_at_reset(&code);
+        let blank_at_reset = (machine.blank_at_reset)(&code);
         Ok(QemuInstall { binary, firmware_code, firmware_vars_template, blank_at_reset })
     }
 
@@ -157,7 +169,7 @@ pub struct Screen {
     pub width: u32,
     pub height: u32,
     /// The refresh rate (mHz).
-    refresh: u32,
+    pub refresh: u32,
 }
 
 impl Screen {
@@ -240,7 +252,7 @@ pub struct VmConfig {
     /// one if QEMU has it.
     pub gpu: Option<bool>,
     /// An IOMMU, remapping interrupts, as PCs have (the machine's: see
-    /// `architecture::qemu::machine_args`): the driver VM's devices need
+    /// `Qemu::machine_args`): the driver VM's devices need
     /// it.
     pub iommu: bool,
     /// QEMU's USB network adapter (`usb-net`: CDC Ethernet, which Veda has
@@ -314,6 +326,7 @@ pub fn prepare_home_disk(path: &Path, fresh: bool) -> Result {
 
 /// Builds the QEMU command line for booting `disk`.
 pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) -> Result<Command> {
+    let machine = &architecture::current().qemu;
     let mut cmd = Command::new(&install.binary);
     let flash = |file: &Path, ro: bool| {
         format!(
@@ -326,20 +339,17 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     cmd.args(["-name", "Veda"]);
     // The machine, with its own keyboard unless input is USB's; its IOMMU,
     // before the devices it translates; and its processors.
-    cmd.args(architecture::qemu::machine_args(cfg.input == InputDevices::Standard, cfg.iommu));
+    cmd.args((machine.machine_args)(cfg.input == InputDevices::Standard, cfg.iommu));
     for t in &cfg.acpi_tables {
         cmd.args(["-acpitable", &format!("file={}", option_path(t))]);
     }
-    // KVM when the host offers it; otherwise the TCG emulator
-    // (multi-threaded, one host thread per vCPU).
-    cmd.args(["-accel", "kvm", "-accel", "tcg,thread=multi"]);
     cmd.args(["-smp", &cfg.cpus.to_string()]);
     cmd.args(["-m", &format!("{}M", cfg.memory_mib)]);
     cmd.args(["-drive", &flash(&install.firmware_code, true)]);
     cmd.args(["-drive", &flash(vars, false)]);
     // What the firmware needs blank at every reset, from a file of zeros
     // QEMU's loader writes there (see
-    // `architecture::qemu::blank_at_reset`).
+    // `Qemu::blank_at_reset`).
     if let Some((start, size)) = install.blank_at_reset {
         let blank = util::out_dir().join("firmware-blank.bin");
         if std::fs::metadata(&blank).map(|m| m.len()).ok() != Some(size) {
@@ -348,28 +358,17 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         }
         cmd.args(["-device", &format!("loader,file={},addr={start:#x},force-raw=on", option_path(&blank))]);
     }
-    // The display, at 00:01.0 (where `-vga std` puts it, before any other
-    // device takes it), named so that the tablet can be bound to it (see
-    // `-display` below): QEMU's standard VGA, whose memory holds the
-    // firmware's framebuffer, and which Linux's bochs driver drives in the
-    // driver VM; its EDID gives the screen's size as its own. With a GPU, a
-    // virtio-gpu with virgl beside it, whose virglrenderer runs on the
-    // host's OpenGL and needs an OpenGL display backend (a window or an
-    // offscreen one): its render node is the renderer's in the driver VM,
-    // while the screen stays the VGA's, which QEMU can take screenshots of
-    // (not of a GPU's scanouts). It is at 00:10.0, so that the other
-    // devices are where they are with it or without it.
+    // The display, the machine's own, named so that the tablet can be
+    // bound to it (see `-display` below). With a GPU, a virtio-gpu with
+    // virgl beside it, whose virglrenderer runs on the host's OpenGL and
+    // needs an OpenGL display backend (a window or an offscreen one): its
+    // render node is the renderer's in the driver VM, while the screen stays
+    // the display's, which QEMU can take screenshots of (not of a GPU's
+    // scanouts). It is at 00:10.0, so that the other devices are where they
+    // are with it or without it.
     let gpu = cfg.gpu.unwrap_or_else(|| install.has_gl_gpu());
-    let Screen { width: w, height: h, refresh } = cfg.screen;
-    // Its memory holds a frame of the screen, for the firmware and for
-    // Linux's driver: QEMU's 16 MiB up to 2560x1600, a power of two above.
-    let memory = (w as u64 * h as u64 * 4).div_ceil(1 << 20).next_power_of_two().max(16);
-    cmd.args([
-        "-vga",
-        "none",
-        "-device",
-        &format!("VGA,id={DISPLAY_ID},addr=0x1,xres={w},yres={h},refresh_rate={refresh},vgamem_mb={memory}"),
-    ]);
+    cmd.args(["-vga", "none"]);
+    cmd.args((machine.display_args)(DISPLAY_ID, cfg.screen));
     if gpu {
         cmd.args(["-device", &virtio(cfg, "virtio-gpu-gl-pci,id=gpu0,addr=0x10")]);
     }
@@ -401,6 +400,9 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     }
     match cfg.input {
         InputDevices::Standard => {
+            if !machine.has_keyboard {
+                cmd.args(["-device", &virtio(cfg, "virtio-keyboard-pci")]);
+            }
             cmd.args(["-device", &virtio(cfg, &format!("virtio-tablet-pci{bound}"))]);
         }
         InputDevices::Usb => {
@@ -431,7 +433,7 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
             // line output and, with the host's sound system, a line input.
             "hda" => {
                 let codec = if streams == 2 { "hda-duplex" } else { "hda-output" };
-                cmd.args(["-device", &format!("{},id=hda", architecture::qemu::HDA_CONTROLLER)]);
+                cmd.args(["-device", &format!("{},id=hda", machine.hda_controller)]);
                 cmd.args(["-device", &format!("{codec},bus=hda.0,audiodev=audio0")])
             }
             _ => cmd.args(["-device", &virtio(cfg, &format!("virtio-sound-pci,audiodev=audio0,streams={streams}"))]),
@@ -476,8 +478,10 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     if let Some(path) = &cfg.qmp {
         cmd.args(["-qmp", &format!("unix:{},server=on,wait=off", socket_option(path)?)]);
     }
-    if cfg.debug_exit {
-        cmd.args(["-device", architecture::qemu::DEBUG_EXIT]);
+    if cfg.debug_exit
+        && let Some(device) = machine.debug_exit
+    {
+        cmd.args(["-device", device]);
     }
     if cfg.gdb {
         cmd.args(["-s", "-S"]);

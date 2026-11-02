@@ -75,14 +75,14 @@ memory and their devices.
 
 | Piece | Where | What it does |
 |-------|-------|--------------|
-| Hypervisor | `implementation/kernel/source/virtualization`, `implementation/kernel/source/architectures/amd64/virtualization` | `Guest` and `Vcpu` objects; on AMD64, VMX with EPT and the virtual x2APIC |
-| IOMMU | `implementation/kernel/source/architectures/amd64/iommu` | Intel VT-d: DMA and interrupt remapping |
-| `hv` | `implementation/libraries/hv` | The platform's and the bridge's ABIs, the guest's ACPI tables, a given function's configuration space; on AMD64 the virtual local APIC, `cpuid` and Linux's boot protocol |
-| `iommu` | `implementation/libraries/iommu` | The DMAR table; the units' registers and structures |
+| Hypervisor | `implementation/kernel/source/virtualization`, `implementation/kernel/source/architectures/<architecture>/virtualization` | `Guest` and `Vcpu` objects; on AMD64, VMX with EPT and the virtual x2APIC; on ARM64, EL2 with VHE, stage 2 and the GICv3's virtual interface |
+| IOMMU | `implementation/kernel/source/architectures/<architecture>/iommu` | On AMD64, Intel VT-d: DMA and interrupt remapping; on ARM64, the SMMUv3's stage 2 for DMA, the ITS keeping interrupts apart |
+| `hv` | `implementation/libraries/hv` | The platform's and the bridge's ABIs, the guest's ACPI tables, a given function's configuration space; on AMD64 the virtual local APIC, `cpuid` and Linux's boot protocol; on ARM64 the guest's distributor and redistributors, what it sees of the processor, its device tree and Linux's boot protocol |
+| `iommu` | `implementation/libraries/iommu` | On AMD64 the DMAR table, on ARM64 the IORT; the units' registers and structures |
 | Device manager | `implementation/services/device-manager` | Picks the driver VM's devices, serves their `pcidev` channels, resets them, restarts the driver VM |
 | Monitor | `implementation/services/driver-virtual-machine` | The machine, its hypercalls and PCI functions, the bridge, the narrowed registry |
 | The monitor's library | `implementation/services/driver-virtual-machine/source/lib.rs` | The monitor's decisions that touch no object: the bridge's books, the guest's budget and window, where functions and BARs go, the keyboard controller's commands |
-| Guest kernel | `implementation/ports/linux` | Linux with `veda.patch` (`hvc_veda.c`, `drivers/virt/veda/bridge.c` and `efi.c`, `gpio-veda.c`, an i915 change) and `architectures/amd64/veda.patch` (`arch/x86/kernel/cpu/veda.c`, `arch/x86/pci/veda.c`) |
+| Guest kernel | `implementation/ports/linux` | Linux with `veda.patch` (`hvc_veda.c`, `drivers/virt/veda/bridge.c` and `efi.c`, `gpio-veda.c`, an i915 change) and the architecture's: `architectures/amd64/veda.patch` (`arch/x86/kernel/cpu/veda.c`, `arch/x86/pci/veda.c`) or `architectures/arm64/veda.patch` (`arch/arm64/kernel/veda.c`, `drivers/pci/controller/pci-veda.c`) |
 | Guest runtime | `implementation/libraries/runtime/source/guest.rs` | `runtime`'s system calls through `/dev/veda`; watches |
 | Guest programs | `implementation/guests/linux` | `init`; the drivers `input`, `alsa`, `net`, `wifi`, `kms` and `renderer`; `logkeeper`; the tests `bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `timertest`, `kmspause`; shared code (`sys`, `netlink`) |
 | Build | `automation/source/linux.rs`, `implementation/ports/linux/build.sh` | [`cargo automation linux`](#building) |
@@ -121,6 +121,14 @@ The memory map leaves out the first 64 KiB (the processors' start-up GDT
 and page tables) and the legacy hole, where the ACPI tables are, from
 0xE0000 as on a PC.
 
+On ARM64 the monitor boots Linux through its boot protocol for the
+architecture, in `Image` format
+(`implementation/services/driver-virtual-machine/source/architectures/arm64/boot.rs`),
+with a device tree in place of the ACPI tables (`hv::arm64::fdt`), and
+without firmware: PSCI's calls over `hvc`, which start and stop processors
+and power the machine off, are hypercalls the monitor answers. Its
+platform is `hv::arm64::platform`, which Linux finds as a node of the tree.
+
 A processor's only timer is its local APIC's (in x2APIC mode, with the
 TSC-deadline timer; there is no PIT or HPET), which keeps running while
 the processor idles, as `cpuid`'s leaf 6 says (ARAT). Linux needs that to
@@ -157,6 +165,43 @@ which first drops stale translations (`invvpid`, `invept`). Unmapping
 guest memory shoots the translations down on every CPU before the pages
 are reused.
 
+On ARM64 (`implementation/kernel/source/architectures/arm64/virtualization`)
+the kernel runs at EL2 with the Virtualization Host Extensions, so entering
+a guest is an `eret` to EL1 with stage 2 translation on, and `vcpu_run`
+otherwise behaves as on AMD64: the BKL released, host interrupts and the
+scheduler preempting it, `wfi` blocking it. What differs:
+
+* **Stage 2** tables have 4 KiB leaves and four levels, and carry a VMID, so
+  nothing is flushed as a processor goes from one guest to another; guests'
+  TLB and cache maintenance is broadcast (`HCR_EL2.FB`, `BSU`). The guest's
+  memory is cleaned and the instruction caches invalidated before a virtual
+  processor first runs, as it starts with its MMU off.
+* **The guest's registers** of EL1 are the processor's while a thread runs
+  it, reached under the host's names (`*_EL12`), and leave with its timer
+  and floating point when it leaves the kernel's loop.
+* **The interrupt controller** is a GICv3. The processor's side is the
+  hardware's: interrupts are raised through list registers, and an interrupt
+  of a level asks for a maintenance interrupt at its end, which ends the
+  line. The distributor and redistributors are memory that nothing maps:
+  reaching them is a fault whose syndrome says what the guest wanted, which
+  `hv::arm64::gic` answers. SGIs are trapped writes of `ICC_SGI1R_EL1`.
+* **The virtual timer** is the guest's own. When it fires it makes the guest
+  exit, the kernel masks it, as the guest's handler would, and raises its
+  interrupt. While the guest waits off the processor, its thread sleeps
+  until the deadline. Fired is what the timer says (its `ISTATUS`), which is
+  what the guest's handler checks: an interrupt it takes while its timer
+  says otherwise is spurious to it, and the timer would stay masked. So the
+  kernel raises none for a deadline the counter has passed before the timer
+  says it fired (as under QEMU, for a moment), nor for a stale interrupt.
+  The guests' counter is the kernel's (`CNTVOFF_EL2` is 0), so that their
+  deadlines and its clock agree.
+* **What the guest sees of the processor** is a known set of features
+  (`hv::arm64::features`), not what the processor has, as the ID registers
+  trap. So a new processor's features do not reach a guest before the
+  hypervisor has its part of them: pointer authentication, SVE, SME and MTE
+  stay hidden. Performance counters and debug registers are out of its
+  reach (`MDCR_EL2`), and read as 0 where Linux expects them.
+
 ## Devices
 
 Every PCI function goes to the driver VM except those Veda keeps
@@ -169,8 +214,8 @@ and speaker amplifiers, are Linux's.
 `driver-virtual-machine=off` gives nothing.
 
 The driver VM runs where the processors run virtual machines (VMX with
-EPT) and the image has its Linux, and gets PCI functions only where an
-IOMMU confines them (the kernel tells `device-manager` both,
+EPT, or EL2 with VHE) and the image has its Linux, and gets PCI functions
+only where an IOMMU confines them (the kernel tells `device-manager` both,
 `abi::platform`).
 
 ### How a function is given
@@ -193,6 +238,11 @@ invalidates the IOTLB before the pages are reused. Functions are attached
 before the guest runs; when it ends, their context entries go, so they
 reach nothing until another guest takes them.
 
+On ARM64 the domain is an SMMUv3's stage 2, over a linear stream table
+whose default is to pass requests through. A stream that leaves a guest
+aborts. The ITS's doorbell may lie among a guest's addresses, so a domain
+has it at an address no guest has (`hv::arm64::memory::MSI_DOORBELL`).
+
 **Interrupts.** The IOMMU remaps every interrupt in Veda through one
 table (entry V raises vector V of the boot processor) and blocks the
 compatibility format; an MSI's entry names its function, so a function
@@ -212,7 +262,10 @@ number where it can. `arch/x86/pci/veda.c` gives Linux configuration
 space through hypercalls and an MSI domain, modelled on Hyper-V's root
 partition, in which composing a message routes the MSI (`PCI_MSI`). A
 function's INTx is the line the PC's firmware wires it to (from the
-root's `_PRT`). Linux's command line gives each function's host addresses
+root's `_PRT`). On ARM64 `drivers/pci/controller/pci-veda.c` is the same
+for a device tree's generic PCI root, whose MSIs are SPIs from 128 up;
+`PCI_MSI` gives the doorbell's address and the message in one word. Its
+functions have MSI or MSI-X only: INTx is not done yet. Linux's command line gives each function's host addresses
 (`veda.device=00:01.0,0:0x80000000,...`), which drivers name to services
 such as the compositor.
 
@@ -483,15 +536,15 @@ The scripts are in `verification/ui`.
 | Audio: ALSA → `audiodev`, playback and recording; virtio's sound devices | Done (`drivervm-audio.vts`, `drivervm-mic.vts`, `music.vts`, `volume.vts`) |
 | Network and Wi-Fi: Linux's cards → `netdev`, nl80211 → `wlanphy` (managed radios) | Done (`drivervm-net.vts`, `e1000e.vts`, `network-cable.vts`); Wi-Fi tested on PCs |
 | Display: KMS → `displaydev`, the compositor's pictures shown as they are | Done (`drivervm-display.vts`, `drivervm-display-restart.vts`, `drivervm-display-crash.vts`) |
-| GPU: the renderer on Mesa's Gallium drivers (virgl under QEMU, iris, softpipe) | Done (`drivervm-gpu.vts`, `drivervm-renderer.vts`, `drivervm-compose.vts`); Intel's integrated GPUs below |
+| GPU: the renderer on Mesa's Gallium drivers (virgl under QEMU, iris, softpipe) | Done (`architectures/amd64/drivervm-gpu.vts`, `drivervm-renderer.vts`, `drivervm-compose.vts`); Intel's integrated GPUs below |
 | Input and USB: event devices → `input`; USB controllers whole (keyboards, mice, network and Bluetooth adapters) | Done (`usb-input.vts`, `drivervm-usb.vts`, `live-usb.vts`); touchpads too (`architectures/amd64/drivervm-described.vts`) |
 | Every device Veda does not keep goes to the driver VM, which starts with Veda | Done (every script, `architectures/amd64/iommu.vts`) |
 | Restart and device reset | Done (`drivervm-restart.vts`); hangs and suspend later |
 | PS/2: the keyboard controller through the monitor, its interrupts routed; touchpads as a pointer | Done (every script's keyboard, `architectures/amd64/window-keys.vts`) |
-| ACPI for the guest: the platform's tables; interrupt lines (GSIs), level-triggered ones too; functions' INTx | Done (`drivervm-intx.vts`, `architectures/amd64/window-keys.vts`) |
+| ACPI for the guest: the platform's tables; interrupt lines (GSIs), level-triggered ones too; functions' INTx | Done (`architectures/amd64/drivervm-intx.vts`, `architectures/amd64/window-keys.vts`) |
 | Devices the firmware describes below functions, in the guest's tables; a laptop's I2C controllers and HID devices (touchpads, touchscreens) to Linux | Done under QEMU (`architectures/amd64/drivervm-described.vts`); not yet tried on a PC |
 | GPIO: the platform's controllers, the pins described devices are wired to, their interrupts; devices on SPI controllers | Done under QEMU (`architectures/amd64/drivervm-gpio.vts`, a simulated controller) |
-| Sound: HD Audio controllers and codecs, a laptop's speaker amplifiers on SPI with their pins | Done under QEMU (`drivervm-audio.vts`, `drivervm-mic.vts`, `drivervm-pci.vts`, `startup.vts`); the amplifiers not yet tried on a PC |
+| Sound: HD Audio controllers and codecs, a laptop's speaker amplifiers on SPI with their pins | Done under QEMU (`drivervm-audio.vts`, `drivervm-mic.vts`, `drivervm-pci.vts`, `architectures/amd64/startup.vts`); the amplifiers not yet tried on a PC |
 | The PC's firmware variables, read-only (the amplifiers' calibration) | Done under QEMU (`drivervm-variables.vts`, variables added to OVMF's); not yet tried on a PC |
 | The audio DSP of built-in microphones: SOF from Tiger Lake to Raptor Lake, with the NHLT | Done under QEMU (`architectures/amd64/drivervm-nhlt.vts`: the NHLT only, as QEMU has no DSP); not yet tried on a PC |
 | Firmware-reserved memory (RMRRs) where the PC has it | Done; QEMU's machine has none, so not yet tried on a PC |
@@ -500,6 +553,21 @@ The scripts are in `verification/ui`.
 **GPUs.** The guest's Linux has i915 and virtio-gpu, and its Mesa iris,
 virgl and softpipe. AMD's and NVIDIA's (amdgpu and radeonsi, nouveau and
 NVK) are not in yet, and go in with their firmware.
+
+**ARM64.** Linux runs in Veda under QEMU's emulator
+(`architectures/arm64/drivervm.vts`), with its USB controller, sound card
+and network card given through the SMMUv3 and the ITS
+(`architectures/arm64/iommu.vts`), each function a node of its device tree
+(`drivervm-pci.vts`), and starts again after a crash or its monitor's end
+(`drivervm-restart.vts`); the GUI scripts that are not laid out for a PC's
+screen pass there, but for those that need the processors at their own
+speed (`requires native-speed`). Not there yet: functions' INTx; and a
+display for KMS, as QEMU's firmware gives a framebuffer only in memory, so
+the compositor draws into it itself (`architectures/arm64/startup.vts`).
+What only PCs have (PS/2, the guest's ACPI tables, GPIO and the devices
+firmware describes below functions, Intel's GPUs) has no part in it, and the
+scripts of it are AMD64's (`architectures/amd64/`). It has not run on a
+real ARM64 machine.
 
 ## Building
 

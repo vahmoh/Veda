@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The IOMMU (QEMU's SMMUv3), which the tests' machines have: Veda's kernel
+# passes the DMA of Veda's own devices through, while the driver VM's reach
+# only its memory, and the ITS keeps each device to its own interrupts. Both
+# work at once, without a fault: the disks, Veda's; the sound card (HD
+# Audio), the USB controller with its keyboard and tablet, and the network
+# card, Linux's.
+sound hda
+input usb
+net ethernet
+nettest local
+fail-on "PANIC"
+fail-on "nettest: FAIL"
+wait-serial "iommu: SMMUv3 at" 60
+wait-serial "desktop ready" 600
+wait-serial "input: QEMU QEMU USB Keyboard (usb 0627:0001): keyboard" 300
+wait-serial "alsa: attached to the audio service" 300
+wait-serial "nettest: PASS" 600
+reject-serial "iommu: unit at"
+reject-serial "iommu: not used"

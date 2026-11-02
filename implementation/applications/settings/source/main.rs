@@ -908,7 +908,7 @@ impl Settings {
             Align::Left,
         );
         y += 92;
-        let blurb = "Veda is an x86-64 operating system written from scratch in Rust: a capability-based microkernel, with drivers, file systems, the window system and every application running as isolated user-space processes.";
+        let blurb = "Veda is an operating system written from scratch in Rust: a capability-based microkernel, with drivers, file systems, the window system and every application running as isolated user-space processes.";
         y += ui.paragraph(Rect::new(r.x, y, r.w, 80), blurb, t.font_size, t.text_dim) + 22;
         // The licences; About Veda shows their texts.
         Self::section_heading(ui, r.x, y, r.w, "Licences");

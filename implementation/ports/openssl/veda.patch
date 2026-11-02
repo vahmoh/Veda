@@ -1,6 +1,6 @@
 --- a/Configurations/50-veda.conf
 +++ b/Configurations/50-veda.conf
-@@ -0,0 +1,27 @@
+@@ -0,0 +1,34 @@
 +## Veda: a Unix system over a capability microkernel, whose C library is
 +## musl and whose programs are linked statically
 +## (implementation/ports/openssl in Veda's sources). Libraries only: no
@@ -26,5 +26,12 @@
 +        bn_ops           => "SIXTY_FOUR_BIT_LONG",
 +        asm_arch         => 'x86_64',
 +        perlasm_scheme   => "elf",
++    },
++    "veda-aarch64" => {
++        inherit_from     => [ "veda-common" ],
++        lib_cppflags     => add("-DL_ENDIAN"),
++        bn_ops           => "SIXTY_FOUR_BIT_LONG",
++        asm_arch         => 'aarch64',
++        perlasm_scheme   => "linux64",
 +    },
 +);

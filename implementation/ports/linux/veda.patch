@@ -627,7 +627,7 @@
 +/* The monitor finished waits: their completions are in the ring. */
 +static void bridge_callback(void)
 +{
-+	u32 head = READ_ONCE(*(u32 *)(ring + RING_HEAD));
++	u32 head = smp_load_acquire((u32 *)(ring + RING_HEAD));
 +	unsigned long flags;
 +
 +	spin_lock_irqsave(&waiters_lock, flags);
@@ -641,12 +641,12 @@
 +			if (w->key == e.key) {
 +				w->status = e.status;
 +				w->satisfied = e.satisfied;
-+				WRITE_ONCE(w->done, true);
++				smp_store_release(&w->done, true);
 +				break;
 +			}
 +		}
 +	}
-+	WRITE_ONCE(*(u32 *)(ring + RING_TAIL), ring_tail);
++	smp_store_release((u32 *)(ring + RING_TAIL), ring_tail);
 +	spin_unlock_irqrestore(&waiters_lock, flags);
 +	wake_up_all(&waiters_queue);
 +}
@@ -959,7 +959,7 @@
 +	spin_unlock_irqrestore(&waiters_lock, flags);
 +	ret = bridge_call(OP_WAIT, w);
 +	if (!ret && w->status == VEDA_PENDING) {
-+		if (wait_event_interruptible(waiters_queue, READ_ONCE(waiter.done))) {
++		if (wait_event_interruptible(waiters_queue, smp_load_acquire(&waiter.done))) {
 +			struct cancel *c = kzalloc(sizeof(*c), GFP_KERNEL);
 +
 +			/* Given up, unless the monitor finished it meanwhile:
@@ -970,10 +970,10 @@
 +				if (!ret && c->status == 0)
 +					ret = -EINTR;
 +				else
-+					wait_event(waiters_queue, READ_ONCE(waiter.done));
++					wait_event(waiters_queue, smp_load_acquire(&waiter.done));
 +				kfree(c);
 +			} else {
-+				wait_event(waiters_queue, READ_ONCE(waiter.done));
++				wait_event(waiters_queue, smp_load_acquire(&waiter.done));
 +			}
 +		}
 +		w->status = waiter.status;

@@ -20,7 +20,7 @@ pub fn thread_pointer() -> usize {
 }
 
 /// Where a thread `__veda_clone` makes starts: `__veda_thread_entry`.
-#[cfg(target_os = "none")]
+#[cfg(feature = "layer")]
 pub fn thread_entry_address() -> usize {
     unsafe extern "C" {
         fn __veda_thread_entry();
@@ -28,7 +28,7 @@ pub fn thread_entry_address() -> usize {
     __veda_thread_entry as *const () as usize
 }
 
-#[cfg(not(target_os = "none"))]
+#[cfg(not(feature = "layer"))]
 pub fn thread_entry_address() -> usize {
     0
 }
@@ -36,7 +36,7 @@ pub fn thread_entry_address() -> usize {
 // A new thread starts here with rdi = rsp = its `Start` (see `thread`):
 // it installs its thread pointer and exit futex, calls its function, and
 // ends (`thread::thread_returned`) if the function returns.
-#[cfg(target_os = "none")]
+#[cfg(feature = "layer")]
 core::arch::global_asm!(
     ".global __veda_thread_entry",
     ".hidden __veda_thread_entry",

@@ -44,6 +44,8 @@ use crate::version::Version;
 pub enum Architecture {
     /// AMD64 (x86-64).
     Amd64,
+    /// ARM64 (AArch64).
+    Arm64,
     /// None: the package holds no programs (data, fonts, documents,
     /// scripts), and installs on every architecture.
     Any,
@@ -54,10 +56,15 @@ impl Architecture {
     /// packages of (and of [`Architecture::Any`]).
     #[cfg(target_arch = "x86_64")]
     pub const NATIVE: Architecture = Architecture::Amd64;
+    /// The architecture this code is compiled for, which a system installs
+    /// packages of (and of [`Architecture::Any`]).
+    #[cfg(target_arch = "aarch64")]
+    pub const NATIVE: Architecture = Architecture::Arm64;
 
     pub fn as_str(self) -> &'static str {
         match self {
             Architecture::Amd64 => "amd64",
+            Architecture::Arm64 => "arm64",
             Architecture::Any => "any",
         }
     }
@@ -66,6 +73,7 @@ impl Architecture {
     pub fn parse(text: &str) -> Option<Architecture> {
         match text {
             "amd64" => Some(Architecture::Amd64),
+            "arm64" => Some(Architecture::Arm64),
             "any" => Some(Architecture::Any),
             _ => None,
         }
@@ -202,8 +210,9 @@ impl Manifest {
         let version =
             Version::parse(&version.ok_or_else(|| missing("version"))?).map_err(|e| BadManifest(e.to_string()))?;
         let architecture = architecture.ok_or_else(|| missing("architecture"))?;
-        let architecture = Architecture::parse(&architecture)
-            .ok_or_else(|| BadManifest(alloc::format!("'{architecture}' is not an architecture: amd64 or any")))?;
+        let architecture = Architecture::parse(&architecture).ok_or_else(|| {
+            BadManifest(alloc::format!("'{architecture}' is not an architecture: amd64, arm64 or any"))
+        })?;
         let manifest = Manifest {
             name,
             version,
@@ -322,8 +331,12 @@ provides=greeter (= 1.0)
     fn architectures_install_where_they_run() {
         assert!(Architecture::Amd64.installs_on(Architecture::Amd64));
         assert!(Architecture::Any.installs_on(Architecture::Amd64));
+        assert!(Architecture::Any.installs_on(Architecture::Arm64));
         assert!(!Architecture::Amd64.installs_on(Architecture::Any));
+        assert!(!Architecture::Amd64.installs_on(Architecture::Arm64));
+        assert!(!Architecture::Arm64.installs_on(Architecture::Amd64));
         assert_eq!(Architecture::parse("any"), Some(Architecture::Any));
-        assert_eq!(Architecture::NATIVE.as_str(), "amd64");
+        assert_eq!(Architecture::parse("arm64"), Some(Architecture::Arm64));
+        assert_eq!(Architecture::parse(Architecture::NATIVE.as_str()), Some(Architecture::NATIVE));
     }
 }

@@ -44,6 +44,9 @@ pub use alloc::{boxed, format, rc, string, vec};
 #[cfg(target_arch = "x86_64")]
 #[path = "architectures/amd64/mod.rs"]
 pub mod architecture;
+#[cfg(target_arch = "aarch64")]
+#[path = "architectures/arm64/mod.rs"]
+pub mod architecture;
 #[cfg(all(feature = "runtime", not(test), not(target_os = "veda")))]
 mod crt;
 pub mod env;
@@ -60,6 +63,8 @@ pub mod sync;
 pub mod sys;
 pub mod thread;
 pub mod time;
+#[cfg(all(feature = "unwinding", not(test), not(target_os = "veda")))]
+mod unwinding;
 pub mod vm;
 
 pub use object::{

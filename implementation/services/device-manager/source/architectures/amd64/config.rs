@@ -5,6 +5,7 @@
 //! written to port 0xCF8, the data at port 0xCFC (segment 0, the first 256
 //! bytes of each function's).
 
+use abi::KernelBootInfo;
 use runtime::object::{IoPorts, Resource};
 
 use crate::pci::Address;
@@ -22,7 +23,7 @@ pub struct ConfigAccess {
 
 impl ConfigAccess {
     /// Takes the configuration ports, out of the ports `io` grants.
-    pub fn open(io: &Resource) -> Result<ConfigAccess, abi::Error> {
+    pub fn open(io: &Resource, _mmio: &Resource, _boot: Option<&KernelBootInfo>) -> Result<ConfigAccess, abi::Error> {
         Ok(ConfigAccess { ports: IoPorts::create(io, ADDRESS, 8)? })
     }
 

@@ -3,8 +3,9 @@
 
 //! `pcitest` — checks, inside the driver VM's Linux, the PCI functions
 //! Veda gave it: each is on the guest's PCI with a driver of Linux's, and
-//! described by an ACPI device of the platform's tables (with the devices
-//! they describe below it, which it lists). An HD Audio controller's
+//! described by the platform: by an ACPI device of its tables (with the
+//! devices they describe below it, which it lists), or by a node of its
+//! device tree, where it has one in their place. An HD Audio controller's
 //! codec has answered, which takes the controller's DMA both ways, and its
 //! MSIs, which announce the answers, arrived (other functions interrupt
 //! only when something happens). It says `pcitest: PASS` when all is well.
@@ -35,21 +36,25 @@ fn driver(function: &Path) -> Option<String> {
     Some(link.file_name()?.to_string_lossy().into_owned())
 }
 
-/// The ACPI device that describes a function (its companion), and the
-/// devices the tables describe below that one, with their ids.
+/// What describes a function: the ACPI device of it (its companion), and
+/// the devices the tables describe below that one, with their ids; or else
+/// its node of the device tree, by its path there.
 fn described(function: &Path) -> (String, Vec<String>) {
     let companion = read(&function.join("firmware_node").join("path"));
-    let mut below = Vec::new();
-    if !companion.is_empty() {
-        for d in fs::read_dir("/sys/bus/acpi/devices").into_iter().flatten().flatten() {
-            let path = read(&d.path().join("path"));
-            let child = path.strip_prefix(&companion).and_then(|r| r.strip_prefix('.'));
-            if child.is_some_and(|r| !r.contains('.')) {
-                below.push(format!("{} ({})", path, read(&d.path().join("hid"))));
-            }
-        }
-        below.sort();
+    if companion.is_empty() {
+        let node = fs::canonicalize(function.join("of_node")).unwrap_or_default();
+        let path = node.strip_prefix("/sys/firmware/devicetree/base").map(|p| format!("/{}", p.display()));
+        return (path.unwrap_or_default(), Vec::new());
     }
+    let mut below = Vec::new();
+    for d in fs::read_dir("/sys/bus/acpi/devices").into_iter().flatten().flatten() {
+        let path = read(&d.path().join("path"));
+        let child = path.strip_prefix(&companion).and_then(|r| r.strip_prefix('.'));
+        if child.is_some_and(|r| !r.contains('.')) {
+            below.push(format!("{} ({})", path, read(&d.path().join("hid"))));
+        }
+    }
+    below.sort();
     (companion, below)
 }
 

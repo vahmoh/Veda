@@ -21,7 +21,10 @@ libm = { workspace = true }
 [features]
 default = ["runtime"]
 # Entry point, global allocator, panic handler and C runtime symbols.
-runtime = []
+runtime = ["unwinding"]
+# What the precompiled `core` and `alloc` name for unwinding, alone: for what
+# is linked into C programs.
+unwinding = []
 
 [lints]
 workspace = true

@@ -52,6 +52,9 @@ extern crate alloc;
 #[cfg(target_arch = "x86_64")]
 #[path = "architectures/amd64/mod.rs"]
 mod architecture;
+#[cfg(target_arch = "aarch64")]
+#[path = "architectures/arm64/mod.rs"]
+mod architecture;
 mod bridge;
 mod gpio;
 mod lines;

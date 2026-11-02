@@ -1,0 +1,53 @@
+--- a/compiler/rustc_target/src/spec/mod.rs
++++ b/compiler/rustc_target/src/spec/mod.rs
+@@ -1557,6 +1557,8 @@
+     ("i686-unknown-hurd-gnu", i686_unknown_hurd_gnu),
+     ("x86_64-unknown-hurd-gnu", x86_64_unknown_hurd_gnu),
+ 
++    ("aarch64-unknown-veda", aarch64_unknown_veda),
++
+     ("aarch64-apple-darwin", aarch64_apple_darwin),
+     ("arm64e-apple-darwin", arm64e_apple_darwin),
+     ("x86_64-apple-darwin", x86_64_apple_darwin),
+--- /dev/null
++++ b/compiler/rustc_target/src/spec/targets/aarch64_unknown_veda.rs
+@@ -0,0 +1,29 @@
++use crate::spec::{Arch, Cc, FramePointer, LinkerFlavor, Lld, StackProbeType, Target, TargetMetadata, base};
++
++pub(crate) fn target() -> Target {
++    let mut base = base::veda::opts();
++    base.max_atomic_width = Some(128);
++    base.features = "+v8a,+outline-atomics".into();
++    base.stack_probes = StackProbeType::Inline;
++    base.linker = Some("aarch64-veda-gcc".into());
++    // Enable the Cortex-A53 errata 843419 mitigation by default
++    base.add_pre_link_args(LinkerFlavor::Gnu(Cc::Yes, Lld::No), &["-Wl,--fix-cortex-a53-843419"]);
++    // the AAPCS64 expects use of non-leaf frame pointers
++    base.frame_pointer = FramePointer::NonLeaf;
++
++    Target {
++        llvm_target: "aarch64-unknown-veda".into(),
++        metadata: TargetMetadata {
++            description: Some("ARM64 Veda".into()),
++            tier: None,
++            host_tools: Some(false),
++            std: Some(true),
++        },
++        pointer_width: 64,
++        data_layout:
++            "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32"
++                .into(),
++        arch: Arch::AArch64,
++        options: base,
++    }
++}
+--- a/src/bootstrap/src/core/sanity.rs
++++ b/src/bootstrap/src/core/sanity.rs
+@@ -36,6 +36,7 @@
+ const STAGE0_MISSING_TARGETS: &[&str] = &[
+     // just a dummy comment so the list doesn't get onelined
+     "aarch64-unknown-l4re-uclibc",
++    "aarch64-unknown-veda",
+ ];
+ 
+ /// Minimum version threshold for libstdc++ required when using prebuilt LLVM

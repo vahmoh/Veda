@@ -4,7 +4,9 @@
 # A game registers again when the agent service restarts (init starts it
 # again after it failed), with a simulated Voice Agent service: the new
 # agent reaches the mission in progress rather than starting a second
-# Interceptor.
+# Interceptor. Its city takes longer to make than the agent waits for an
+# application (6 s) where QEMU emulates the processors.
+requires native-speed
 fail-on "PANIC"
 wait-serial "desktop ready" 120
 mic-silence 1

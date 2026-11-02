@@ -97,15 +97,14 @@ fn doctor() -> Result {
             println!("  [FAIL] {name}: {e}")
         }
     };
-    println!("Checking the Veda build environment...");
+    let arch = architecture::current();
+    println!("Checking the Veda build environment for {}...", arch.name);
     check("rustc", tool_version(std::process::Command::new("rustc").arg("--version")));
     let targets = std::process::Command::new("rustup").args(["target", "list", "--installed"]).output();
     let targets = targets.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).map_err(|e| e.to_string());
-    for (name, target) in [
-        ("uefi target", architecture::UEFI_TARGET),
-        ("kernel target", architecture::KERNEL_TARGET),
-        ("user target", architecture::USER_TARGET),
-    ] {
+    for (name, target) in
+        [("uefi target", arch.uefi_target), ("kernel target", arch.kernel_target), ("user target", arch.user_target)]
+    {
         check(
             name,
             targets.clone().and_then(|s| {
@@ -129,7 +128,10 @@ fn doctor() -> Result {
     }
     // QEMU emulates the processor where it cannot use KVM, which works but
     // is several times slower.
-    match std::fs::OpenOptions::new().read(true).write(true).open("/dev/kvm") {
+    match qemu::kvm() {
+        _ if !architecture::is_build_machine() => {
+            println!("  [--]   kvm: not for {}, whose processor QEMU emulates here", architecture::current().name);
+        }
         Ok(_) => println!("  [ok]   kvm: /dev/kvm"),
         Err(e) => println!(
             "  [--]   kvm: /dev/kvm: {e} (QEMU emulates the processor instead, several times slower; \
@@ -188,7 +190,11 @@ fn rust_lld() -> Result<PathBuf> {
 }
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    if let Err(e) = architecture::choose(&mut args) {
+        eprintln!("\x1b[1;31merror:\x1b[0m {e}");
+        return ExitCode::FAILURE;
+    }
     let (cmd, rest) = match args.split_first() {
         Some((c, r)) => (c.as_str(), r),
         None => ("help", &[][..]),

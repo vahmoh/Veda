@@ -1,0 +1,28 @@
+--- a/src/syscfg/lock-obj-pub.aarch64-unknown-veda.h
++++ b/src/syscfg/lock-obj-pub.aarch64-unknown-veda.h
+@@ -0,0 +1,25 @@
++## lock-obj-pub.aarch64-unknown-veda.h
++## Veda's C library is musl: its pthread_mutex_t, as on aarch64-unknown-linux-musl
++## To be included by mkheader into gpg-error.h
++
++typedef struct
++{
++  long _vers;
++  union {
++    volatile char _priv[40];
++    long _x_align;
++    long *_xp_align;
++  } u;
++} gpgrt_lock_t;
++
++#define GPGRT_LOCK_INITIALIZER {1,{{0,0,0,0,0,0,0,0, \
++                                    0,0,0,0,0,0,0,0, \
++                                    0,0,0,0,0,0,0,0, \
++                                    0,0,0,0,0,0,0,0, \
++                                    0,0,0,0,0,0,0,0}}}
++##
++## Local Variables:
++## mode: c
++## buffer-read-only: t
++## End:
++##

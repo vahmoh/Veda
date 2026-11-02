@@ -40,12 +40,12 @@ pub mod ffi;
 pub mod info;
 pub mod picture;
 pub mod schedule;
-#[cfg(target_os = "none")]
+#[cfg(feature = "layer")]
 mod session;
 pub mod sound;
 pub mod source;
 
-#[cfg(target_os = "none")]
+#[cfg(feature = "layer")]
 mod program {
     use core::alloc::{GlobalAlloc, Layout};
     use core::ffi::c_void;

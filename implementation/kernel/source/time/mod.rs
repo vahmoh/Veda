@@ -56,7 +56,8 @@ pub fn info() -> abi::ClockInfo {
 /// the clock started).
 pub fn monotonic_ns_at(ticks: u64) -> u64 {
     let ticks = ticks.saturating_sub(TICKS_AT_ZERO.load(Ordering::Relaxed));
-    ((ticks as u128 * NS_PER_TICK_FP.load(Ordering::Relaxed) as u128) >> 32) as u64
+    // A reading further off than the nanoseconds go, as a guest may ask for.
+    u64::try_from((ticks as u128 * NS_PER_TICK_FP.load(Ordering::Relaxed) as u128) >> 32).unwrap_or(u64::MAX)
 }
 
 /// The counter's reading at monotonic time `ns`.
@@ -146,6 +147,7 @@ pub fn set_boot_time(t: &bootinfo::BootTime, tz: Option<i64>) {
 }
 
 /// Busy-waits for `us` microseconds on the counter.
+#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
 pub fn udelay(us: u64) {
     let end = ticks() + us * TICKS_HZ.load(Ordering::Relaxed) / 1_000_000;
     while ticks() < end {

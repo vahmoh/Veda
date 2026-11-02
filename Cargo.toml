@@ -182,7 +182,7 @@ argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "pa
 # The kernel's random number generator (implementation/libraries/entropy):
 # ChaCha20 (RFC 8439) and BLAKE2s, which wipe their state when dropped. On
 # the soft-float targets they run their portable code
-# (.cargo/architectures/amd64/config.toml).
+# (.cargo/architectures/<architecture>/config.toml).
 chacha20 = { version = "0.10.2", default-features = false, features = ["cipher", "zeroize"] }
 blake2 = { version = "0.11.0", default-features = false, features = ["zeroize"] }
 # TLS (HTTPS, secure WebSockets): rustls, with a CryptoProvider built on the
@@ -327,7 +327,7 @@ miniz_oxide = { version = "0.9.1", default-features = false, features = ["with-a
 # CRC-32 (IEEE 802.3): the VFS's snapshots of the home directory, GPT
 # headers and the chunks of the PNGs `image` writes. Without std it picks
 # its fastest code when it is compiled (slicing by 16 tables on a plain
-# x86-64).
+# x86-64, the CRC instructions on an ARM64 that has them for certain).
 crc32fast = { version = "1.5.2", default-features = false }
 # The TCP/IP stack, which Veda builds with a security patch: a port
 # (implementation/ports/smoltcp), like zune-jpeg.

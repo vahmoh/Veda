@@ -8,59 +8,67 @@ pub mod qemu;
 
 use std::process::Command;
 
+use crate::architecture::{AcpiTests, Architecture, Qemu};
 use crate::util::Result;
 
-/// The architecture's directories: `architectures/amd64` throughout the tree.
-pub const NAME: &str = "amd64";
-
-/// Rust's target of the loader: UEFI's, freestanding and soft-float, whose
-/// programs are PE/COFF images, the one format UEFI's firmware starts.
-pub const UEFI_TARGET: &str = "x86_64-unknown-uefi";
-
-/// Rust's target of the kernel: freestanding and soft-float, ELF64 output
-/// (the kernel's `build.rs` links it at its address).
-pub const KERNEL_TARGET: &str = "x86_64-unknown-none";
-
-/// Rust's target of user-space programs: `no_std` position-independent
-/// ELF64 executables for the System V ABI, built for Linux's musl target,
-/// which gives them hard-float SSE code on stable Rust, and linked by LLVM's
-/// linker with nothing of Linux's or musl's (`implementation/libraries/build`).
-pub const USER_TARGET: &str = build::amd64::TARGET;
-
-/// Rust's target of the code C programs link: the POSIX layer and the media
-/// decoder's Rust half.
-pub const BARE_TARGET: &str = "x86_64-unknown-none";
-
-/// Rust's target of the driver VM's programs: Linux's, on musl. It is the
-/// user-space programs' too: these are built apart, with musl
-/// (`implementation/guests/linux/.cargo/config.toml`).
-pub const GUEST_TARGET: &str = "x86_64-unknown-linux-musl";
-
-/// Rust's target of programs that use its standard library on Veda, on the C
-/// library: the rust port's own, which the toolchain builds
-/// (`implementation/ports/rust`, its settings in
-/// `implementation/ports/architectures/amd64/settings.sh`).
-pub const STD_TARGET: &str = "x86_64-unknown-veda";
-
-/// The C toolchain's target (`x86_64-veda-gcc` and friends), as the ports
-/// build it (`implementation/ports/architectures/amd64/settings.sh`).
-pub const C_TARGET: &str = "x86_64-veda";
-
-/// The target of the driver VM's C toolchain (`x86_64-linux-musl-gcc` and
-/// friends), Linux's own, as the ports build it (the same).
-pub const GUEST_C_TARGET: &str = "x86_64-linux-musl";
-
-/// The machine of Veda's executables: the kernel's and its programs'.
-pub const MACHINE: elf::Machine = elf::amd64::MACHINE;
-
-/// Where the loader goes on the boot partition: the boot program UEFI
-/// starts from a disk of its own on x64.
-pub const UEFI_BOOT_PATH: &str = "EFI/BOOT/BOOTX64.EFI";
+pub const ARCHITECTURE: Architecture = Architecture {
+    name: "amd64",
+    // Directly in `target`: the first architecture's place, as Cargo keeps
+    // what it builds for its host at the top of `target`.
+    outputs: &["target"],
+    // UEFI's target, freestanding and soft-float, whose programs are PE/COFF
+    // images, the one format UEFI's firmware starts.
+    uefi_target: "x86_64-unknown-uefi",
+    // Freestanding and soft-float, ELF64 output (the kernel's `build.rs`
+    // links it at its address).
+    kernel_target: "x86_64-unknown-none",
+    // `no_std` position-independent ELF64 executables for the System V ABI,
+    // built for Linux's musl target, which gives them hard-float SSE code on
+    // stable Rust, and linked by LLVM's linker with nothing of Linux's or
+    // musl's (`implementation/libraries/build`).
+    user_target: build::amd64::TARGET,
+    bare_target: "x86_64-unknown-none",
+    // Linux's, on musl. It is the user-space programs' too: these are built
+    // apart, with musl (`implementation/guests/linux/.cargo/config.toml`).
+    guest_target: "x86_64-unknown-linux-musl",
+    // The rust port's own, which the toolchain builds, on the C library
+    // (`implementation/ports/rust`, its settings in
+    // `implementation/ports/architectures/amd64/settings.sh`).
+    std_target: "x86_64-unknown-veda",
+    // `x86_64-veda-gcc` and friends, as the ports build them (the same).
+    c_target: "x86_64-veda",
+    // `x86_64-linux-musl-gcc` and friends, Linux's own, as the ports build
+    // them (the same).
+    guest_c_target: "x86_64-linux-musl",
+    // nasm assembles the media libraries' x86 code.
+    port_tools: &["nasm"],
+    check_port_tools,
+    intel_gpus: true,
+    machine: elf::amd64::MACHINE,
+    // The boot program UEFI starts from a disk of its own on x64.
+    uefi_boot_path: "EFI/BOOT/BOOTX64.EFI",
+    nested_virtualization,
+    qemu: Qemu {
+        binary: qemu::BINARY,
+        firmware_dirs: qemu::FIRMWARE_DIRS,
+        firmware_files: qemu::FIRMWARE_FILES,
+        firmware_packages: qemu::FIRMWARE_PACKAGES,
+        blank_at_reset: qemu::blank_at_reset,
+        has_keyboard: true,
+        machine_args: qemu::machine_args,
+        display_args: qemu::display_args,
+        fixed_screen: None,
+        hda_controller: qemu::HDA_CONTROLLER,
+        debug_exit: Some(qemu::DEBUG_EXIT),
+        processors: qemu::processors,
+    },
+    acpi_tests: AcpiTests { names: acpitest::NAMES, table: acpitest::table },
+};
 
 /// Whether KVM lets Veda's hypervisor run in QEMU: it gives its guests VMX
 /// of their own (nested virtualization, on Intel's processors), which Veda's
 /// hypervisor runs on.
-pub fn nested_virtualization() -> Result {
+fn nested_virtualization() -> Result {
     let nested = std::fs::read_to_string("/sys/module/kvm_intel/parameters/nested").unwrap_or_default();
     if matches!(nested.trim(), "Y" | "1") {
         Ok(())
@@ -69,15 +77,11 @@ pub fn nested_virtualization() -> Result {
     }
 }
 
-/// What the ports need from the system, besides what every architecture's
-/// need: nasm, which assembles the media libraries' x86 code.
-pub const PORT_TOOLS: &[&str] = &["nasm"];
-
 /// The oldest nasm that assembles dav1d (2.14, for its AVX-512 code).
 const NASM_MIN: (u32, u32) = (2, 14);
 
-/// Whether [`PORT_TOOLS`], which are there, are recent enough.
-pub fn check_port_tools() -> Result {
+/// Whether the tools the ports need, which are there, are recent enough.
+fn check_port_tools() -> Result {
     match nasm_version() {
         Some(v) if v >= NASM_MIN => Ok(()),
         _ => Err(format!(

@@ -126,14 +126,17 @@ pub fn build(o: &Options) -> Result<System> {
     // targets, whose crates it has the texts of too.
     let mut licensed = BTreeSet::new();
     let mut groups = vec![
-        notices::Group::new(architecture::KERNEL_TARGET, &["kernel"]),
-        notices::Group::new(architecture::UEFI_TARGET, &["bootloader"]),
+        notices::Group::new(architecture::current().kernel_target, &["kernel"]),
+        notices::Group::new(architecture::current().uefi_target, &["bootloader"]),
     ];
     let (on_std, native): (Vec<&components::Program>, Vec<_>) =
         artifacts.programs.iter().map(|(p, _)| p).partition(|p| p.std);
-    groups.push(notices::Group::new(architecture::USER_TARGET, &native.iter().map(|p| p.package).collect::<Vec<_>>()));
+    groups.push(notices::Group::new(
+        architecture::current().user_target,
+        &native.iter().map(|p| p.package).collect::<Vec<_>>(),
+    ));
     let mut std_programs =
-        notices::Group::new(architecture::STD_TARGET, &on_std.iter().map(|p| p.package).collect::<Vec<_>>());
+        notices::Group::new(architecture::current().std_target, &on_std.iter().map(|p| p.package).collect::<Vec<_>>());
     std_programs.rustc = toolchain::rustc();
     groups.push(std_programs);
     // What the toolchain makes for the image: the C and Rust test programs,
@@ -154,7 +157,7 @@ pub fn build(o: &Options) -> Result<System> {
     if toolchain.iter().any(|(path, _)| path == "bin/media-decoder") {
         bare.push("media-decoder");
     }
-    groups.push(notices::Group::new(architecture::BARE_TARGET, &bare));
+    groups.push(notices::Group::new(architecture::current().bare_target, &bare));
     add_all(&mut initrd, &mut licensed, toolchain);
     add_all(&mut initrd, &mut licensed, packages);
     // What the web engine needs of the system (its fonts' configuration,
@@ -178,15 +181,18 @@ pub fn build(o: &Options) -> Result<System> {
         }
     }
     // The driver VM's Linux (`cargo automation linux`, or the first time
-    // an image needs it) and its programs.
-    linux::build_once()?;
-    let guest = linux::guest()?;
+    // an image needs it) and its programs, unless its monitor is left out.
+    let driver_vm = !o.skip.iter().any(|s| s == "driver-virtual-machine");
+    if driver_vm {
+        linux::build_once()?;
+    }
+    let guest = if driver_vm { linux::guest()? } else { None };
     match guest {
         Some(guest) => {
             initrd.add("linux/kernel", guest.kernel);
             initrd.add("linux/initramfs.cpio", guest.initramfs);
             add_all(&mut initrd, &mut licensed, guest.licences);
-            let mut programs = notices::Group::new(architecture::GUEST_TARGET, &guest.packages);
+            let mut programs = notices::Group::new(architecture::current().guest_target, &guest.packages);
             programs.dir = Some(util::workspace_root().join("implementation").join("guests").join("linux"));
             groups.push(programs);
         }
@@ -206,7 +212,7 @@ pub fn build(o: &Options) -> Result<System> {
     // and GCC's runtime, the driver VM's programs as well: their texts come
     // from the toolchain's build.
     let mut needed = vec!["rust"];
-    if !on_std.is_empty() || groups.iter().any(|g| g.target == architecture::GUEST_TARGET) {
+    if !on_std.is_empty() || groups.iter().any(|g| g.target == architecture::current().guest_target) {
         needed.extend(["musl", "gcc"]);
     }
     if let Some(missing) = needed.iter().find(|part| !licensed.contains(**part)) {
@@ -285,7 +291,7 @@ fn add_all(initrd: &mut initrd::builder::Builder, licensed: &mut BTreeSet<String
 fn shipped(path: &Path, kind: Option<elf::Kind>) -> Result<Vec<u8>> {
     let mut file = util::read(path)?;
     let invalid = |e: elf::ElfError| format!("{}: {e}", path.display());
-    let found = elf::Elf::parse_for(&file, architecture::MACHINE).map_err(invalid)?.kind();
+    let found = elf::Elf::parse_for(&file, architecture::current().machine).map_err(invalid)?.kind();
     match kind {
         Some(elf::Kind::Veda) if found != elf::Kind::Veda => {
             return Err(format!("{}: not a Veda program (it lacks the note `runtime` gives one)", path.display()));
@@ -298,7 +304,7 @@ fn shipped(path: &Path, kind: Option<elf::Kind>) -> Result<Vec<u8>> {
         }
         _ => {}
     }
-    let len = elf::strip(&mut file, architecture::MACHINE).map_err(invalid)?;
+    let len = elf::strip(&mut file, architecture::current().machine).map_err(invalid)?;
     file.truncate(len);
     Ok(file)
 }

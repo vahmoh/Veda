@@ -15,6 +15,11 @@ license.workspace = true
 path = "source/lib.rs"
 bench = false
 
+[features]
+# Built as the program's Rust half, not for the host's tests: as the POSIX
+# layer's feature of this name.
+layer = ["runtime/unwinding"]
+
 [dependencies]
 abi = { workspace = true }
 runtime = { workspace = true, default-features = false }

@@ -9,6 +9,7 @@
 # implementation/ports/README.md).
 include = [
     "architectures/amd64/config.toml",
+    "architectures/arm64/config.toml",
     { path = "../implementation/ports/.crates/config.toml", optional = true },
 ]
 

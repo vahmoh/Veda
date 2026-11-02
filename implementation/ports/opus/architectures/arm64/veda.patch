@@ -1,0 +1,32 @@
+--- a/celt/arm/armcpu.c
++++ b/celt/arm/armcpu.c
+@@ -271,6 +271,29 @@
+   return flags;
+ }
+ 
++#elif defined(__veda__)
++#include <sys/auxv.h>
++
++/* Veda gives programs AT_HWCAP as Linux does on AArch64, with the same
++   bits, which musl's header names: there is no /proc/cpuinfo to read. */
++static opus_uint32 opus_cpu_capabilities(void)
++{
++  opus_uint32 flags = 0;
++
++#if defined(OPUS_ARM_MAY_HAVE_DOTPROD)
++  if (getauxval(AT_HWCAP) & HWCAP_ASIMDDP)
++    flags |= OPUS_CPU_ARM_DOTPROD_FLAG;
++#endif
++
++#if defined(OPUS_ARM_PRESUME_AARCH64_NEON_INTR)
++  flags |= OPUS_CPU_ARM_EDSP_FLAG | OPUS_CPU_ARM_MEDIA_FLAG | OPUS_CPU_ARM_NEON_FLAG;
++# if defined(OPUS_ARM_PRESUME_DOTPROD)
++  flags |= OPUS_CPU_ARM_DOTPROD_FLAG;
++# endif
++#endif
++  return flags;
++}
++
+ #else
+ /* The feature registers which can tell us what the processor supports are
+  * accessible in privileged modes only, so we can't have a general user-space

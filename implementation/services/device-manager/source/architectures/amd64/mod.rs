@@ -9,7 +9,9 @@ pub mod config;
 pub mod dmar;
 pub mod platform;
 
-/// The memory below this the driver VM's guest keeps as a PC does (its
-/// legacy area): memory the firmware keeps for a device there takes no
-/// room of the guest's RAM.
-pub const GUEST_LOW_RESERVED: u64 = 1 << 20;
+/// Whether the driver VM's guest keeps `address` as a PC does (its legacy
+/// area, below 1 MiB): memory the firmware keeps for a device there takes
+/// no room of the guest's RAM.
+pub fn in_guest_low_memory(address: u64) -> bool {
+    address < 1 << 20
+}

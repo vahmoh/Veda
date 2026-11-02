@@ -55,17 +55,17 @@ pub unsafe fn word_of(tp: usize) -> &'static AtomicUsize {
 /// The bytes the signal entry keeps the x87, SSE and AVX registers in
 /// (XSAVE's area for what the kernel enabled, or FXSAVE's 512), set by
 /// [`init`]; 0 before.
-#[cfg_attr(not(target_os = "none"), allow(dead_code))]
+#[cfg_attr(not(feature = "layer"), allow(dead_code))]
 static SAVE_SIZE: AtomicUsize = AtomicUsize::new(0);
 
 /// Whether the processor saves its registers with XSAVE (else FXSAVE).
-#[cfg_attr(not(target_os = "none"), allow(dead_code))]
+#[cfg_attr(not(feature = "layer"), allow(dead_code))]
 static XSAVE: AtomicUsize = AtomicUsize::new(0);
 
 /// Learns how the signal entry saves the registers of the code it
 /// interrupts: the processor's XSAVE area for what the kernel enabled
 /// (CPUID leaf 0xD), or FXSAVE's.
-#[cfg_attr(not(target_os = "none"), allow(dead_code))]
+#[cfg_attr(not(feature = "layer"), allow(dead_code))]
 pub fn init() {
     let osxsave = core::arch::x86_64::__cpuid(1).ecx & (1 << 27) != 0;
     if osxsave {
@@ -100,6 +100,11 @@ pub struct Caller {
 }
 
 impl Caller {
+    /// Sets what the call returns.
+    pub fn set_result(&mut self, value: u64) {
+        self.rax = value;
+    }
+
     /// The registers of the caller as the call returns (those the call
     /// does not keep are 0, as they are no longer the caller's).
     pub fn state(&self) -> ThreadState {
@@ -180,7 +185,7 @@ pub unsafe fn load_mcontext(m: *const core::ffi::c_void, s: &mut ThreadState) {
 }
 
 /// Where the kernel sends an interrupted thread: `__veda_signal_entry`.
-#[cfg(target_os = "none")]
+#[cfg(feature = "layer")]
 pub fn entry_address() -> usize {
     unsafe extern "C" {
         fn __veda_signal_entry();
@@ -197,7 +202,7 @@ pub fn entry_address() -> usize {
 // The frame, from the stack pointer: the gate's seventh and eighth
 // arguments (`f` and the `Caller`'s address), then the `Caller` (72 bytes),
 // 8 bytes of padding, and the return address (at `rsp + 88`, `f` above it).
-#[cfg(target_os = "none")]
+#[cfg(feature = "layer")]
 core::arch::global_asm!(
     ".global __veda_syscall",
     ".hidden __veda_syscall",
@@ -249,7 +254,7 @@ core::arch::global_asm!(
 // has `crate::interrupt::signal_entry` act on the interruption, takes the
 // registers back, and resumes the thread (`signal_return`), as interrupted
 // or as the signal entry changed it, with the flags it returned.
-#[cfg(target_os = "none")]
+#[cfg(feature = "layer")]
 core::arch::global_asm!(
     ".global __veda_signal_entry",
     ".hidden __veda_signal_entry",
@@ -303,8 +308,13 @@ core::arch::global_asm!(
 );
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
+
+    /// Registers that say where a thread is.
+    pub fn registers() -> ThreadState {
+        ThreadState { rip: 0x5000, rsp: 0x7000, ..ThreadState::default() }
+    }
 
     #[test]
     fn contexts_go_to_and_from_musls_mcontext() {

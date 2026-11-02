@@ -14,7 +14,11 @@ pub const HELP: &str = "\
 Veda developer tool
 
 USAGE:
-    cargo automation <COMMAND> [OPTIONS]
+    cargo automation [--architecture NAME] <COMMAND> [OPTIONS]
+
+    Veda is built for one architecture at a time: amd64 or arm64, as
+    --architecture or $VEDA_ARCHITECTURE says, otherwise this machine's. On
+    arm64, outputs go to target/arm64/ (target/arm64/veda/veda.img and so on).
 
 COMMANDS:
     build       Build every component and assemble target/veda/veda.img
@@ -75,7 +79,8 @@ BUILD OPTIONS:
                         build, shot and the scripts, which are laid out for it). QEMU's
                         display takes it for its own size; a PC gets its largest mode up to
                         it, of the display's own shape if the firmware gives its EDID and
-                        has such a mode about as wide
+                        has such a mode about as wide. QEMU's ARM64 machine has 1024x768 at
+                        most, as its firmware goes no further
     --cmdline \"...\"     Extra kernel command line arguments (with what the build adds, at
                         most 256 bytes: the loader takes no more)
     --no-generate       Reuse the generated media instead of running the generators

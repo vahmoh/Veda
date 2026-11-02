@@ -35,10 +35,18 @@ pub fn env_dir(var: &str, default: &[&str]) -> PathBuf {
     }
 }
 
+/// The directory `$var` names, or else `name` among what is built for the
+/// architecture Veda is built for (`Architecture::outputs`), where nothing
+/// of another architecture's gets in its way.
+pub fn architecture_dir(var: &str, name: &str) -> PathBuf {
+    let outputs = crate::architecture::current().outputs;
+    env_dir(var, &[outputs, &[name]].concat())
+}
+
 /// Directory that receives the assembled image and QEMU state
 /// (`$VEDA_OUT` overrides it, so several builds can run side by side).
 pub fn out_dir() -> PathBuf {
-    env_dir("VEDA_OUT", &["target", "veda"])
+    architecture_dir("VEDA_OUT", "veda")
 }
 
 /// Caches every run shares, wherever `$VEDA_OUT` puts the rest (the test

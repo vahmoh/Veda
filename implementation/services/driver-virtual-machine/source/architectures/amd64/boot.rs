@@ -22,7 +22,7 @@ use hv::amd64::linux::{self, E820_RAM, E820_RESERVED, MemoryRange};
 
 pub use hv::amd64::linux::Kernel;
 
-use super::{ACPI_AT, OPREGION_AT};
+use super::{ACPI_AT, ACPI_ROOM, OPREGION_AT};
 use crate::memory::GuestMemory;
 
 const MIB: u64 = 1 << 20;
@@ -45,7 +45,9 @@ pub fn parse(image: &[u8]) -> Result<Kernel<'_>, String> {
 
 /// What the guest boots: its memory (`size` bytes, the reserved ranges
 /// in it), the kernel, its initial RAM file system and command line, and
-/// what the machine puts below 1 MiB.
+/// what the machine puts below 1 MiB. The PCI functions it has (where each
+/// is on bus 0) are for the other architecture's machine: the ACPI tables
+/// describe them here.
 pub struct Load<'a> {
     pub memory: &'a GuestMemory,
     pub size: u64,
@@ -55,11 +57,13 @@ pub struct Load<'a> {
     pub cmdline: &'a str,
     pub acpi_tables: &'a [u8],
     pub opregion: Option<&'a [u8]>,
+    pub functions: &'a [u8],
 }
 
 /// Loads Linux into the guest's memory: the state its first processor
-/// starts in.
-pub fn load(l: &Load) -> Result<VcpuState, String> {
+/// starts in. (`cpuid` tells it how many processors it has.)
+pub fn load(l: &Load, _cpus: u32) -> Result<VcpuState, String> {
+    let _ = l.functions;
     let image = l.kernel;
     let too_little = || format!("{} MiB is too little memory for the guest", l.size / MIB);
     let kernel_at = image.preferred_address.max(LEGACY_END);
@@ -89,6 +93,9 @@ pub fn load(l: &Load) -> Result<VcpuState, String> {
         memory: &ranges,
         rsdp: Some(ACPI_AT),
     };
+    if l.acpi_tables.len() > ACPI_ROOM {
+        return Err(format!("the ACPI tables take {} KiB, more than they have", l.acpi_tables.len() / 1024));
+    }
     let memory = l.memory;
     let gdt: Vec<u8> = linux::GDT.iter().flat_map(|e| e.to_le_bytes()).collect();
     let tables = linux::identity_page_tables(PAGE_TABLES_AT);
@@ -115,6 +122,6 @@ pub fn load(l: &Load) -> Result<VcpuState, String> {
 
 /// The state a processor the guest starts (`start_cpu`) starts in, at
 /// `entry`: 64-bit mode on the page tables the first started on.
-pub fn secondary(entry: u64) -> VcpuState {
+pub fn secondary(entry: u64, _context: u64) -> VcpuState {
     linux::long_mode(entry, PAGE_TABLES_AT, GDT_AT)
 }

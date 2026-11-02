@@ -57,10 +57,12 @@
 //! `architecture`
 //! (`implementation/libraries/posix/source/architectures/<architecture>/`).
 //!
-//! The layer is built as a static library for the architecture's bare-metal
-//! target (`x86_64-unknown-none` on AMD64) and
-//! linked into musl's `libc.a` as one object that exports only these
-//! symbols. Its own memory comes from `runtime`'s heap, not from `malloc`.
+//! The layer is built as a static library (Cargo's feature `layer`, for the
+//! architecture's bare target: `x86_64-unknown-none` on AMD64,
+//! `aarch64-unknown-linux-musl` on ARM64, nothing of Linux or musl coming
+//! with it) and linked into musl's `libc.a` as one object that exports only
+//! these symbols. Its own memory comes from `runtime`'s heap, not from
+//! `malloc`.
 
 #![no_std]
 
@@ -70,6 +72,9 @@ extern crate std;
 
 #[cfg(target_arch = "x86_64")]
 #[path = "architectures/amd64/mod.rs"]
+mod architecture;
+#[cfg(target_arch = "aarch64")]
+#[path = "architectures/arm64/mod.rs"]
 mod architecture;
 mod carry;
 mod epoll;
@@ -168,7 +173,7 @@ pub extern "C" fn __veda_startup() {
 pub extern "C" fn __veda_init() {
     // Thread-local storage is set up: threads can be told apart, and each
     // has its word.
-    #[cfg(target_os = "none")]
+    #[cfg(feature = "layer")]
     {
         architecture::signal::init();
         architecture::signal::clear_word(!0);
@@ -180,7 +185,7 @@ pub extern "C" fn __veda_init() {
     let (ignored, mask, nice) = *INHERITED.lock();
     signal::inherit(ignored, mask);
     sched::inherit(nice);
-    #[cfg(target_os = "none")]
+    #[cfg(feature = "layer")]
     let _ = runtime::sys::call(abi::nr::SIGNAL_ENTRY_SET, [architecture::signal::entry_address(), 0, 0, 0, 0, 0]);
 }
 
@@ -192,7 +197,7 @@ pub extern "C" fn __veda_init() {
 /// # Safety
 /// The arguments are those of the Linux system call `n`; `caller` is
 /// `__veda_syscall`'s.
-#[cfg_attr(not(target_os = "none"), allow(dead_code))]
+#[cfg_attr(not(feature = "layer"), allow(dead_code))]
 unsafe extern "C" fn syscall_gate(
     n: isize,
     a: isize,
@@ -209,8 +214,9 @@ unsafe extern "C" fn syscall_gate(
     if !interrupt::enter() {
         // No signal is acted on (thread-local storage is not set up yet).
         let r = call();
-        caller.rax =
-            error::encode(if r == Err(linux::errno::ERESTARTSYS) { Err(linux::errno::EINTR) } else { r }) as u64;
+        caller.set_result(
+            error::encode(if r == Err(linux::errno::ERESTARTSYS) { Err(linux::errno::EINTR) } else { r }) as u64,
+        );
         return;
     }
     signal::returning(call(), caller, call);
@@ -221,11 +227,11 @@ unsafe extern "C" fn syscall_gate(
 
 /// The layer's own memory (separate from `malloc`, which calls into the
 /// layer for its memory).
-#[cfg(target_os = "none")]
+#[cfg(feature = "layer")]
 #[global_allocator]
 static HEAP: runtime::heap::Heap = runtime::heap::Heap::new();
 
-#[cfg(target_os = "none")]
+#[cfg(feature = "layer")]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     // Formatted without allocating, in case the heap is what failed.

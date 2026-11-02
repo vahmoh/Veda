@@ -35,7 +35,7 @@
 //!
 //! An executable is for one processor ([`Machine`]): each architecture's is
 //! in `implementation/libraries/elf/source/architectures/<architecture>/`
-//! ([`amd64`]), on every host, so that the build machine's tools check
+//! ([`amd64`], [`arm64`]), on every host, so that the build machine's tools check
 //! executables for the target. [`NATIVE`] is the processor the code runs
 //! on, whose programs it loads.
 //!
@@ -49,6 +49,8 @@ use core::fmt;
 
 #[path = "architectures/amd64/mod.rs"]
 pub mod amd64;
+#[path = "architectures/arm64/mod.rs"]
+pub mod arm64;
 
 /// The processor an executable's code is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,6 +70,9 @@ pub struct Machine {
 /// The processor this code runs on.
 #[cfg(target_arch = "x86_64")]
 pub const NATIVE: Machine = amd64::MACHINE;
+/// The processor this code runs on.
+#[cfg(target_arch = "aarch64")]
+pub const NATIVE: Machine = arm64::MACHINE;
 
 /// The dynamic linker that Veda's dynamically linked programs name
 /// (`PT_INTERP`): the C library's shared object, which is musl's dynamic
@@ -339,7 +344,7 @@ pub fn is_elf(data: &[u8]) -> bool {
 impl<'a> Elf<'a> {
     /// Parses and validates an executable for the processor this code runs
     /// on ([`NATIVE`]).
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
     pub fn parse(data: &'a [u8]) -> Result<Elf<'a>, ElfError> {
         Self::parse_for(data, NATIVE)
     }
@@ -917,8 +922,9 @@ pub struct AuxInfo<'a> {
     /// Where the program's dynamic linker is loaded (`AT_BASE`): 0 for a
     /// program linked statically.
     pub base: u64,
-    /// The processor's features, as Linux's `AT_HWCAP` gives them.
-    pub hwcap: u64,
+    /// The processor's features, as Linux's `AT_HWCAP` and `AT_HWCAP2` give
+    /// them.
+    pub hwcap: [u64; 2],
     /// The platform's name (`AT_PLATFORM`: [`Machine::platform`]).
     pub platform: &'a [u8],
     pub uid: u32,
@@ -1027,8 +1033,8 @@ pub fn initial_stack(top: u64, args: &[&[u8]], env: &[&[u8]], aux: &AuxInfo, out
         (at::EGID, aux.gid as u64),
         (at::SECURE, 0),
         (at::CLKTCK, 100),
-        (at::HWCAP, aux.hwcap),
-        (at::HWCAP2, 0),
+        (at::HWCAP, aux.hwcap[0]),
+        (at::HWCAP2, aux.hwcap[1]),
         (at::RANDOM, random),
         (at::PLATFORM, platform),
         (at::EXECFN, execfn),

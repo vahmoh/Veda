@@ -47,7 +47,8 @@ them across restarts when Veda has its home disk.
   [Limits](#limits) lists.
 
 On the development machine the cross toolchain compiles C, and C++ with
-`x86_64-veda-g++` (on AMD64):
+`x86_64-veda-g++` (on AMD64; for ARM64,
+`target/arm64/toolchain/cross/bin/aarch64-veda-gcc` and `-g++`):
 
 ```bash
 target/toolchain/cross/bin/x86_64-veda-gcc -O2 -Wall -o hello hello.c
@@ -285,15 +286,16 @@ recent PC (C a quarter of an hour, Rust as long again). It checks the
 archives it downloads against the SHA-256 each
 `implementation/ports/*/port.toml` pins (their GPG signatures were checked
 against the GNU and musl keys when they were pinned), builds the POSIX
-layer for the bare target (`x86_64-unknown-none` on AMD64), and runs
+layer for the bare target (`x86_64-unknown-none` on AMD64,
+`aarch64-unknown-linux-musl` on ARM64), and runs
 `implementation/ports/build.sh`, which patches the sources (each port's
 patch, then the architecture's) and builds them with the architecture's
 settings (`implementation/ports/architectures/<architecture>/settings.sh`) in
-`target/toolchain` (or `$VEDA_TOOLCHAIN`):
+`target/toolchain` (`target/arm64/toolchain` for ARM64, or `$VEDA_TOOLCHAIN`):
 
 | Directory | What it holds |
 |-----------|---------------|
-| `cross/` | The cross toolchain for this machine (on AMD64 `x86_64-veda-gcc`, `x86_64-veda-g++` with libstdc++, and binutils) and a sysroot laid out like Veda's `/system`. Its C++ compiler also builds the native GCC, which is written in C++ |
+| `cross/` | The cross toolchain for this machine (on AMD64 `x86_64-veda-gcc`, `x86_64-veda-g++` with libstdc++, and binutils; on ARM64 `aarch64-veda-gcc` and so on) and a sysroot laid out like Veda's `/system`. Its C++ compiler also builds the native GCC, which is written in C++ |
 | `native/system/` | The toolchain that runs inside Veda: GCC, binutils, GMP, MPFR and MPC, the C library and its headers |
 | `media/` | dav1d and FFmpeg, which the video decoder (`media-decoder`) links |
 | `rust/` | Rust ([Rust on Veda](RUST.md#the-toolchain)) |
@@ -328,7 +330,7 @@ sudo apt install build-essential m4 bison flex curl libgmp-dev libmpfr-dev libmp
 
 | Port | Version | What changes for Veda |
 |------|---------|-----------------------|
-| `binutils` | 2.47 | Veda in `config.sub`; the `x86_64-veda` target (ELF, `elf_x86_64`, separate code pages) |
+| `binutils` | 2.47 | Veda in `config.sub`; the `x86_64-veda` target (ELF, `elf_x86_64`, separate code pages) and the `aarch64-veda` target (`aarch64elf`) |
 | `gcc` | 16.2.0 | Veda's target (`gcc/config/veda.h`: musl, `/system`, static linking by default, dynamic with `-pie`, shared libraries), libgcc's configuration, its runtime shared too (libgcc_s, and libstdc++ and libatomic through libtool, which `libtool.m4` teaches Veda), its unwinder on `dl_iterate_phdr`, libstdc++'s checks of the C library, libatomic; `x86_64-veda` (the System V x86-64 ABI) |
 | `gmp`, `mpfr`, `mpc` | 6.3.0, 4.2.2, 1.4.1 | `config.sub` knows Veda |
 | `musl` | 1.2.6 | Its hooks into the POSIX layer (system calls, `_start`, thread entry points, `__init_libc`, `posix_spawn`, the main thread's stack, the time zone), name lookups, its databases in `/system/etc`, the program in `dl_iterate_phdr` and `dladdr`; its dynamic linker in `libc.so` with the layer (the startup message, where libraries are found, how they are mapped) |

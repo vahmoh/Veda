@@ -97,6 +97,7 @@ pub fn spawn_init(boot: &BootInfo) {
             acpi_memory_count += 1;
         }
     }
+    let mcfg = crate::firmware::acpi::ACPI.get().and_then(|a| a.mcfg.iter().find(|m| m.segment == 0));
     let info = KernelBootInfo {
         framebuffer_width: fb.width,
         framebuffer_height: fb.height,
@@ -112,6 +113,8 @@ pub fn spawn_init(boot: &BootInfo) {
         acpi_memory,
         acpi_memory_count: acpi_memory_count as u32,
         platform: platform(),
+        pci_config: mcfg.map_or(0, |m| m.base),
+        pci_config_buses: mcfg.map_or([0; 2], |m| [m.bus_start, m.bus_end]),
     };
     let info_vmo = Vmo::new_anonymous(4096, Cache::WriteBack).unwrap();
     // SAFETY: viewing a plain #[repr(C)] struct as bytes.

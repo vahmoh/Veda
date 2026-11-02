@@ -30,7 +30,6 @@ extern crate alloc;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::sync::atomic::{Ordering, fence};
 
 use proto::block::{self, BlockError, BlockInfo, MAX_TRANSFER, Served};
 use proto::pci::{DmaBuffer, Registers, pcidev};
@@ -200,7 +199,8 @@ impl Controller {
         self.mem.write(q.sq + q.tail as usize * 64, &bytes).map_err(|_| Failure::Memory)?;
         q.tail = (q.tail + 1) % ENTRIES;
         let (qid, tail) = (q.id as usize, q.tail);
-        fence(Ordering::SeqCst);
+        // The command and its data, before the doorbell.
+        self.mem.publish();
         self.w32(reg::DOORBELLS + 2 * qid * stride, tail as u32);
         let end = runtime::time::now_ns() + COMMAND_TIMEOUT_NS;
         let mut spins = 0u32;
@@ -213,7 +213,9 @@ impl Controller {
             let last = self.mem.read32(at + 12).map_err(|_| Failure::Memory)?;
             let status = last >> 16;
             if (status & 1 == 1) == q.phase {
-                fence(Ordering::SeqCst);
+                // The entry's other words and the command's data, after
+                // the phase tag.
+                self.mem.observe();
                 let result = self.mem.read32(at).map_err(|_| Failure::Memory)?;
                 let done_id = last as u16;
                 q.head = (q.head + 1) % ENTRIES;

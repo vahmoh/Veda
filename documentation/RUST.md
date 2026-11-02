@@ -112,7 +112,8 @@ language load ([Linking and loading](LINKING.md#in-rust)).
 
 ## How it works
 
-**The target**, `x86_64-unknown-veda` on AMD64, is Veda's own in the
+**The target**, `x86_64-unknown-veda` on AMD64 and `aarch64-unknown-veda`
+on ARM64, is Veda's own in the
 compiler: `target_os = "veda"`, in the `unix` family, with
 `target_env = "musl"`, thread-local storage, unwinding and dynamic
 linking. Programs link statically with the C toolchain's start files, the
@@ -204,7 +205,8 @@ Rust's build program, `x.py`, then works in `target/toolchain/build/rust`:
    library and Cargo, checked against the SHA-256 the release's
    `src/stage0` gives them.
 2. LLVM is built with the architecture's code generator alone (X86 on
-   AMD64).
+   AMD64), and the build machine's where they differ (AArch64 and X86 for
+   ARM64 on a PC), for what runs while Veda is built.
 3. The compiler is built, then built again by itself, as Rust's releases
    are, with the standard library for the development machine and for
    Veda.

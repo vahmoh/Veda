@@ -416,6 +416,12 @@ pub(in crate::architecture) fn rated_mhz() -> Option<(u32, u32)> {
     (r.eax != 0).then_some((r.eax & 0xFFFF, r.ebx & 0xFFFF))
 }
 
+/// What programs are told of the processor: nothing, as they ask it
+/// themselves (`cpuid`).
+pub fn program_features() -> [u64; 2] {
+    [0; 2]
+}
+
 /// Reads the CPU brand string ("Intel(R) Core(TM) ...").
 pub fn brand_string() -> [u8; 48] {
     let mut out = [0u8; 48];

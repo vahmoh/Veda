@@ -1946,7 +1946,7 @@
  MULTIARCH_CPPFLAGS = @MULTIARCH_CPPFLAGS@
 --- a/Misc/platform_triplet.c
 +++ b/Misc/platform_triplet.c
-@@ -265,6 +265,13 @@
+@@ -265,6 +265,15 @@
  #  endif
  #elif defined(__VXWORKS__)
  PLATFORM_TRIPLET=vxworks
@@ -1954,6 +1954,8 @@
 +/* Veda's own target, as its GCC names it */
 +#  if defined(__x86_64__)
 +PLATFORM_TRIPLET=x86_64-veda
++#  elif defined(__aarch64__)
++PLATFORM_TRIPLET=aarch64-veda
 +#  else
 +#    error unknown Veda platform
 +#  endif

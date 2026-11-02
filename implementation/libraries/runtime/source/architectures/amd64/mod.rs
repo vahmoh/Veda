@@ -91,10 +91,11 @@ pub(crate) unsafe fn exit_unmapping(base: usize, len: usize) -> ! {
     }
 }
 
-/// The processor's features as Linux's `AT_HWCAP` reports them on x86-64
-/// (`CPUID.1:EDX`), for ELF programs' auxiliary vector.
-pub(crate) fn hwcap() -> u64 {
-    core::arch::x86_64::__cpuid(1).edx as u64
+/// The processor's features as Linux's `AT_HWCAP` and `AT_HWCAP2` report
+/// them on x86-64 (`CPUID.1:EDX`, and nothing), for ELF programs' auxiliary
+/// vector.
+pub(crate) fn hwcap() -> [u64; 2] {
+    [core::arch::x86_64::__cpuid(1).edx as u64, 0]
 }
 
 /// The clock's counter (the TSC), as [`abi::ClockInfo`] describes it, read

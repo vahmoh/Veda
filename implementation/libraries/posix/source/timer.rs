@@ -299,6 +299,7 @@ pub unsafe fn setitimer(which: u32, new: usize, old: usize) -> SysResult {
 /// `alarm` (x86-64's own system call; musl's `alarm` uses `setitimer`):
 /// `ITIMER_REAL` in `seconds`, once; the seconds that were left of it
 /// (rounded up).
+#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
 pub fn alarm(seconds: u32) -> SysResult {
     let was = {
         let mut t = TIMERS.lock();

@@ -7,7 +7,10 @@
 # serves the `gpu` protocol, so Interceptor takes it for a GPU (a software
 # one: it draws less), and its frames keep coming. softpipe keeps the
 # game's pictures in the renderer's own memory, more than the driver VM
-# has by default: the guest gets 1 GiB, and the machine 2.
+# has by default: the guest gets 1 GiB, and the machine 2. A frame on
+# softpipe takes longer than a call to the renderer may (10 s) where QEMU
+# emulates the processors.
+requires native-speed
 gpu off
 memory 2048
 boot-cmdline "driver-virtual-machine.memory=1024"

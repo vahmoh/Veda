@@ -96,6 +96,7 @@
 //! requires rust-toolchain          # only with the Rust test programs (the same)
 //! requires web                     # only with the browser (`cargo automation web`); skipped otherwise
 //! requires python                  # only with Python (`cargo automation python`); skipped otherwise
+//! requires native-speed            # only where the processors are not emulated (ARM64's are on a PC); skipped otherwise
 //! ```
 
 use std::time::Duration;
@@ -145,7 +146,7 @@ pub struct Boot {
     pub nic: Option<String>,
     /// The machine's memory (MiB).
     pub memory: Option<u32>,
-    /// `acpi-table`: the names of `architecture::acpitest`'s tables.
+    /// `acpi-table`: the names of `Architecture::acpi_tests`' tables.
     pub acpi_tables: Vec<String>,
     pub firmware_variables: Vec<Variable>,
     /// The sound card: `virtio` or `hda` (`hda` for a script that resets,
@@ -164,6 +165,20 @@ pub struct Boot {
     pub web_server: bool,
     pub agent_asleep: bool,
     pub requires: Vec<Requirement>,
+}
+
+impl Script {
+    /// Whether the script points at parts of the screen, which only a screen
+    /// of the size it is laid out for has where it says.
+    pub fn is_laid_out(&self) -> bool {
+        self.steps.iter().any(|(_, step)| match step {
+            Step::Move(_) | Step::Click { .. } | Step::Drag { .. } | Step::MouseDown(_) | Step::DoubleClick(_) => true,
+            Step::ExpectSame { region, .. }
+            | Step::ExpectDifferent { region, .. }
+            | Step::ExpectBlack { region, .. } => *region != SCREEN,
+            _ => false,
+        })
+    }
 }
 
 /// Where a machine's sound goes.
@@ -186,7 +201,8 @@ pub enum Live {
     Writable,
 }
 
-/// A part of the toolchain a script needs (`requires`).
+/// What a script needs (`requires`): a part of the toolchain, the browser or
+/// Python, or processors that run at their own speed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Requirement {
     /// The C test programs the cross compiler builds.
@@ -201,18 +217,23 @@ pub enum Requirement {
     Web,
     /// Python.
     Python,
+    /// The machine's processors as fast as the build machine's, which QEMU
+    /// runs them on, not emulated: the programs keep deadlines of their own
+    /// (an application's start, as the agent waits for it; a call to the
+    /// renderer), which emulation misses.
+    NativeSpeed,
 }
 
 impl Requirement {
-    /// The part of the toolchain, as `toolchain::built` names it.
-    pub fn part(self) -> &'static str {
+    /// The part of the toolchain, as `toolchain::built` names it, if it is
+    /// one.
+    pub fn part(self) -> Option<&'static str> {
         match self {
-            Requirement::CToolchain => "cross toolchain",
-            Requirement::NativeToolchain => "native toolchain",
-            Requirement::Media => "media libraries",
-            Requirement::RustToolchain => "rust toolchain",
-            Requirement::Web => "web engine",
-            Requirement::Python => "python",
+            Requirement::CToolchain => Some("cross toolchain"),
+            Requirement::NativeToolchain => Some("native toolchain"),
+            Requirement::Media => Some("media libraries"),
+            Requirement::RustToolchain => Some("rust toolchain"),
+            Requirement::Web | Requirement::Python | Requirement::NativeSpeed => None,
         }
     }
 }
@@ -768,7 +789,7 @@ impl Line {
                 return Ok(None);
             }
             "acpi-table" => {
-                let name = self.one_of("ACPI table", architecture::acpitest::NAMES)?;
+                let name = self.one_of("ACPI table", architecture::current().acpi_tests.names)?;
                 boot.acpi_tables.push(name);
                 return Ok(None);
             }
@@ -836,7 +857,7 @@ impl Line {
             "requires" => {
                 let what = self.one_of(
                     "requirement",
-                    &["c-toolchain", "native-toolchain", "media", "rust-toolchain", "web", "python"],
+                    &["c-toolchain", "native-toolchain", "media", "rust-toolchain", "web", "python", "native-speed"],
                 )?;
                 boot.requires.push(match what.as_str() {
                     "c-toolchain" => Requirement::CToolchain,
@@ -844,6 +865,7 @@ impl Line {
                     "media" => Requirement::Media,
                     "web" => Requirement::Web,
                     "python" => Requirement::Python,
+                    "native-speed" => Requirement::NativeSpeed,
                     _ => Requirement::RustToolchain,
                 });
                 return Ok(None);
@@ -991,7 +1013,7 @@ mod tests {
             "boot-cmdline \"run=a\"\nnet none\nnic igb\nmemory 2048\nacpi-table touchpad\nacpi-table nhlt\n\
              firmware-variable A 02f9af02-7734-4233-b43d-93fe5aa35db3 0x7 0a0b\nsound virtio\naudio silent\n\
              live writable\ninput usb\nusb net\ngpu on\nnettest local\nagent-asleep\nrequires media\n\
-             boot-cmdline \"b=c\"\nwait 1\n",
+             requires native-speed\nboot-cmdline \"b=c\"\nwait 1\n",
         )
         .unwrap();
         let boot = &script.boot;
@@ -1009,7 +1031,7 @@ mod tests {
         );
         assert_eq!((boot.input, boot.usb_net, boot.gpu), (Some(InputDevices::Usb), true, Some(true)));
         assert!(boot.nettest_local && boot.agent_asleep && script.needs_agent());
-        assert_eq!(boot.requires, [Requirement::Media]);
+        assert_eq!(boot.requires, [Requirement::Media, Requirement::NativeSpeed]);
         assert_eq!(script.steps.len(), 1);
         assert_eq!(Script::parse("wait 1\n").unwrap().boot, Boot::default());
     }
@@ -1039,6 +1061,14 @@ mod tests {
     }
 
     /// Every script in the repository is one the interpreter runs.
+    #[test]
+    fn scripts_that_point_at_the_screen_are_laid_out() {
+        let laid_out = |text: &str| Script::parse(text).unwrap().is_laid_out();
+        assert!(laid_out("click 0.5 0.5\n"));
+        assert!(laid_out("shot a.png\nshot b.png\nexpect-same a.png b.png 0 0 0.5 1\n"));
+        assert!(!laid_out("key ret\ntype \"hello\"\nshot a.png\nexpect-black a.png\n"));
+    }
+
     #[test]
     fn every_script_in_the_repository_parses() {
         let root = util::workspace_root();

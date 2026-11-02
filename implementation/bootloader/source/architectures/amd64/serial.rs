@@ -7,6 +7,8 @@
 use core::arch::asm;
 use core::fmt;
 
+use crate::uefi::SystemTable;
+
 const COM1: u16 = 0x3F8;
 
 unsafe fn outb(port: u16, value: u8) {
@@ -22,7 +24,7 @@ unsafe fn inb(port: u16) -> u8 {
 }
 
 /// Programs COM1 for 115200 baud, 8N1, FIFOs enabled.
-pub fn init() {
+pub fn init(_st: &SystemTable) {
     // SAFETY: COM1 is the standard PC serial port; reprogramming it is
     // harmless even if the firmware also uses it.
     unsafe {

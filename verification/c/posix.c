@@ -2493,6 +2493,8 @@ static int run_code(void *code)
 {
 	int (*f)(void);
 	memcpy(&f, &code, sizeof f);
+	/* What was just written is code, as a JIT tells the processor. */
+	__builtin___clear_cache((char *)code, (char *)code + 16);
 	return f();
 }
 

@@ -26,6 +26,9 @@ extern crate std;
 #[cfg(target_arch = "x86_64")]
 #[path = "architectures/amd64/lib.rs"]
 pub mod architecture;
+#[cfg(target_arch = "aarch64")]
+#[path = "architectures/arm64/lib.rs"]
+pub mod architecture;
 pub mod functions;
 pub mod ledger;
 pub mod waits;

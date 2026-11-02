@@ -42,7 +42,7 @@ const BUILD_TOOLS: [&str; 11] = ["gcc", "make", "patch", "tar", "xz", "gzip", "c
 
 /// Where Python is built.
 pub fn root() -> PathBuf {
-    util::env_dir("VEDA_PYTHON", &["target", "python"])
+    util::architecture_dir("VEDA_PYTHON", "python")
 }
 
 /// The lock over Python's build.
@@ -210,7 +210,7 @@ fn build(jobs: usize) -> Result {
         Command::new("bash")
             .arg(ports.join("python").join("build.sh"))
             .env("VEDA_PORTS", &ports)
-            .env("VEDA_ARCH", architecture::NAME)
+            .env("VEDA_ARCH", architecture::current().name)
             .env("VEDA_PYTHON", root())
             .env("VEDA_TOOLCHAIN", toolchain::root())
             .env("JOBS", jobs.to_string()),

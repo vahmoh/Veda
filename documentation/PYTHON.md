@@ -143,7 +143,8 @@ OpenSSL stays its own). The standard library's modules are built in
 (`sys.builtin_module_names` names them); `lib-dynload` has those of
 CPython's tests, which must be shared libraries, in an image built with
 them. Python knows itself as `sys.platform == "veda"`
-(`os.name == "posix"`), its platform as `veda-x86_64` (`sysconfig`), and
+(`os.name == "posix"`), its platform as `veda-x86_64` or `veda-aarch64`
+(`sysconfig`), and
 its C library as musl (`platform.libc_ver()`). It finds its standard
 library from its own path, which Veda's loader gives it (`AT_EXECFN`).
 

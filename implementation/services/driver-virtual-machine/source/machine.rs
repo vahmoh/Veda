@@ -72,7 +72,7 @@ const MIB: u64 = 1 << 20;
 const CMDLINE: &str = "earlycon=veda console=hvc0 panic=-1 rdinit=/init log_buf_len=4M drm.debug=0xe";
 /// Where PCI functions' BARs go that do not fit below 4 GiB
 /// (`architecture::PCI_LOW`): above the bridge's window.
-const PCI_HIGH: core::ops::Range<u64> = (128 << 30)..(256 << 30);
+pub const PCI_HIGH: core::ops::Range<u64> = (128 << 30)..(256 << 30);
 
 /// How the process ends, for the device manager, which started it.
 pub use proto::startup::driver_virtual_machine::exit_code;
@@ -158,14 +158,12 @@ impl Machine {
         for what in &left_out {
             println!("the guest's ACPI tables leave out {}", what);
         }
-        if acpi_tables.len() > architecture::ACPI_ROOM {
-            return Err(format!("the ACPI tables take {} KiB, more than they have", acpi_tables.len() / 1024));
-        }
 
         let mut cmdline = String::from(CMDLINE);
         cmdline.push_str(&devices.host_options());
         cmdline.push_str(config.cmdline.trim_end());
-        let state = architecture::boot::load(&architecture::boot::Load {
+        let devfns: Vec<u8> = functions.iter().map(|f| f.devfn).collect();
+        let load = architecture::boot::Load {
             memory: &memory,
             size,
             reserved: devices.reserved(),
@@ -174,7 +172,9 @@ impl Machine {
             cmdline: &cmdline,
             acpi_tables: &acpi_tables,
             opregion: devices.opregion(),
-        })?;
+            functions: &devfns,
+        };
+        let state = architecture::boot::load(&load, config.cpus)?;
         let vcpu = guest.create_vcpu(0, &state).map_err(|e| format!("no virtual processor: {e}"))?;
         let duplicate = |v: &Vcpu| v.0.duplicate(None).map(Vcpu::from_handle).map_err(|e| format!("{e}"));
         let notify = duplicate(&vcpu)?;
@@ -259,13 +259,8 @@ impl Machine {
                 self.console_write(id, data[1], [data[2], data[3], data[4], data[5]]);
                 0
             }
-            hypercall::START_CPU => self.start_cpu(data[1], data[2]),
-            hypercall::POWER => match data[1] {
-                power::OFF => self.stop("Linux powered the machine off", exit_code::POWER_OFF),
-                power::RESTART => self.stop("Linux restarts the machine", exit_code::RESTART),
-                power::CRASHED => self.stop("Linux crashed", exit_code::CRASHED),
-                _ => error::INVALID,
-            },
+            hypercall::START_CPU => self.start_cpu(data[1], data[2], 0),
+            hypercall::POWER => self.power(data[1]),
             hypercall::WALLCLOCK => runtime::time::utc_time_ns(),
             hv::bridge::HYPERCALL => self.bridge.call(&self.memory, &self.guest, data[1] as u32, data[2]),
             hypercall::PCI_CONFIG_READ => self.devices.config_read(data[1], data[2], data[3]),
@@ -282,7 +277,18 @@ impl Machine {
             },
             hypercall::GPIO => self.devices.gpio(data[1], data[2], data[3], data[4]),
             hypercall::FIRMWARE_VARIABLE => self.variables.call(&self.memory, data[1], data[2]),
-            _ => error::UNKNOWN,
+            _ => architecture::platform::call(self, data),
+        }
+    }
+
+    /// Powers the machine off, restarts it, or reports that it crashed: it
+    /// ends. Returns only for something else (`power`), which is an error.
+    pub fn power(&self, what: u64) -> u64 {
+        match what {
+            power::OFF => self.stop("Linux powered the machine off", exit_code::POWER_OFF),
+            power::RESTART => self.stop("Linux restarts the machine", exit_code::RESTART),
+            power::CRASHED => self.stop("Linux crashed", exit_code::CRASHED),
+            _ => error::INVALID,
         }
     }
 
@@ -293,11 +299,12 @@ impl Machine {
         vcpu.0.duplicate(None).ok().map(Vcpu::from_handle)
     }
 
-    /// Starts processor `id` at `entry`, as the architecture starts them.
-    fn start_cpu(self: &Arc<Self>, id: u64, entry: u64) -> u64 {
+    /// Starts processor `id` at `entry`, as the architecture starts them,
+    /// which may give it `context`.
+    pub fn start_cpu(self: &Arc<Self>, id: u64, entry: u64, context: u64) -> u64 {
         let mut vcpus = self.vcpus.lock();
         let Some(slot) = vcpus.get_mut(id as usize).filter(|s| s.is_none()) else { return error::INVALID };
-        let state = architecture::boot::secondary(entry);
+        let state = architecture::boot::secondary(entry, context);
         let made = self.guest.create_vcpu(id as u32, &state).and_then(|v| Ok((v.0.duplicate(None)?, v)));
         let vcpu = match made {
             Ok((copy, v)) => {

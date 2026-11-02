@@ -60,15 +60,15 @@ dependencies to its errors, tests and licence headers.
 
 ## Architectures
 
-Veda runs on AMD64 (x86-64). What depends on the processor architecture
-or its platform (a PC's devices and firmware) is kept apart, so that
-another architecture can be added without touching code that is not its
-own.
+Veda runs on AMD64 (x86-64) and ARM64 (AArch64). What depends on the
+processor architecture or its platform (a PC's devices and firmware, or
+those of an Arm server) is kept apart, so that another architecture can be
+added without touching code that is not its own.
 
 * **Its own directory.** A crate keeps such code in
   `source/architectures/<architecture>/`
-  (`implementation/kernel/source/architectures/amd64`,
-  `automation/source/architectures/amd64` and others). Nothing outside
+  (`implementation/kernel/source/architectures/arm64`,
+  `automation/source/architectures/arm64` and others). Nothing outside
   those directories names an architecture's instructions, registers,
   system call numbers or calling conventions, or its platform's devices (a
   PC's interrupt controllers, timers, keyboard controller and IOMMU);
@@ -96,21 +96,25 @@ own.
     the build machine, but their architecture is the one Veda is built for
     (a build script's `TARGET`, `automation`'s `architecture`), never the
     one they run on.
+  * Code that differs by what a crate is built as, not by the target,
+    takes a Cargo feature. The POSIX layer and the media decoder's Rust
+    half are static libraries of C programs by the feature `layer`.
 * **Outside `source/`,** what tools read from places of their own is in each
   place's `architectures/<architecture>/`, where the tool allows it:
 
-| What | Where, for AMD64 |
-|------|------------------|
-| Cargo's settings of the targets | `.cargo/architectures/amd64/config.toml`, which `.cargo/config.toml` includes |
-| The ports' settings | `implementation/ports/architectures/amd64/settings.sh` |
-| A port's changes for the architecture (a patch applied after the port's own; the driver VM's kernel options) | `implementation/ports/<port>/architectures/amd64/` |
-| What the C tests expect of the architecture | `verification/c/architectures/amd64/` |
-| The GUI scripts that hold only on its machine | `verification/ui/architectures/amd64/` |
+| What | Where |
+|------|-------|
+| Cargo's settings of the targets | `.cargo/architectures/<architecture>/config.toml`, which `.cargo/config.toml` includes |
+| The ports' settings | `implementation/ports/architectures/<architecture>/settings.sh` |
+| A port's changes for the architecture (a patch applied after the port's own; the driver VM's kernel options) | `implementation/ports/<port>/architectures/<architecture>/` |
+| What the C tests expect of the architecture | `verification/c/architectures/<architecture>/` |
+| The GUI scripts that hold only on its machine | `verification/ui/architectures/<architecture>/` |
 | Its Rust targets (rustup reads them nowhere else) | `rust-toolchain.toml` |
 
 ## Targets
 
-On AMD64 (`automation/source/architectures/amd64` names them for the build):
+`automation/source/architectures/<architecture>` names them for the build.
+On AMD64:
 
 | Component | Target | Notes |
 |-----------|--------|-------|
@@ -123,6 +127,18 @@ On AMD64 (`automation/source/architectures/amd64` names them for the build):
 | The standard library's tests (`verification/rust`) | `x86_64-unknown-veda` | As above, each also at a fixed address |
 | The driver VM's programs (`implementation/guests/linux/`) | `x86_64-unknown-linux-musl` | Static, on Linux; built from `implementation/guests/linux/` (its `.cargo/config.toml`) into `target/guest` |
 | `automation/`, host tools | The host's (`std`) | |
+
+On ARM64 the same components take these targets. All but the kernel's and
+the loader's are hard-float, and programs follow the AAPCS64:
+
+| Component | Target | Notes |
+|-----------|--------|-------|
+| The UEFI loader | `aarch64-unknown-uefi` | |
+| The kernel | `aarch64-unknown-none-softfloat` | |
+| User space on `runtime` alone, the POSIX layer, the media decoder's Rust half | `aarch64-unknown-linux-musl`, `#![no_std]` | `aarch64-unknown-none`'s `core` is compiled to run where it is linked, which a shared library cannot hold |
+| User space on the standard library, its tests | `aarch64-unknown-veda` (the `rust` port's) | |
+| C programs | `aarch64-veda` (GCC) | |
+| The driver VM's programs | `aarch64-unknown-linux-musl` | |
 
 ## Library crates
 
@@ -154,13 +170,39 @@ On AMD64 (`automation/source/architectures/amd64` names them for the build):
   same results on the host and in Veda calls `libm` (or `Float::sin(x)`).
 * **Soft-float.** Check that a library builds for the kernel's soft-float
   target, which has no `std`:
-  `cargo build -p <crate> --target x86_64-unknown-none`
-  (`.cargo/architectures/amd64/config.toml` gives the RustCrypto and dalek
-  crates their portable code there, as LLVM cannot build their SIMD code
-  for it). Building Veda (`cargo automation build`), whose programs on
+  `cargo build -p <crate> --target x86_64-unknown-none`, or
+  `--target aarch64-unknown-none-softfloat`
+  (`.cargo/architectures/<architecture>/config.toml` gives the RustCrypto
+  and dalek crates their portable code there, as LLVM cannot build their
+  SIMD code for it). Building Veda (`cargo automation build`), whose programs on
   `runtime` link without `std`, is the final check. `image`, for user space
   only, does not build soft-float (`fast_image_resize`'s SIMD code), nor
   does `shell-common`, which decodes wallpapers with it.
+
+## Memory order
+
+ARM64's processors reorder what AMD64's do not: another processor or a
+device may see a processor's writes in another order, and its reads may
+pass each other. What a missing order breaks is rare, and cannot show on
+AMD64, so order is written down, not tested for.
+
+* **Publish with `Release`, find with `Acquire`.** An index of a ring, a
+  flag, a pointer or a length that says other memory is ready is stored
+  with `Release` and loaded with `Acquire`. `Relaxed` is for a value that
+  says nothing of other memory: a statistic, or what a lock already orders.
+* **Volatile orders nothing.** `read_volatile` and `write_volatile` keep the
+  compiler from merging or dropping an access, and no more. Memory shared
+  with another processor, process or guest goes through atomics.
+* **Devices need their own barrier.** `core::sync::atomic::fence` does not
+  reach them on ARM64, and compiles to nothing that they see. `abi::barrier`
+  does: `DmaBuffer::publish` (`proto::pci`) before the register that tells
+  a device to look, `DmaBuffer::observe` after the flag that says it is
+  done, and `abi::barrier::device_complete` before telling a driver that
+  write-combining memory holds what it is to show.
+* **Code is memory too.** What is written and then run needs the caches
+  told, which AMD64's do by themselves: the kernel's `sync_instructions`
+  does it for pages it maps, and a program's JIT calls
+  `__builtin___clear_cache`.
 
 ## Pixels and colours
 

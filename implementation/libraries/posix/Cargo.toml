@@ -11,6 +11,12 @@ license.workspace = true
 [lib]
 path = "source/lib.rs"
 
+[features]
+# Built as the C library's layer, not for the host's tests: its allocator and
+# panic handler, and the entry points C programs reach. The targets it is
+# built for differ (`Architecture::bare_target`), so no `cfg` of theirs says.
+layer = ["runtime/unwinding"]
+
 [dependencies]
 abi = { workspace = true }
 runtime = { workspace = true, default-features = false }

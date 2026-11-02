@@ -705,7 +705,7 @@ fn aux(execfn: &[u8]) -> AuxInfo<'_> {
         phnum: 4,
         entry: 0x401040,
         base: 0x7f12_3456_7000,
-        hwcap: 0x178bfbff,
+        hwcap: [0x178bfbff, 0],
         platform: amd64::MACHINE.platform,
         uid: 1000,
         gid: 1000,

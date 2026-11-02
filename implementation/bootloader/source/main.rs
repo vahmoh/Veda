@@ -25,6 +25,9 @@
 #[cfg(target_arch = "x86_64")]
 #[path = "architectures/amd64/mod.rs"]
 mod architecture;
+#[cfg(target_arch = "aarch64")]
+#[path = "architectures/arm64/mod.rs"]
+mod architecture;
 mod blank;
 mod config;
 mod menu;
@@ -579,17 +582,50 @@ impl FrameSource for ScratchFrames<'_> {
     }
 }
 
+/// The memory the firmware's memory map says can be cached, as a copy of
+/// the map has it, for the architectures whose direct map holds nothing
+/// else (a processor may read ahead in what is mapped as memory).
+pub struct Ram {
+    map: u64,
+    size: usize,
+    desc_size: usize,
+}
+
+impl Ram {
+    /// Its descriptors.
+    fn descriptors(&self) -> impl Iterator<Item = &MemoryDescriptor> {
+        // SAFETY: within the map, which the loader's memory holds.
+        (0..self.size / self.desc_size)
+            .map(|i| unsafe { &*((self.map as usize + i * self.desc_size) as *const MemoryDescriptor) })
+    }
+
+    /// Its ranges (start and end), each as long as it goes.
+    #[cfg_attr(not(target_arch = "aarch64"), allow(dead_code))]
+    pub fn ranges(&self) -> impl Iterator<Item = (u64, u64)> {
+        let mut descriptors = self.descriptors().filter(|d| d.attribute & EFI_MEMORY_WB != 0).peekable();
+        core::iter::from_fn(move || {
+            let d = descriptors.next()?;
+            let (start, mut end) = (d.physical_start, d.physical_start + d.number_of_pages * PAGE);
+            while let Some(next) = descriptors.next_if(|n| n.physical_start == end) {
+                end += next.number_of_pages * PAGE;
+            }
+            Some((start, end))
+        })
+    }
+}
+
 /// The end of what the direct map covers: all RAM, and at least what the
 /// architecture needs (`architecture::DIRECT_MAP_MIN`), to a GiB.
 fn ram_limit(fw: &Firmware) -> Result<u64> {
     let (bytes, desc_size) = memory_map_size(fw);
     let capacity = bytes + 16 * desc_size;
     let map = fw.alloc_zeroed(capacity as u64, None)?;
-    ram_limit_of(fw, map, capacity)
+    ram_limit_of(fw, map, capacity).map(|(limit, _)| limit)
 }
 
-/// [`ram_limit`], reading the memory map into `map` (`capacity` bytes).
-fn ram_limit_of(fw: &Firmware, map: u64, capacity: usize) -> Result<u64> {
+/// [`ram_limit`], reading the memory map into `map` (`capacity` bytes), and
+/// the memory that map holds.
+fn ram_limit_of(fw: &Firmware, map: u64, capacity: usize) -> Result<(u64, Ram)> {
     let mut limit = architecture::DIRECT_MAP_MIN;
     let (mut size, mut key, mut ds, mut ver) = (capacity, 0usize, 0usize, 0u32);
     // SAFETY: a buffer of `capacity` bytes.
@@ -597,15 +633,14 @@ fn ram_limit_of(fw: &Firmware, map: u64, capacity: usize) -> Result<u64> {
     if is_error(s) || ds == 0 {
         return Err("GetMemoryMap failed");
     }
-    for i in 0..size / ds {
-        // SAFETY: within the returned map.
-        let d = unsafe { &*((map as usize + i * ds) as *const MemoryDescriptor) };
+    let ram = Ram { map, size, desc_size: ds };
+    for d in ram.descriptors() {
         let end = d.physical_start + d.number_of_pages * PAGE;
         if d.ty != mt::MMIO && d.ty != mt::RESERVED {
             limit = limit.max(end);
         }
     }
-    Ok(limit.next_multiple_of(1 << 30))
+    Ok((limit.next_multiple_of(1 << 30), ram))
 }
 
 /// Page allocator for the page-table builder (boot data pages).
@@ -632,6 +667,7 @@ fn load_kernel(fw: &Firmware, file: &[u8]) -> Result<(u64, KernelImage)> {
         // the parser verified that every segment lies in the span.
         unsafe { ptr::copy_nonoverlapping(s.data.as_ptr(), (phys + (s.vaddr - lo)) as *mut u8, s.data.len()) };
     }
+    architecture::code_written(phys, size);
     // Linked at its address, the kernel has nothing to relocate: its RELRO
     // is read-only from the start.
     let mut runs = [KernelRun::default(); KERNEL_RUNS_MAX];
@@ -742,10 +778,10 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
         fw.alloc_zeroed((max_entries * core::mem::size_of::<MemoryRegion>()) as u64, Some(MemoryKind::BootData))?;
 
     // The direct map covers all RAM, and what the architecture needs.
-    let phys_limit = ram_limit_of(fw, raw_map, map_capacity)?;
+    let (phys_limit, ram) = ram_limit_of(fw, raw_map, map_capacity)?;
 
     let mut frames = TableFrames(fw);
-    let mut space = architecture::KernelSpace::new(&mut frames, phys_limit)?;
+    let mut space = architecture::KernelSpace::new(&mut frames, phys_limit, &ram)?;
     map_kernel(&mut space, &kernel)?;
     let root = space.root();
     log!("page tables at {:#x}, direct map limit {:#x}", root, phys_limit);
@@ -873,10 +909,10 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
 
 #[unsafe(export_name = "efi_main")]
 extern "efiapi" fn efi_main(image: Handle, st: *mut SystemTable) -> Status {
-    architecture::serial::init();
-    log!("Veda boot loader {}", env!("CARGO_PKG_VERSION"));
     // SAFETY: the firmware passes a valid system table.
     let st: &'static SystemTable = unsafe { &*st };
+    architecture::serial::init(st);
+    log!("Veda boot loader {}", env!("CARGO_PKG_VERSION"));
     // SAFETY: boot services are valid until ExitBootServices.
     let fw = Firmware {
         image,

@@ -4,6 +4,8 @@
 //! QEMU's PC: the q35 machine (its ICH9 chipset), with EDK II's OVMF for
 //! its firmware.
 
+use crate::qemu::Screen;
+
 /// QEMU's emulator of the PC.
 pub const BINARY: &str = "qemu-system-x86_64";
 
@@ -62,12 +64,28 @@ pub fn blank_at_reset(code: &[u8]) -> Option<(u64, u64)> {
     None
 }
 
+/// The display, at 00:01.0 (where `-vga std` puts it, before any other
+/// device takes it), as `id`: QEMU's standard VGA, whose memory holds the
+/// firmware's framebuffer, and which Linux's bochs driver drives in the
+/// driver VM; its EDID gives `screen` as its own size.
+pub fn display_args(id: &str, screen: Screen) -> Vec<String> {
+    let Screen { width: w, height: h, refresh } = screen;
+    // Its memory holds a frame of the screen, for the firmware and for
+    // Linux's driver: QEMU's 16 MiB up to 2560x1600, a power of two above.
+    let memory = (w as u64 * h as u64 * 4).div_ceil(1 << 20).next_power_of_two().max(16);
+    vec![
+        String::from("-device"),
+        format!("VGA,id={id},addr=0x1,xres={w},yres={h},refresh_rate={refresh},vgamem_mb={memory}"),
+    ]
+}
+
 /// The machine's own arguments: the PC (q35), with its keyboard controller
 /// (PS/2's, the i8042) if `keyboard`, and without it as on many PCs, keys
 /// then only coming through USB; with an IOMMU if `iommu`: Intel's VT-d,
 /// remapping interrupts, which needs the I/O APIC in QEMU, not in KVM, and
-/// comes before the devices it translates; and QEMU's most capable
-/// processor.
+/// comes before the devices it translates; KVM when the host offers it, or
+/// otherwise the TCG emulator (multi-threaded, one host thread per vCPU);
+/// and QEMU's most capable processor.
 pub fn machine_args(keyboard: bool, iommu: bool) -> Vec<String> {
     let mut machine = String::from("q35");
     if !keyboard {
@@ -80,7 +98,7 @@ pub fn machine_args(keyboard: bool, iommu: bool) -> Vec<String> {
     if iommu {
         args.extend(["-device", "intel-iommu,intremap=on,eim=on"].map(String::from));
     }
-    args.extend(["-cpu", "max"].map(String::from));
+    args.extend(["-accel", "kvm", "-accel", "tcg,thread=multi", "-cpu", "max"].map(String::from));
     args
 }
 
@@ -146,7 +164,10 @@ mod tests {
 
     #[test]
     fn the_machine_has_what_it_is_asked_for() {
-        assert_eq!(machine_args(true, false), ["-machine", "q35", "-cpu", "max"]);
+        assert_eq!(
+            machine_args(true, false),
+            ["-machine", "q35", "-accel", "kvm", "-accel", "tcg,thread=multi", "-cpu", "max"]
+        );
         assert_eq!(
             machine_args(false, true),
             [
@@ -154,6 +175,10 @@ mod tests {
                 "q35,i8042=off,kernel-irqchip=split",
                 "-device",
                 "intel-iommu,intremap=on,eim=on",
+                "-accel",
+                "kvm",
+                "-accel",
+                "tcg,thread=multi",
                 "-cpu",
                 "max"
             ]

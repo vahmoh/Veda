@@ -93,9 +93,10 @@ def check_startup():
     ensure(os.uname().sysname == "Veda", f"uname says {os.uname()}")
     ensure(sys.executable == "/system/bin/python3", f"sys.executable is {sys.executable!r}")
     ensure(sys.prefix == sys.exec_prefix == "/system", f"the prefixes are {sys.prefix!r}, {sys.exec_prefix!r}")
-    ensure(sys.implementation._multiarch == "x86_64-veda", f"the triplet is {sys.implementation._multiarch!r}")
-    ensure(sysconfig.get_config_var("SOABI") == "cpython-315-x86_64-veda", "SOABI")
-    ensure(sysconfig.get_platform() == "veda-x86_64", f"sysconfig's platform is {sysconfig.get_platform()!r}")
+    machine = os.uname().machine
+    ensure(sys.implementation._multiarch == f"{machine}-veda", f"the triplet is {sys.implementation._multiarch!r}")
+    ensure(sysconfig.get_config_var("SOABI") == f"cpython-315-{machine}-veda", "SOABI")
+    ensure(sysconfig.get_platform() == f"veda-{machine}", f"sysconfig's platform is {sysconfig.get_platform()!r}")
     # Text is UTF-8 throughout, whatever the locale's variables say.
     ensure(sys.flags.utf8_mode == 1, "UTF-8 mode is off")
     ensure(sys.getfilesystemencoding() == "utf-8", f"file names are {sys.getfilesystemencoding()}")
@@ -115,7 +116,8 @@ def check_startup():
     import json
 
     suffixes = importlib.machinery.EXTENSION_SUFFIXES
-    veda = [".cpython-315-x86_64-veda.so", ".abi3-x86_64-veda.so", ".abi3.so", ".abi3t-x86_64-veda.so", ".abi3t.so"]
+    triplet = f"{os.uname().machine}-veda"
+    veda = [f".cpython-315-{triplet}.so", f".abi3-{triplet}.so", ".abi3.so", f".abi3t-{triplet}.so", ".abi3t.so"]
     ensure(suffixes == [*veda, ".so"], f"extension modules are {suffixes}")
     with open(os.path.join(sysconfig.get_path("stdlib"), "build-details.json"), encoding="utf-8") as f:
         details = json.load(f)

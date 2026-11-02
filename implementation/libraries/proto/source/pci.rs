@@ -617,6 +617,18 @@ impl DmaBuffer {
         self.map.is_empty()
     }
 
+    /// What was written to it so far reaches its device before anything
+    /// that follows: before the register that tells the device to look.
+    pub fn publish(&self) {
+        abi::barrier::device_write();
+    }
+
+    /// What is read of it from now on is no older than what was read so
+    /// far: after the flag that says the device is done.
+    pub fn observe(&self) {
+        abi::barrier::device_read();
+    }
+
     /// Where the `len` bytes at `offset` are mapped, if they are all inside
     /// it.
     fn at(&self, offset: usize, len: usize) -> Result<*mut u8, abi::Error> {

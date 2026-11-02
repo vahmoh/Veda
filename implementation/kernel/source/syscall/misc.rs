@@ -72,6 +72,7 @@ pub fn system_info(ptr: usize) -> SysResult {
         idle_time_ns: scheduler::total_idle_ns(),
         cpu_brand: crate::architecture::cpu::brand_string(),
         timer_interrupts: scheduler::total_timer_interrupts(),
+        hwcap: crate::architecture::cpu::program_features(),
     };
     user::write(ptr as u64, &info)?;
     ok(0)

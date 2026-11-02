@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The driver VM: Veda runs Linux in a virtual machine of its own, at EL1
+# under Veda's kernel at EL2. Linux takes what the monitor's device tree
+# describes, starts its second processor over PSCI, runs its first program,
+# and powers the machine off when asked to, with no warning on the way. Its
+# timers run in high-resolution mode on the processors' virtual timers, which
+# are the guest's own (implementation/guests/linux/timertest).
+boot-cmdline "driver-virtual-machine.run=timertest driver-virtual-machine.poweroff"
+fail-on "PANIC"
+fail-on "driver-virtual-machine: processor"
+fail-on "timertest: FAIL"
+wait-serial "driver-virtual-machine: starting Linux" 300
+wait-serial "linux: [    0.000000] Machine model: Veda" 120
+wait-serial "smp: Brought up 1 node, 2 CPUs" 300
+wait-serial "is up, processors 0-1" 300
+wait-serial "timertest: PASS" 300
+wait-serial "driver-virtual-machine: Linux powered the machine off" 120
+reject-serial "unchecked MSR access"
+reject-serial "WARNING:"

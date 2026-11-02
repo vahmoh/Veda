@@ -330,7 +330,7 @@ impl Memfd {
             uid: crate::vfs::UID,
             gid: crate::vfs::UID,
             size: size as i64,
-            blksize: PAGE as i64,
+            blksize: PAGE as _,
             blocks: size.div_ceil(512) as i64,
             ..Default::default()
         }

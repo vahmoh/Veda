@@ -47,6 +47,9 @@ mod acpi;
 #[cfg(target_arch = "x86_64")]
 #[path = "architectures/amd64/mod.rs"]
 mod architecture;
+#[cfg(target_arch = "aarch64")]
+#[path = "architectures/arm64/mod.rs"]
+mod architecture;
 mod gpio;
 mod pci;
 mod placement;
@@ -827,7 +830,7 @@ const VM_MIB: u64 = 256;
 /// they need more than its default: an integrated GPU's. Not up to the
 /// memory the firmware keeps for them, which the guest has where the PC
 /// has it (above the low memory the guest keeps as the PC does,
-/// `architecture::GUEST_LOW_RESERVED`).
+/// `architecture::in_guest_low_memory`).
 fn vm_memory(guest: &[GuestDevice], acpi: Option<&Acpi>) -> Option<u64> {
     if !guest.iter().any(|d| intel_gpu(&d.info)) {
         return None;
@@ -836,7 +839,7 @@ fn vm_memory(guest: &[GuestDevice], acpi: Option<&Acpi>) -> Option<u64> {
         .iter()
         .flat_map(|d| acpi.map(|a| a.reserved_memory(d.address.bus, d.address.slot, d.address.function)))
         .flatten()
-        .filter(|r| r.start >= architecture::GUEST_LOW_RESERVED)
+        .filter(|r| !architecture::in_guest_low_memory(r.start))
         .map(|r| r.start >> 20)
         .min();
     Some(kept.unwrap_or(GPU_VM_MIB).clamp(VM_MIB, GPU_VM_MIB))
@@ -1069,7 +1072,8 @@ fn main() -> i32 {
         println!("missing hardware resources");
         return 1;
     };
-    let Ok(access) = ConfigAccess::open(&io) else {
+    let machine = boot_info();
+    let Ok(access) = ConfigAccess::open(&io, &mmio, machine.as_ref()) else {
         println!("cannot access PCI configuration space");
         return 1;
     };
@@ -1078,7 +1082,6 @@ fn main() -> i32 {
         return 1;
     };
     let config = Rc::new(ConfigSpace::new(access));
-    let machine = boot_info();
     let acpi = machine.as_ref().and_then(|m| Acpi::load(&mmio, m, config.clone()));
     let platform = machine.map_or(0, |m| m.platform);
     let framebuffer = machine.map_or(0, |m| m.framebuffer_phys);

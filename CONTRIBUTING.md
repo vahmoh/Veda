@@ -28,7 +28,8 @@ follows, and [Architecture](documentation/ARCHITECTURE.md) the design.
 
 To set up, follow the [quick start](README.md#quick-start): Veda builds on
 an x86-64 Linux machine with KVM, and the toolchain and the driver VM's
-Linux are built once.
+Linux are built once, for each architecture you build for. A change to
+what both architectures share has to work on both.
 
 ## Making a change
 

@@ -370,9 +370,9 @@ library libpng zlib
 
 stage_libjpeg_turbo() {
 	cmake_veda libjpeg-turbo -DENABLE_SHARED=OFF -DENABLE_STATIC=ON -DWITH_TURBOJPEG=OFF -DWITH_JAVA=OFF \
-		-DREQUIRE_SIMD=ON -DCMAKE_ASM_NASM_COMPILER=nasm
+		-DREQUIRE_SIMD=ON "${LIBJPEG_TURBO_ARCH_OPTIONS[@]}"
 }
-library libjpeg-turbo
+library libjpeg-turbo @LIBJPEG_TURBO_ARCH_OPTIONS
 
 stage_libwebp() {
 	cmake_veda libwebp -DWEBP_BUILD_ANIM_UTILS=OFF -DWEBP_BUILD_CWEBP=OFF -DWEBP_BUILD_DWEBP=OFF \

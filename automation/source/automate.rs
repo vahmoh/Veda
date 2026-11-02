@@ -104,7 +104,7 @@ impl Machine {
             Err(e) => return format!("QEMU does not answer ({e})"),
         };
         match self.qmp.human("info registers -a") {
-            Ok(registers) => format!("QEMU is {status}, {}", architecture::qemu::processors(&registers)),
+            Ok(registers) => format!("QEMU is {status}, {}", (architecture::current().qemu.processors)(&registers)),
             Err(e) => format!("QEMU is {status}, its processors unread ({e})"),
         }
     }
@@ -313,7 +313,11 @@ impl Session {
     fn wait_serial(&mut self, needle: &str, timeout: Duration) -> Result {
         let found = self
             .poll(needle, timeout, |s| find_line(&s.log.bytes, s.checkpoint, needle, &s.claimed, s.log.ended).ok())?;
-        let place = found.ok_or_else(|| format!("timed out after {}s waiting for \"{needle}\"", timeout.as_secs()))?;
+        let Some(place) = found else {
+            // Where the machine is, as one that went quiet says nothing.
+            let state = self.machine.examine();
+            return Err(format!("timed out after {}s waiting for \"{needle}\"; {state}", timeout.as_secs()));
+        };
         self.claimed.push(place);
         Ok(())
     }

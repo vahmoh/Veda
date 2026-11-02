@@ -3,11 +3,11 @@
 
 # Veda architecture
 
-Veda is an x86-64 operating system built around a capability-based
-microkernel. The kernel implements only isolation, scheduling, memory
-management and inter-process communication; drivers, file systems, the
-window system and every application are user-space processes that talk
-over kernel channels. This document describes the parts, how they talk and
+Veda is an operating system for AMD64 (x86-64) and ARM64 (AArch64), built
+around a capability-based microkernel. The kernel implements only
+isolation, scheduling, memory management and inter-process communication;
+drivers, file systems, the window system and every application are
+user-space processes that talk over kernel channels. This document describes the parts, how they talk and
 who may call what, and links to each subsystem's own document.
 
 **Contents:**
@@ -29,9 +29,10 @@ who may call what, and links to each subsystem's own document.
 
 ## Boot
 
-1. The firmware (OVMF under QEMU) loads the loader
-   (`implementation/bootloader/`) from UEFI's boot path for the architecture
-   (`\EFI\BOOT\BOOTX64.EFI` on AMD64) on the EFI system partition.
+1. The firmware (under QEMU, OVMF on AMD64 and AAVMF on ARM64) loads the
+   loader (`implementation/bootloader/`) from UEFI's boot path for the
+   architecture (`\EFI\BOOT\BOOTX64.EFI` on AMD64, `\EFI\BOOT\BOOTAA64.EFI`
+   on ARM64) on the EFI system partition.
 2. The loader reads `\VEDA\BOOT.CFG`, shows the boot menu if it asks for
    one, picks a GOP mode near `BOOT.CFG`'s size in the display's own shape,
    and clears the screen through a write-combining mapping. It reads
@@ -219,12 +220,14 @@ key, and **Install Veda** does nothing yet. A disk's system has no menu.
   boot option gives local time. Programs read the clocks themselves, with
   no system call: the TSC scaled as the kernel scales it, by values it sets
   as it starts and never changes (`clock_info`, which `runtime::time` asks
-  for once), as programs read the time thousands of times a second.
+  for once), as programs read the time thousands of times a second. On
+  ARM64 the counter is the generic timer's, which all processors share and
+  which says its own frequency, so nothing is calibrated or corrected.
 - **Processors and scheduling.** Each processor turns its caches on as it
   starts and, with Intel's hardware P-states, chooses its own speed, up to
   turbo. The scheduler has 32 priorities, round-robin within each, 10 ms
   slices, preemption when a higher-priority thread wakes, tickless one-shot
-  timers and eager switching of FPU and vector state (XSAVE). It arms a
+  timers and eager switching of FPU and vector state (XSAVE on AMD64). It arms a
   processor's timer only for the deadlines of the threads that sleep on
   it, which that processor wakes, so that no deadline interrupts every
   processor (each of which would then wait for the BKL). It runs the
@@ -1144,9 +1147,11 @@ the actions every `ui` application offers over the `agentapp` protocol
 
 ## Architectures
 
-Veda runs on AMD64 (x86-64). What depends on the architecture or its
-platform is in each component's `architectures/<architecture>/` directory (a
-crate's in its `source/`), reached through its `architecture` module
+Veda runs on AMD64 (x86-64) and ARM64 (AArch64); `cargo automation`
+builds for one at a time ([Developing](DEVELOPING.md#architectures)). What
+depends on the architecture or its platform is in each component's
+`architectures/<architecture>/` directory (a crate's in its `source/`),
+reached through its `architecture` module
 ([Coding conventions](CODING.md) has the rules). On AMD64:
 
 | Component | What is AMD64's (`architectures/amd64/`) |
@@ -1164,6 +1169,25 @@ crate's in its `source/`), reached through its `architecture` module
 | `verification/{systest,c,ui}` | what the tests expect of the architecture, and the GUI scripts that hold only on QEMU's PC |
 | `automation/` | the Rust and C targets, the loader's boot path, QEMU's PC (q35, OVMF), its ACPI test tables |
 | `.cargo/`, `implementation/ports/` | Cargo's settings of the targets; the ports' settings, patches (binutils, GCC, musl, Linux) and the driver VM kernel's options |
+
+ARM64 has the same parts. Its machines are those of Arm's standards for
+operating systems: UEFI with ACPI tables, a GICv3 with an ITS, PSCI, and,
+to give devices to guests, an SMMUv3. QEMU's `virt` machine is one. How it
+differs from AMD64, beyond names:
+
+| Subject | On ARM64 |
+|---------|----------|
+| Privilege | One kernel, which runs at EL2 with the Virtualization Host Extensions where firmware leaves it there, and otherwise at EL1, where it has no virtual machines. Its code does not tell them apart: under `E2H`, the `*_EL1` registers name EL2's |
+| Address spaces | As on AMD64, but for the two tables: `TTBR1` holds the kernel's half and `TTBR0` a program's, tagged with an ASID, so a switch flushes nothing. When ASIDs run out, processes share one that is flushed as it is loaded. The direct map covers RAM only, as a processor may fetch from anything mapped as memory |
+| Page tables | An entry that is valid is replaced in two steps (break before make), and written tables are made visible to the walkers with a barrier. A page fault does not drop a stale translation, so the kernel cleans up after itself |
+| TLBs | Invalidated by broadcast (`tlbi ...is`), with no interrupts; only `vm_barrier` sends any |
+| Interrupts | GICv3: SGIs are the kernel's inter-processor interrupts, each line of the firmware's an SPI, and a device's MSIs reach the ITS, which tells devices apart: a function given to a guest cannot raise another's interrupts |
+| Timer | The virtual timer at EL1, EL2's physical timer at EL2 (`GTDT`), the guest's virtual timer being the guest's |
+| Processors | Started through PSCI. Floating point and SIMD are switched eagerly; SVE and SME stay off. `PAN` keeps the kernel out of programs' memory but where it means to reach it |
+| Faults in the kernel | All fatal, on a stack of each processor's own, so that the stack overflow that caused one can be told |
+| PCI configuration | ECAM, from the firmware's `MCFG` |
+| Programs | Linux's AArch64 system call numbers in the POSIX layer; programs may read the counter, zero cache lines and make their own code run (`DZE`, `UCI`, `UCT`), as compilers' run times expect. As they cannot read the ID registers, `AT_HWCAP` and `AT_HWCAP2` tell them what they can use by themselves (`abi::arm64::hwcap`); a fault is not a signal here, so a probe by `SIGILL` cannot work |
+| Memory order | Weak: see [Coding conventions](CODING.md#memory-order) |
 
 ## Repository layout
 

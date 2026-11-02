@@ -38,6 +38,9 @@
 //! `signal_return` takes those arithmetic sets and the direction flag
 //! ([`SIGNAL_RETURN_FLAGS`]).
 
+#[cfg(target_arch = "x86_64")]
+pub mod barrier;
+
 /// Page size used by the kernel for all mappings.
 pub const PAGE_SIZE: usize = 4096;
 

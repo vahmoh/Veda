@@ -111,7 +111,7 @@ A package's *manifest*:
 |-------|------------|
 | `name` | 1 to 64 bytes of lower-case letters, digits and `+`, `-`, `.`, beginning with a letter or digit (`libgreet`, `gtk+`, `python3.15`) |
 | `version` | `[EPOCH:]UPSTREAM[-REVISION]` ([below](#versions)) |
-| `architecture` | `amd64`, or `any` for a package of no programs (data, fonts, documents, scripts) |
+| `architecture` | `amd64`, `arm64`, or `any` for a package of no programs (data, fonts, documents, scripts) |
 | `summary` | One line |
 | `description` | Text, which may be empty |
 | `licence` | An SPDX expression (`GPL-3.0-only`, `MIT OR Apache-2.0`) |

@@ -21,7 +21,7 @@
 //! they build for it: a library used both by programs on `runtime` and by
 //! programs on the standard library is checked as each has it.
 
-use crate::architecture::{BARE_TARGET, KERNEL_TARGET, STD_TARGET, UEFI_TARGET, USER_TARGET};
+use crate::architecture;
 use crate::components::{PROGRAMS, Program};
 use crate::runner;
 use crate::toolchain;
@@ -47,10 +47,16 @@ pub fn command(args: &[String]) -> Result {
             util::cargo().args(["clippy", "--quiet", "--all-targets", "--package", package]).args(DENY_WARNINGS),
         )?;
     }
-    for (package, target) in [("bootloader", UEFI_TARGET), ("kernel", KERNEL_TARGET), ("posix", BARE_TARGET)] {
+    let arch = architecture::current();
+    let (user_target, std_target) = (arch.user_target, arch.std_target);
+    for (package, target, features) in
+        [("bootloader", arch.uefi_target, ""), ("kernel", arch.kernel_target, ""), ("posix", arch.bare_target, "layer")]
+    {
         util::status("Checking", format!("{package} ({target})"));
         util::run(
-            util::cargo().args(["clippy", "--quiet", "--package", package, "--target", target]).args(DENY_WARNINGS),
+            util::cargo()
+                .args(["clippy", "--quiet", "--package", package, "--target", target, "--features", features])
+                .args(DENY_WARNINGS),
         )?;
     }
     let web = crate::web::built();
@@ -59,19 +65,19 @@ pub fn command(args: &[String]) -> Result {
     }
     let (on_std, native): (Vec<&Program>, Vec<&Program>) =
         PROGRAMS.iter().filter(|p| web || !p.web).partition(|p| p.std);
-    util::status("Checking", format!("{} programs on Veda's runtime ({USER_TARGET})", native.len()));
+    util::status("Checking", format!("{} programs on Veda's runtime ({user_target})", native.len()));
     let mut cmd = util::cargo();
-    cmd.args(["clippy", "--quiet", "--target", USER_TARGET]);
+    cmd.args(["clippy", "--quiet", "--target", user_target]);
     for p in &native {
         cmd.args(["--package", p.package]);
     }
     util::run(cmd.args(DENY_WARNINGS))?;
     if !on_std.is_empty() {
-        util::status("Checking", format!("{} programs on the standard library ({STD_TARGET})", on_std.len()));
+        util::status("Checking", format!("{} programs on the standard library ({std_target})", on_std.len()));
         let mut cmd = toolchain::std_rust_tools()?.cargo_clippy()?;
         // Where the web engine is, for the programs linked with it.
         cmd.env("VEDA_WEB", crate::web::root());
-        cmd.args(["--quiet", "--target", STD_TARGET]);
+        cmd.args(["--quiet", "--target", std_target]);
         for p in &on_std {
             cmd.args(["--package", p.package]);
         }

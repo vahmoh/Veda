@@ -451,11 +451,17 @@ impl AddressSpace {
         }
         let mut va = page_align_down(addr);
         while va < end {
-            let ok = match paging::translate(self.root, va) {
-                Some((_, flags)) => flags.user && (!write || flags.writable),
-                None => false,
-            };
-            if !ok && self.handle_fault(va, write, false) != Fault::Resolved {
+            let mut mapped = paging::translate(self.root, va);
+            if !mapped.is_some_and(|(_, flags)| flags.user && (!write || flags.writable)) {
+                if self.handle_fault(va, write, false) != Fault::Resolved {
+                    return false;
+                }
+                mapped = paging::translate(self.root, va);
+            }
+            // A device's registers are for its driver, in the accesses it
+            // chooses: not every architecture lets the kernel's copies touch
+            // them.
+            if mapped.is_none_or(|(_, flags)| !paging::kernel_copies(&flags)) {
                 return false;
             }
             va += PAGE_SIZE;

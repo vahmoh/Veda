@@ -155,7 +155,7 @@ impl Drop for Layer {
 /// the flags returned): one in the layer has its interruption put off,
 /// another acts on its signals now, with those registers as its
 /// handlers' context (where it resumes is what they leave there).
-#[cfg_attr(not(target_os = "none"), allow(dead_code))]
+#[cfg_attr(not(feature = "layer"), allow(dead_code))]
 pub extern "C" fn signal_entry(regs: &mut abi::ThreadState) -> usize {
     if arch::word() & IN_LAYER != 0 {
         arch::set_word(DEFERRED);

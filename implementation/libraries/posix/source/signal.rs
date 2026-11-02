@@ -653,7 +653,7 @@ pub fn returning(mut r: SysResult, caller: &mut arch::Caller, mut again: impl Fn
     loop {
         let interrupted = r == Err(ERESTARTSYS);
         let shown = if interrupted { Err(EINTR) } else { r };
-        caller.rax = crate::error::encode(shown) as u64;
+        caller.set_result(crate::error::encode(shown) as u64);
         if !has_ready() {
             if interrupted {
                 // Nothing came of what interrupted it.
@@ -811,7 +811,8 @@ fn wait_for_handler() -> SysResult {
     }
 }
 
-/// `pause`.
+/// `pause` (x86-64's own system call: others have `ppoll`).
+#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
 pub fn pause() -> SysResult {
     wait_for_handler()
 }
@@ -1238,7 +1239,7 @@ mod tests {
     #[test]
     fn handler_contexts_hold_the_registers_and_mask_where_the_c_library_reads_them() {
         assert!(ucontext::SIGMASK.is_multiple_of(8) && ucontext::SIGMASK + 8 <= ucontext::SIZE);
-        let regs = Registers { rip: 0x5000, rsp: 0x7000, ..Registers::default() };
+        let regs = arch::tests::registers();
         let mut c = Context::new(&regs, 0x8000_0000_0000_0001);
         let bytes = unsafe { core::slice::from_raw_parts(&c as *const Context as *const u8, size_of::<Context>()) };
         assert!(size_of::<Context>() >= ucontext::SIZE);

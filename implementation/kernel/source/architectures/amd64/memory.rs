@@ -50,6 +50,11 @@ pub fn flush_cache_range(virt: u64, len: u64) {
     unsafe { asm!("mfence", options(nostack, preserves_flags)) };
 }
 
+/// Whether the direct map has `phys`: everything it has to reach.
+pub fn in_direct_map(_phys: u64) -> bool {
+    true
+}
+
 /// Temporarily allows supervisor access to user pages (SMAP).
 ///
 /// This and [`user_access_end`] are barriers to the compiler (their `asm!`

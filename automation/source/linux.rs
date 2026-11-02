@@ -31,7 +31,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::architecture::{self, GUEST_TARGET};
+use crate::architecture;
 use crate::notices;
 use crate::ports::{self, Port};
 use crate::util::{self, Result};
@@ -54,13 +54,18 @@ const GUEST_PROGRAMS: &[(&str, &str, &str)] = &[
     ("guest-input", "input", "bin/input"),
 ];
 
+/// Rust's target of the driver VM's programs.
+fn guest_target() -> &'static str {
+    architecture::current().guest_target
+}
+
 /// Cargo, for the driver VM's programs (`implementation/guests/linux/`),
 /// running `args`: in their directory, so that their configuration is read
 /// (`implementation/guests/linux/.cargo/config.toml`: musl, and
 /// `veda_guest`), and into a target directory of their own, as their target
 /// is that of Veda's programs ([`guest_target_dir`]).
 pub fn guest_cargo(args: &[&str]) -> Command {
-    let mut cmd = util::cargo_for(GUEST_TARGET);
+    let mut cmd = util::cargo_for(guest_target());
     cmd.current_dir(util::workspace_root().join("implementation").join("guests").join("linux"));
     cmd.args(args).arg("--target-dir").arg(guest_target_dir());
     cmd
@@ -79,7 +84,7 @@ const BUILD_TOOLS: [&str; 14] =
 
 /// Where the guest's kernel is built (`$VEDA_LINUX` overrides it).
 pub fn root() -> PathBuf {
-    util::env_dir("VEDA_LINUX", &["target", "linux"])
+    util::architecture_dir("VEDA_LINUX", "linux")
 }
 
 /// The lock over the Linux build.
@@ -205,8 +210,8 @@ fn place_renderer_lib(built: &Path) -> Result<PathBuf> {
 
 /// The renderer's Rust half (`implementation/guests/linux/renderer`), built.
 fn renderer_lib() -> Result<PathBuf> {
-    util::run(&mut guest_cargo(&["build", "--release", "--target", GUEST_TARGET, "--package", "guest-renderer"]))?;
-    Ok(guest_target_dir().join(GUEST_TARGET).join("release").join("librenderer.a"))
+    util::run(&mut guest_cargo(&["build", "--release", "--target", guest_target(), "--package", "guest-renderer"]))?;
+    Ok(guest_target_dir().join(guest_target()).join("release").join("librenderer.a"))
 }
 
 /// The renderer's decoder for this machine (`vgallium.so`: on softpipe, on
@@ -242,7 +247,7 @@ pub fn runnable() -> Result {
     if !built() {
         return Err("its Linux is not built (`cargo automation linux`)".into());
     }
-    architecture::nested_virtualization()
+    (architecture::current().nested_virtualization)()
 }
 
 /// For `cargo automation doctor`: whether the guest has been built
@@ -292,7 +297,7 @@ pub fn command(args: &[String]) -> Result {
         Command::new("bash")
             .arg(ports.join("linux").join("build.sh"))
             .env("VEDA_PORTS", &ports)
-            .env("VEDA_ARCH", architecture::NAME)
+            .env("VEDA_ARCH", architecture::current().name)
             .env("VEDA_LINUX", root())
             .env("VEDA_RENDERER", renderer_source()?)
             .env("VEDA_RENDERER_LIB", &lib)
@@ -361,8 +366,8 @@ pub fn guest() -> Result<Option<Guest>> {
         return Ok(None);
     }
     check_ports();
-    util::status("Building", format!("the driver VM's programs ({GUEST_TARGET})"));
-    let mut cmd = guest_cargo(&["build", "--release", "--target", GUEST_TARGET, "--package", "guest-renderer"]);
+    util::status("Building", format!("the driver VM's programs ({})", guest_target()));
+    let mut cmd = guest_cargo(&["build", "--release", "--target", guest_target(), "--package", "guest-renderer"]);
     for (package, ..) in GUEST_PROGRAMS {
         cmd.args(["--package", package]);
     }
@@ -371,7 +376,7 @@ pub fn guest() -> Result<Option<Guest>> {
     // Its kernel's licence texts (linux/build.sh's `licences` stage).
     let gathered = root().join("licences");
     let mut licences = notices::port_texts(&gathered, "linux", "`cargo automation linux`")?;
-    let bin = guest_target_dir().join(GUEST_TARGET).join("release");
+    let bin = guest_target_dir().join(guest_target()).join("release");
     let mut archive = cpio::Archive::new();
     archive.directory("dev");
     archive.directory("bin");
@@ -392,7 +397,8 @@ pub fn guest() -> Result<Option<Guest>> {
         util::ninja(&mesa_build(), "src/gallium/targets/veda/renderer")?;
         let exe = mesa_build().join("src").join("gallium").join("targets").join("veda").join("renderer");
         let stripped = root().join("build").join("renderer");
-        let strip = root().join("toolchain").join("bin").join(format!("{}-strip", architecture::GUEST_C_TARGET));
+        let strip =
+            root().join("toolchain").join("bin").join(format!("{}-strip", architecture::current().guest_c_target));
         util::run(Command::new(strip).arg("-o").arg(&stripped).arg(&exe))?;
         archive.file("bin/renderer", 0o755, &util::read(&stripped)?);
         packages.push("guest-renderer");
@@ -518,7 +524,7 @@ impl FirmwareLists {
 /// if they are not, or are not the files pinned).
 fn firmware() -> Result<Firmware> {
     let port = ports::dir().join("linux");
-    let arch_list = port.join("architectures").join(architecture::NAME).join("firmware.txt");
+    let arch_list = port.join("architectures").join(architecture::current().name).join("firmware.txt");
     let mut lists = FirmwareLists::default();
     for list in std::iter::once(port.join("firmware.txt")).chain(arch_list.is_file().then_some(arch_list)) {
         lists.read(&util::read_to_string(&list)?, &list)?;
@@ -704,9 +710,10 @@ mod tests {
     fn the_firmware_lists_name_each_files_licence() {
         let port = ports::dir().join("linux");
         let mut lists = FirmwareLists::default();
-        for list in
-            [port.join("firmware.txt"), port.join("architectures").join(architecture::NAME).join("firmware.txt")]
-        {
+        for list in [
+            port.join("firmware.txt"),
+            port.join("architectures").join(architecture::current().name).join("firmware.txt"),
+        ] {
             lists.read(&util::read_to_string(&list).unwrap(), &list).unwrap();
         }
         assert!(!lists.files.is_empty());

@@ -16,7 +16,7 @@
 //! itself, how they find the platform and boot, the PC's devices and memory
 //! map) is in
 //! `implementation/libraries/hv/source/architectures/<architecture>/`:
-//! [`amd64`]. It describes those machines on any host, so its unit tests
+//! [`amd64`], [`arm64`]. It describes those machines on any host, so its unit tests
 //! run anywhere.
 //!
 //! The kernel drives them under its virtual processors (its architecture's
@@ -32,6 +32,8 @@ extern crate std;
 pub mod acpi;
 #[path = "architectures/amd64/mod.rs"]
 pub mod amd64;
+#[path = "architectures/arm64/mod.rs"]
+pub mod arm64;
 pub mod bridge;
 pub mod igd;
 pub mod pci;

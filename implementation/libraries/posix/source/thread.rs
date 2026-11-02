@@ -85,7 +85,7 @@ pub unsafe extern "C" fn __veda_clone(
     }
     // Its word starts clear (the C library copied this thread's), before
     // the signal state knows it and may say it has signals ready.
-    #[cfg(target_os = "none")]
+    #[cfg(feature = "layer")]
     // SAFETY: `tls` is the new thread's, which has not started.
     unsafe {
         crate::architecture::signal::word_of(tls).store(0, Ordering::SeqCst)
@@ -331,7 +331,7 @@ pub fn exit_thread() -> ! {
 /// Where a thread `__veda_clone` started goes when its function returns
 /// (musl's never do: they end with `exit` or [`__veda_unmapself`]): it
 /// ends, in the layer until the end.
-#[cfg(target_os = "none")]
+#[cfg(feature = "layer")]
 pub(crate) extern "C" fn thread_returned() -> ! {
     core::mem::forget(Layer::enter());
     exit_thread()
