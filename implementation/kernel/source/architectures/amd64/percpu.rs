@@ -11,7 +11,7 @@ use core::cell::UnsafeCell;
 use core::mem::{MaybeUninit, offset_of};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use super::cpu::{MSR_GS_BASE, MSR_KERNEL_GS_BASE, wrmsr};
+use super::cpu::{MSR_GS_BASE, MSR_KERNEL_GS_BASE, rdmsr, wrmsr};
 use super::gdt::{Gdt, Tss};
 use crate::scheduler::percpu::MAX_CPUS;
 
@@ -113,6 +113,22 @@ pub(in crate::architecture) unsafe fn install(id: usize, apic_id: u32) {
         wrmsr(MSR_KERNEL_GS_BASE, 0);
     }
     GS_READY.store(true, Ordering::Release);
+}
+
+/// Gives this CPU the kernel's `GS` base back where it has user space's.
+/// The entry code swaps them only for traps from user space, so an
+/// exception raised between its `swapgs` and the return to user space
+/// (`iretq`, `sysretq`) enters the kernel with user space's, through which
+/// every per-CPU access faults again. For the exceptions the kernel does
+/// not survive (`trap`), whose reports read per-CPU data.
+pub(in crate::architecture) fn recover_kernel_gs() {
+    let blocks = LOCAL.0.as_ptr_range();
+    let is_block = |base: u64| (blocks.start as u64..blocks.end as u64).contains(&base);
+    if !is_block(rdmsr(MSR_GS_BASE)) && is_block(rdmsr(MSR_KERNEL_GS_BASE)) {
+        // SAFETY: the kernel's base is the one swapped out, which this
+        // swaps back in.
+        unsafe { core::arch::asm!("swapgs", options(nostack, preserves_flags)) };
+    }
 }
 
 /// The current CPU's block.

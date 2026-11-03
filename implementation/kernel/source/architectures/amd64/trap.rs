@@ -222,6 +222,7 @@ fn dump(frame: &TrapFrame) {
 
 /// A CPU exception raised by kernel code.
 pub(in crate::architecture) fn kernel_exception(frame: &TrapFrame) -> ! {
+    super::percpu::recover_kernel_gs();
     crate::diagnostics::panic::begin();
     let v = frame.vector as usize;
     emergency(format_args!(
@@ -248,6 +249,7 @@ pub(in crate::architecture) fn nmi(frame: &TrapFrame) -> ! {
     if crate::diagnostics::panic::panicking() {
         cpu::halt_forever();
     }
+    super::percpu::recover_kernel_gs();
     crate::diagnostics::panic::begin();
     emergency(format_args!("\n\n*** VEDA KERNEL PANIC: unexpected NMI ***\n"));
     dump(frame);

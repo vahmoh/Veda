@@ -16,7 +16,10 @@
 //! * `vk_context_switch`: switches kernel stacks between two threads.
 //!
 //! `swapgs` is executed exactly when crossing the user/kernel boundary, which
-//! is detected from the privilege level of the saved `CS`.
+//! is detected from the privilege level of the saved `CS`. An exception that
+//! `iretq` or `sysretq` raises after the exit's `swapgs` therefore comes
+//! from kernel mode with user space's `GS`, which the report of it puts
+//! right (`percpu::recover_kernel_gs`).
 
 use core::arch::global_asm;
 
