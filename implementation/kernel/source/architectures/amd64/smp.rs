@@ -107,7 +107,7 @@ pub(in crate::architecture) fn init_syscall_msrs() {
     // SAFETY: standard SYSCALL/SYSRET configuration; the selectors match
     // the GDT layout in `gdt`.
     unsafe {
-        cpu::wrmsr(cpu::MSR_STAR, ((gdt::KERNEL_CS as u64) << 32) | (0x10u64 << 48));
+        cpu::wrmsr(cpu::MSR_STAR, ((gdt::KERNEL_CS as u64) << 32) | ((gdt::SYSRET_CS as u64) << 48));
         cpu::wrmsr(cpu::MSR_LSTAR, super::entry::vk_syscall_entry as *const () as u64);
         // Mask IF, TF, DF, AC and NT on entry.
         cpu::wrmsr(cpu::MSR_SFMASK, 0x0004_4700);

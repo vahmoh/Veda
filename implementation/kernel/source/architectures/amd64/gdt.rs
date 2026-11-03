@@ -4,8 +4,8 @@
 //! Global descriptor table and task state segment (one of each per CPU).
 //!
 //! The segment order is dictated by `syscall`/`sysret`:
-//! `STAR[47:32] = KERNEL_CS` (kernel SS = +8) and `STAR[63:48] = 0x10`
-//! (user SS = 0x18, user CS = 0x20).
+//! `STAR[47:32] = KERNEL_CS` (kernel SS = +8) and `STAR[63:48] =
+//! SYSRET_CS` (user SS = +8, user CS = +16).
 
 use core::arch::asm;
 
@@ -14,6 +14,15 @@ pub const KERNEL_DS: u16 = 0x10;
 pub const USER_DS: u16 = 0x18 | 3;
 pub const USER_CS: u16 = 0x20 | 3;
 pub const TSS_SEL: u16 = 0x28;
+
+/// `STAR[63:48]`, from which `sysret` makes user space's selectors: `CS`
+/// is it + 16 with RPL 3, and `SS` it + 8, whose RPL Intel's processors
+/// make 3 but AMD's take from it. So it has RPL 3 itself: with RPL 0, AMD's
+/// leave user space an `SS` of RPL 0, which a trap from user space saves
+/// and its return (`iretq`) refuses.
+pub const SYSRET_CS: u16 = USER_DS - 8;
+
+const _: () = assert!(SYSRET_CS + 8 == USER_DS && (SYSRET_CS + 16) | 3 == USER_CS);
 
 /// IST slots (1-based in the IDT).
 pub const IST_DOUBLE_FAULT: u8 = 1;
