@@ -111,19 +111,30 @@ pub const HDA_CONTROLLER: &str = "ich9-intel-hda";
 pub const DEBUG_EXIT: &str = "isa-debug-exit,iobase=0xf4,iosize=0x04";
 
 /// Where each processor is, from QEMU's `info registers -a`: the code
-/// segment's selector and the instruction pointer, and whether it halted.
+/// segment's selector and the instruction pointer, whether it halted, and
+/// what a fault in the kernel leaves: the `GS` base, through which the
+/// kernel reaches its per-CPU data (user space's, after a fault between
+/// its `swapgs` and the return to user space), and `CR2`, the address of
+/// the last page fault.
 pub fn processors(registers: &str) -> String {
     let mut out = Vec::new();
-    let (mut cpu, mut rip, mut halted) = ("", "", false);
+    let (mut cpu, mut rip, mut halted, mut gs) = ("", "", false, "");
     for line in registers.lines() {
         if let Some(n) = line.strip_prefix("CPU#") {
-            cpu = n.trim();
+            (cpu, gs) = (n.trim(), "");
         } else if let Some(rest) = line.strip_prefix("RIP=") {
             rip = rest.split_whitespace().next().unwrap_or_default();
             halted = rest.split_whitespace().any(|w| w == "HLT=1");
         } else if let Some(rest) = line.strip_prefix("CS =") {
             let cs = rest.split_whitespace().next().unwrap_or_default();
             out.push(format!("processor {cpu} at {cs}:{rip}{}", if halted { " halted" } else { "" }));
+        } else if let Some(rest) = line.strip_prefix("GS =") {
+            gs = rest.split_whitespace().nth(1).unwrap_or_default();
+        } else if line.starts_with("CR0=")
+            && let Some(last) = out.last_mut()
+        {
+            let cr2 = line.split_whitespace().find_map(|w| w.strip_prefix("CR2=")).unwrap_or_default();
+            last.push_str(&format!(" (GS base {gs}, CR2 {cr2})"));
         }
     }
     if out.is_empty() { String::from("no processors") } else { out.join(", ") }
@@ -198,5 +209,26 @@ mod tests {
             "processor 0 at f000:000000000000fff0, processor 1 at 0008:ffffffff80029bf0 halted"
         );
         assert_eq!(processors(""), "no processors");
+    }
+
+    #[test]
+    fn processors_show_what_a_fault_in_the_kernel_leaves() {
+        // A fault between `swapgs` and `iretq`, which the kernel's report of
+        // it faulted on: user space's GS base, and the per-CPU data at its
+        // offset (24) from it.
+        let registers = "CPU#0\n\
+            RIP=ffffffff8005ca32 RFL=00000046 [---Z-P-] CPL=0 II=0 A20=1 SMM=0 HLT=1\n\
+            CS =0008 0000000000000000 ffffffff 00a09b00 DPL=0 CS64 [-RA]\n\
+            GS =0000 0000000000000000 ffffffff 00c00000\n\
+            CR0=80050033 CR2=0000000000000018 CR3=000000007ea26000 CR4=003506a0\n\
+            CPU#1\nRIP=ffffffff8004a6e5 RFL=00000246 [---Z-P-] CPL=0 II=0 A20=1 SMM=0 HLT=1\n\
+            CS =0008 0000000000000000 ffffffff 00a09b00 DPL=0 CS64 [-RA]\n\
+            GS =0000 ffffffff80078840 ffffffff 00c00000\n\
+            CR0=80050033 CR2=0000000000000000 CR3=000000007ea26000 CR4=003506a0\n";
+        assert_eq!(
+            processors(registers),
+            "processor 0 at 0008:ffffffff8005ca32 halted (GS base 0000000000000000, CR2 0000000000000018), \
+             processor 1 at 0008:ffffffff8004a6e5 halted (GS base ffffffff80078840, CR2 0000000000000000)"
+        );
     }
 }
