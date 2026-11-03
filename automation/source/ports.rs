@@ -227,11 +227,12 @@ pub fn sha256_of(path: &Path) -> Result<String> {
 }
 
 /// curl, fetching `url` into `to`: failing on HTTP errors, trying three
-/// times, and giving up on a connection that does not open in 30 s or
-/// moves less than 1 KiB a second for a minute.
+/// times more after any error (`--retry` alone gives up at once on a
+/// connection the server resets), and giving up on a connection that does
+/// not open in 30 s or moves less than 1 KiB a second for a minute.
 pub fn curl(url: &str, to: &Path) -> Command {
     let mut cmd = Command::new("curl");
-    cmd.args(["-fL", "--retry", "3", "--silent", "--show-error"])
+    cmd.args(["-fL", "--retry", "3", "--retry-all-errors", "--silent", "--show-error"])
         .args(["--connect-timeout", "30", "--speed-limit", "1024", "--speed-time", "60", "-o"])
         .arg(to)
         .arg(url);
@@ -365,6 +366,16 @@ mod tests {
             assert!(args.windows(2).any(|w| w == [flag, value]), "{flag}: {args:?}");
         }
         assert_eq!(args.last().map(String::as_str), Some("https://example.org/a.tar.xz"));
+    }
+
+    #[test]
+    fn downloads_try_again_after_a_reset_connection() {
+        // `--retry` alone gives up at once on a connection the server resets
+        // (curl's exit status 35 or 56), as musl.libc.org did on a runner.
+        let cmd = curl("https://example.org/a.tar.xz", Path::new("/tmp/a.part"));
+        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert!(args.windows(2).any(|w| w == ["--retry", "3"]), "{args:?}");
+        assert!(args.iter().any(|a| a == "--retry-all-errors"), "{args:?}");
     }
 
     #[test]
