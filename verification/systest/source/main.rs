@@ -431,34 +431,60 @@ fn test_ipc_primitives() -> TestResult {
     check(r == Err(abi::Error::TimedOut) && start.elapsed().as_millis() >= 25, "wait timeout")
 }
 
-/// A sleep ends at its deadline, however near: never before it, and of a
-/// hundred sleeps of 20 us, at least ten within 30 us of it, as a
-/// processor's timer is armed for the deadline itself (were it armed at
-/// least 50 us ahead, only a sleep that another interrupt happened to end
-/// would end that soon). The sleeps are a high-priority thread's, which
-/// threads still starting elsewhere do not hold up.
+/// A sleep ends at its deadline, however near: never before it, and no
+/// later after it than a longer sleep ends after its own, as a processor's
+/// timer is armed for the deadline itself. Were it armed at least 50 us
+/// ahead, a sleep of 20 us would end some 30 us later after its deadline
+/// than one of 200 us, which no such floor holds up. So of a hundred
+/// sleeps of each, taken in turn and ranked by how late they end, the
+/// tenth of 20 us is at most 15 us later than the tenth of 200 us (not the
+/// first, which another interrupt may have ended early). Against the
+/// longer sleeps, the check leaves out how long the machine takes to wake a
+/// thread whose timer has fired: a few microseconds on a PC, and some tens
+/// under emulation on a slow computer, as continuous integration's runners
+/// are. The sleeps are a high-priority thread's, which threads still
+/// starting elsewhere do not hold up.
 fn test_short_sleeps() -> TestResult {
-    const SLEEP: u64 = 20_000;
+    const SHORT: u64 = 20_000;
+    const LONG: u64 = 200_000;
     let sleeper = runtime::thread::Builder::new()
         .name("sleeper")
         .priority(abi::priority::HIGH)
         .spawn(|| {
-            (0..100)
-                .map(|_| {
+            (0..200)
+                .map(|i| {
+                    let sleep = if i % 2 == 0 { SHORT } else { LONG };
                     let start = runtime::time::now_ns();
-                    runtime::time::sleep(runtime::time::Duration::from_nanos(SLEEP));
-                    runtime::time::now_ns() - start
+                    runtime::time::sleep(runtime::time::Duration::from_nanos(sleep));
+                    (sleep, runtime::time::now_ns() - start)
                 })
-                .collect::<Vec<u64>>()
+                .collect::<Vec<(u64, u64)>>()
         })
         .map_err(|e| e.to_string())?;
     let took = sleeper.join().map_err(|e| e.to_string())?;
-    let shortest = took.iter().copied().min().unwrap_or(0);
-    let on_time = took.iter().filter(|&&t| t < SLEEP + 30_000).count();
+    // How long the sleeps of `sleep` took, the shortest first.
+    let sorted = |sleep: u64| {
+        let mut times: Vec<u64> = took.iter().filter(|&&(s, _)| s == sleep).map(|&(_, t)| t).collect();
+        times.sort_unstable();
+        times
+    };
+    let (short, long) = (sorted(SHORT), sorted(LONG));
     check(
-        shortest >= SLEEP && on_time >= 10,
-        &alloc::format!("of 100 sleeps of 20 us, {on_time} took less than 50 us (the shortest {shortest} ns)"),
-    )
+        short[0] >= SHORT && long[0] >= LONG,
+        &alloc::format!(
+            "a sleep ended before its deadline: of 20 us after {} ns, or of 200 us after {} ns",
+            short[0],
+            long[0]
+        ),
+    )?;
+    let (late, late_long) = (short[9] - SHORT, long[9] - LONG);
+    let what = alloc::format!(
+        "ranked by how late they ended, the tenth of 100 sleeps of 20 us was {late} ns late, of 100 of 200 us \
+         {late_long} ns"
+    );
+    check(late <= late_long + 15_000, &what)?;
+    println!("short sleeps: {what}");
+    Ok(())
 }
 
 /// A thread's deadline interrupts the processor it sleeps on, not every
