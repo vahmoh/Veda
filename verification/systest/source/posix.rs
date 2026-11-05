@@ -9,7 +9,7 @@
 //! programs themselves (`/system/tests/c`, built by the cross toolchain),
 //! and the Rust programs on its standard library, which stand on the C
 //! library too (`/system/tests/rust`, built by Rust's), as Python does
-//! (`/system/tests/python`).
+//! (`/system/tests/python`) and curl (`/system/tests/curl`).
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -1082,6 +1082,31 @@ pub fn test_python() -> TestResult {
     }
     let passed = code == 0 && out.contains("PASS: 0 failed");
     check(passed, &format!("Python's checks failed (exit code {code})"))
+}
+
+/// curl and libcurl work on Veda as `documentation/CURL.md` says
+/// (`verification/curl/checks.c`, with the host's servers when there are
+/// some), where the image has curl: libcurl in the checks' own process,
+/// against servers of theirs on the loopback interface (HTTP/1.1, HTTP/2,
+/// TLS, a proxy, WebSockets, a Unix domain socket), and the curl program
+/// in processes they start. Given ten minutes, as they move some hundred
+/// megabytes, where the processor may be emulated.
+pub fn test_curl() -> TestResult {
+    let fs = vfs_client()?;
+    if fs.stat("/system/bin/curl".into()).map_err(s)?.is_err() {
+        runtime::println!("curl: not in this image (curl was not built)");
+        return Ok(());
+    }
+    let dir = String::from("/tmp/curl-test");
+    let _ = fs.mkdir(dir.clone());
+    let host = host_args();
+    let args: Vec<&str> = host.iter().map(String::as_str).collect();
+    let (code, out) = run_c_for("/system/tests/curl/checks", &args, &dir, 600)?;
+    for line in out.lines().filter(|l| !l.starts_with("ok - ")) {
+        runtime::println!("curl: {line}");
+    }
+    let passed = code == 0 && out.contains("PASS: 0 failed");
+    check(passed, &format!("curl's checks failed (exit code {code})"))
 }
 
 /// Crates that need Rust's standard library work as Veda's ports of them

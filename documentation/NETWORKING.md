@@ -343,9 +343,9 @@ and opens a flyout for Wi-Fi; Settings → Network & Internet shows the
 connections, saved networks, interfaces, the firewall and the Wi-Fi
 diagnostics log. The Terminal has `wifi` (`status`, `scan`, `list`,
 `connect SSID [PASSWORD]`, `disconnect`, `saved`, `forget`, `auto`, `on`,
-`off`, `aps`, `log`), `ifconfig`, `ping`, `nslookup`, `netstat`, `route`,
-`curl`, and `firewall` (`log`, `stats` and the questions waiting; it only
-reads).
+`off`, `aps`, `log`), `ifconfig`, `ping`, `nslookup`, `netstat`, `route`
+and `firewall` (`log`, `stats` and the questions waiting; it only reads),
+and runs the `curl` program ([curl on Veda](CURL.md)).
 
 ### For applications
 
@@ -376,7 +376,8 @@ WebSockets, anything else over TLS), running in the application's process
 over a `net::TcpStream`. The web browser's engine has its own, as WebKit
 expects: OpenSSL, through GIO's glib-networking, trusting Mozilla's list
 of certificate authorities ([The web browser](BROWSER.md#webkit-on-veda),
-and [why not rustls](DEPENDENCIES.md#c-and-c-libraries)).
+and [why not rustls](DEPENDENCIES.md#c-and-c-libraries)); so do curl and
+libcurl, with OpenSSL of their own ([curl on Veda](CURL.md)).
 
 * **Protocol**: [rustls](https://github.com/rustls/rustls) 0.23, through
   its `no_std` unbuffered API; `TlsStream` handles partial records, several

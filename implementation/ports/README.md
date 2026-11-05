@@ -10,7 +10,7 @@ readable and explained patch. The fonts Veda ships are here too, as
 released, and the data the web engine reads (more fonts, the certificate
 authorities TLS trusts), downloaded as released.
 
-**Contents:** [How ports are built](#how-ports-are-built) · [Toolchain](#toolchain) · [Driver VM](#driver-vm) · [The web engine](#the-web-engine) · [Python](#python) · [Crates](#crates) · [Fonts](#fonts) · [Updating a port](#updating-a-port) · [Licences](#licences)
+**Contents:** [How ports are built](#how-ports-are-built) · [Toolchain](#toolchain) · [curl](#curl) · [Driver VM](#driver-vm) · [The web engine](#the-web-engine) · [Python](#python) · [Crates](#crates) · [Fonts](#fonts) · [Updating a port](#updating-a-port) · [Licences](#licences)
 
 ## How ports are built
 
@@ -28,9 +28,9 @@ fetches its stage 0 (the compiler, standard library and Cargo of the
 release that builds it), checked against the SHA-256s in the release's
 `src/stage0`.
 
-The scripts (`build.sh`, `linux/build.sh`, `wpewebkit/build.sh`,
-`python/build.sh`, `crates.sh`; `common.sh` holds what they share) list
-what they expect and
+The scripts (`build.sh`, `curl/build.sh`, `linux/build.sh`,
+`wpewebkit/build.sh`, `python/build.sh`, `crates.sh`; `common.sh` holds
+what they share) list what they expect and
 make in their opening comments. They build for the architecture
 `cargo automation` names (`VEDA_ARCH`), with its settings from
 `architectures/<architecture>/settings.sh` (target triples, the names
@@ -43,7 +43,8 @@ before it, and the variables it reads, its build directory among them.
 
 `cargo automation toolchain` builds these with `build.sh`, in
 `target/toolchain`, as [C on Veda](../../documentation/C.md#the-toolchain)
-and [Rust on Veda](../../documentation/RUST.md#the-toolchain) describe.
+and [Rust on Veda](../../documentation/RUST.md#the-toolchain) describe,
+then curl ([below](#curl)).
 Its last stage gathers their licence texts ([Licences](#licences)), and
 those of the crates Rust's standard library for Veda is built from, which
 the release vendors.
@@ -139,6 +140,45 @@ has only the demuxers, decoders (AV1 through dav1d), parsers, bitstream
 filter, scaler and resampler that `media-decoder` uses. It stays LGPL:
 `build.sh` checks that `config.h` has `CONFIG_GPL 0` and
 `CONFIG_NONFREE 0`, and that the assembly, threads and dav1d were found.
+
+## curl
+
+`cargo automation toolchain` builds these last, with `curl/build.sh`, in
+`target/toolchain/curl`, for [curl on Veda](../../documentation/CURL.md):
+the libraries for Veda, static and position-independent for the shared
+library that holds them (`-fPIC`), then curl, whose libcurl is that
+shared library, and pkgconf for the build machine. Its last stage gathers
+the licence texts of curl and of the libraries in libcurl
+(`LICENCE_FILES`), which the image installs in `/system/licences/curl`.
+
+| Port | Version | Licence | What Veda uses it for |
+|------|---------|---------|-----------------------|
+| `curl` | 8.23.0 | curl | The `curl` command, and libcurl (`/system/lib/libcurl.so.4`) |
+| `openssl` | 3.5.9 | Apache-2.0 | TLS, without its QUIC or legacy ciphers |
+| `nghttp2` | 1.70.0 | MIT | HTTP/2 |
+| `zlib`, `brotli`, `zstd` | 1.3.2, 1.2.0, 1.5.7 | Zlib; MIT; BSD-3-Clause OR GPL-2.0-only | Compressed responses (gzip and deflate, Brotli, Zstandard); zlib also curl's built-in manual |
+| `libpsl` | 0.23.3 | MIT (its Public Suffix List: MPL-2.0) | The domains a cookie may be set for, by the list its release carries |
+| `libidn2` | 2.3.8 | LGPL-3.0-or-later OR GPL-2.0-or-later | International domain names (IDNA2008, UTS #46), with the parts of libunistring it carries |
+| `pkgconf` | 3.0.9 | ISC | For the build machine: finding the libraries |
+
+The ports curl shares with the web engine and Python (OpenSSL, nghttp2,
+zlib, Brotli, Zstandard, libpsl, pkgconf) are built for each apart, and
+their releases as Veda has them: no patch of theirs changes for curl.
+
+What the patches change:
+
+* **curl**: its build alone. `config.sub` knows `veda`; libtool makes
+  Veda's shared libraries (`configure`, and `m4/libtool.m4`, which it is
+  generated from), as GCC's port teaches its own: a shared library keeps
+  the static libraries it is linked with (`pass_all`), and is named and
+  found as on GNU/Linux (`version_type=linux`, `LD_LIBRARY_PATH`,
+  `/system/lib` and `/home/packages/lib` searched without a `RUNPATH`).
+  `build.sh` checks what configure found, that libtool makes shared
+  libraries, that the program and libcurl need nothing but what
+  `/system/lib` has, without a search path, and that libcurl exports its
+  interface alone.
+* **libidn2**: `config.sub` knows `veda`.
+* The others: none.
 
 ## Driver VM
 
@@ -591,20 +631,23 @@ browser.
 
 The ports keep their licences, given in the tables above. The image
 carries the texts of each one it has, as its release has them, in
-`/system/licences/<port>` (the web engine's in `/system/licences/web`),
-with `SOURCE`, which says where its source is: the archive `port.toml`
+`/system/licences/<port>` (the web engine's in `/system/licences/web`,
+Python's and curl's in `/system/licences/python` and `curl`), with
+`SOURCE`, which says where its source is: the archive `port.toml`
 names, and the patches here. About Veda lists them
 ([Licensing](../../documentation/LICENSING.md#the-texts-in-the-image)).
 
 Each build gathers its ports' texts in a stage of its own, `licences`: the
 files of each port's release that `LICENCE_FILES` names in `build.sh`,
-`linux/build.sh`, `wpewebkit/build.sh` and `python/build.sh` (with, for
-Rust, those of the crates its standard library is built from). A port
+`curl/build.sh`, `linux/build.sh`, `wpewebkit/build.sh` and
+`python/build.sh` (with, for Rust, those of the crates its standard
+library is built from). A port
 added to a build without its texts listed there fails that build (the
 libraries whose licences ask for none are in its `LICENCE_FREE`), and an
 image build fails where it has a port without its texts: build its ports
 again (`cargo automation toolchain`, `linux`, `web` or `python`), which
-gathers them.
+gathers them. libpsl's `SOURCE`, in curl's, says the Public Suffix List it
+builds in is under the MPL 2.0.
 The firmware lists name the licence each file comes under, and the image
 carries those texts in `/system/licences/firmware`.
 

@@ -865,7 +865,7 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 52] = [
+    let tests: [Test; 53] = [
         ("starved threads run", test_starved_threads_run),
         ("ipc primitives", test_ipc_primitives),
         ("short sleeps", test_short_sleeps),
@@ -901,6 +901,7 @@ fn main() -> i32 {
         ("crates on the standard library", posix::test_std_crates),
         ("libraries loaded at run time", posix::test_plugins),
         ("python", posix::test_python),
+        ("curl", posix::test_curl),
         ("media checkasm", media::test_checkasm),
         ("media decoder", media::test_decoder),
         ("killing a job", posix::test_kill_job),

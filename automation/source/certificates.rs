@@ -4,9 +4,9 @@
 //! The certificate authorities that OpenSSL trusts in the system image,
 //! `/system/etc/ssl/cert.pem` (its `--openssldir` is `/system/etc/ssl`):
 //! Mozilla's list, as curl extracts it, from the `ca-certificates` port.
-//! OpenSSL's TLS is the web engine's (under glib-networking) and Python's
-//! (`ssl`); Veda's own programs trust webpki-roots', built in. The image
-//! has the list once either is built.
+//! OpenSSL's TLS is curl's (libcurl's default bundle), the web engine's
+//! (under glib-networking) and Python's (`ssl`); Veda's own programs trust
+//! webpki-roots', built in. The image has the list once any is built.
 
 use std::path::Path;
 

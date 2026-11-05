@@ -45,6 +45,8 @@ them across restarts when Veda has its home disk.
   The C library's interface is musl's, which is Linux's: code that builds
   on Linux with musl generally builds here, unless it relies on what
   [Limits](#limits) lists.
+- **Libraries**: libcurl, for transfers by URL (`/system/include/curl`,
+  linked dynamically: `-fPIE -pie ... -lcurl`; [curl on Veda](CURL.md)).
 
 On the development machine the cross toolchain compiles C, and C++ with
 `x86_64-veda-g++` (on AMD64; for ARM64,
@@ -282,7 +284,8 @@ program the Terminal runs.
 ## The toolchain
 
 `cargo automation toolchain` builds it once, in about half an hour on a
-recent PC (C a quarter of an hour, Rust as long again). It checks the
+recent PC (C a quarter of an hour, Rust as long again), and curl after it,
+in a few minutes ([curl on Veda](CURL.md#building-it)). It checks the
 archives it downloads against the SHA-256 each
 `implementation/ports/*/port.toml` pins (their GPG signatures were checked
 against the GNU and musl keys when they were pinned), builds the POSIX
@@ -321,9 +324,10 @@ are missing.
 | Downloading | `curl` | `curl` |
 | The media libraries, which decode videos | `meson`, `ninja`; on AMD64 `nasm` 2.14 or newer | `meson`, `ninja-build`, `nasm` |
 | Rust's LLVM and build program | `cmake`, `python3` | `cmake`, `python3` |
+| curl's build (OpenSSL's configuration, curl's manual) | `perl` | `perl` |
 
 ```bash
-sudo apt install build-essential m4 bison flex curl libgmp-dev libmpfr-dev libmpc-dev nasm meson ninja-build cmake python3
+sudo apt install build-essential m4 bison flex curl libgmp-dev libmpfr-dev libmpc-dev nasm meson ninja-build cmake python3 perl
 ```
 
 ### The ports

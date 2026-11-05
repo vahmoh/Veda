@@ -1,0 +1,81 @@
+--- a/config.sub
++++ b/config.sub
+@@ -1751,7 +1751,7 @@
+ 	     | scout* | superux* | sysv* | rtmk* | tpf* | windiss* \
+ 	     | powermax* | dnix* | nx6 | nx7 | sei* | dragonfly* \
+ 	     | skyos* | haiku* | rdos* | toppers* | drops* | es* \
+-	     | onefs* | tirtos* | phoenix* | fuchsia* | redox* | bme* \
++	     | onefs* | tirtos* | phoenix* | fuchsia* | veda* | redox* | bme* \
+ 	     | midnightbsd* | amdhsa* | unleashed* | emscripten* | wasi* \
+ 	     | nsk* | powerunix* | genode* | zvmoe* | qnx* | emx* | zephyr* \
+ 	     | fiwix* )
+--- a/configure
++++ b/configure
+@@ -10011,6 +10011,9 @@
+ tpf*)
+   lt_cv_deplibs_check_method=pass_all
+   ;;
++veda*)
++  lt_cv_deplibs_check_method=pass_all
++  ;;
+ os2*)
+   lt_cv_deplibs_check_method=pass_all
+   ;;
+@@ -16181,6 +16184,22 @@
+   hardcode_into_libs=yes
+   ;;
+ 
++# Veda: ELF, and musl's dynamic linker (the C library's shared object),
++# which looks in LD_LIBRARY_PATH, then the RUNPATHs, then /system/lib and
++# /home/packages/lib.
++veda*)
++  version_type=linux # correct to gnu/linux during the next big refactor
++  need_lib_prefix=no
++  need_version=no
++  library_names_spec='$libname$release$shared_ext$versuffix $libname$release$shared_ext$major $libname$shared_ext'
++  soname_spec='$libname$release$shared_ext$major'
++  shlibpath_var=LD_LIBRARY_PATH
++  shlibpath_overrides_runpath=yes
++  hardcode_into_libs=yes
++  sys_lib_dlsearch_path_spec='/system/lib /home/packages/lib'
++  dynamic_linker='Veda ld.so'
++  ;;
++
+ uts4*)
+   version_type=linux # correct to gnu/linux during the next big refactor
+   library_names_spec='$libname$release$shared_ext$versuffix $libname$release$shared_ext$major $libname$shared_ext'
+--- a/m4/libtool.m4
++++ b/m4/libtool.m4
+@@ -3105,6 +3105,22 @@
+   hardcode_into_libs=yes
+   ;;
+ 
++# Veda: ELF, and musl's dynamic linker (the C library's shared object),
++# which looks in LD_LIBRARY_PATH, then the RUNPATHs, then /system/lib and
++# /home/packages/lib.
++veda*)
++  version_type=linux # correct to gnu/linux during the next big refactor
++  need_lib_prefix=no
++  need_version=no
++  library_names_spec='$libname$release$shared_ext$versuffix $libname$release$shared_ext$major $libname$shared_ext'
++  soname_spec='$libname$release$shared_ext$major'
++  shlibpath_var=LD_LIBRARY_PATH
++  shlibpath_overrides_runpath=yes
++  hardcode_into_libs=yes
++  sys_lib_dlsearch_path_spec='/system/lib /home/packages/lib'
++  dynamic_linker='Veda ld.so'
++  ;;
++
+ uts4*)
+   version_type=linux # correct to gnu/linux during the next big refactor
+   library_names_spec='$libname$release$shared_ext$versuffix $libname$release$shared_ext$major $libname$shared_ext'
+@@ -3649,6 +3665,9 @@
+ tpf*)
+   lt_cv_deplibs_check_method=pass_all
+   ;;
++veda*)
++  lt_cv_deplibs_check_method=pass_all
++  ;;
+ os2*)
+   lt_cv_deplibs_check_method=pass_all
+   ;;

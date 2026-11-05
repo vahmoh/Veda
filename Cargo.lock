@@ -2631,7 +2631,6 @@ dependencies = [
  "runtime",
  "terminal-core",
  "ui",
- "web",
 ]
 
 [[package]]

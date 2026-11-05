@@ -21,12 +21,15 @@
 //!   (`architecture::current().std_target`), where it stands on the C library (see
 //!   `documentation/RUST.md`), with its Clippy and its standard library's
 //!   source; it builds Veda's programs on the standard library
-//!   ([`std_rust`]) and the Rust test programs.
+//!   ([`std_rust`]) and the Rust test programs;
+//! * **curl**, the program and libcurl, built with the cross toolchain once
+//!   the rest is (`crate::curl`).
 //!
 //! Everything lives under `target/toolchain` (`$VEDA_TOOLCHAIN` overrides
 //! it): `downloads/` (the verified source archives), `src/` (unpacked and
-//! patched), `build/`, `cross/`, `native/`, `media/` and `rust/`.
-//! Everything is built with `implementation/ports/build.sh`.
+//! patched), `build/`, `cross/`, `native/`, `media/`, `rust/` and `curl/`.
+//! Everything is built with `implementation/ports/build.sh`, but curl, with
+//! `implementation/ports/curl/build.sh`.
 //!
 //! An image build makes things with the toolchain too (the C library's
 //! POSIX layer, the test programs, the media decoder), into the
@@ -42,7 +45,7 @@ use std::process::Command;
 use crate::architecture;
 use crate::ports::{self, Port};
 use crate::util::{self, Recipe, Result};
-use crate::{databases, notices};
+use crate::{curl, databases, notices};
 
 /// Where the toolchain is built.
 pub fn root() -> PathBuf {
@@ -940,11 +943,11 @@ fn native_files() -> Result<Vec<(String, Vec<u8>)>> {
 /// test programs (`tests/c`, `tests/rust`), the native toolchain (as
 /// `/system` has it), the system's shared libraries (`lib/libc.so`, the C
 /// library's shared object, which is the dynamic linker, and GCC's
-/// runtime's), and the media decoder (`bin/media-decoder`) and its
-/// libraries' tests (`tests/media`) if `with_media_decoder`, with the licence
-/// texts of the ports these have (`licences/<port>`). The POSIX layer
-/// goes into the C library once, first; all of it is made while this
-/// build holds the toolchain's lock. Says what is missing, and whether
+/// runtime's), the media decoder (`bin/media-decoder`) and its libraries'
+/// tests (`tests/media`) if `with_media_decoder`, and curl (`crate::curl`),
+/// with the licence texts of the ports these have (`licences/<port>`). The
+/// POSIX layer goes into the C library once, first; all of it is made while
+/// this build holds the toolchain's lock. Says what is missing, and whether
 /// the toolchain is older than its ports.
 pub fn image_files(with_media_decoder: bool) -> Result<Vec<(String, Vec<u8>)>> {
     if cross_gcc().is_none() && !built("native toolchain") {
@@ -995,18 +998,24 @@ pub fn image_files(with_media_decoder: bool) -> Result<Vec<(String, Vec<u8>)>> {
         files.extend(decoder.map(|exe| ("bin/media-decoder".to_string(), exe)));
         files.extend(tests.into_iter().map(|(name, exe)| (format!("tests/media/{name}"), exe)));
     }
+    files.extend(curl::image_files()?);
     for port in licensed {
         files.extend(notices::port_texts(&root().join("licences"), port, "`cargo automation toolchain`")?);
     }
     Ok(files)
 }
 
-/// The ports the toolchain is built from, and what builds them, whose
-/// fingerprint `cargo automation toolchain` notes.
+/// The ports the toolchain is built from (curl's too), and what builds
+/// them, whose fingerprint `cargo automation toolchain` notes: curl's
+/// libraries are built as the web engine's and Python's are
+/// (`libraries.sh`, `cmake/`).
 fn ports_fingerprint() -> Result<String> {
     let dir = ports::dir();
-    let names = ["binutils", "gcc", "gmp", "mpfr", "mpc", "musl", "dav1d", "ffmpeg", "rust"];
-    ports::fingerprint(&names, &[dir.join("build.sh"), dir.join("common.sh"), ports::settings()])
+    let mut names = vec!["binutils", "gcc", "gmp", "mpfr", "mpc", "musl", "dav1d", "ffmpeg", "rust"];
+    names.extend(curl::PORTS);
+    let mut extra = vec![dir.join("build.sh"), ports::settings()];
+    extra.extend(ports::library_build_files()?);
+    ports::fingerprint(&names, &extra)
 }
 
 /// Where the fingerprint of the ports the toolchain was built from is.
@@ -1113,9 +1122,10 @@ fn fetch_rust_stage0(downloads: &Path, host: &str) -> Result<Vec<String>> {
 
 /// The programs the build needs from the system: compilers and GNU tools,
 /// curl for the downloads, meson and ninja for the media libraries, CMake
-/// and Python for Rust's (its LLVM, its build program); and the
-/// architecture's own (`architecture::current().port_tools`). `documentation/C.md`
-/// names the packages.
+/// and Python for Rust's (its LLVM, its build program), and curl's
+/// (`curl::BUILD_TOOLS`); and the architecture's own
+/// (`architecture::current().port_tools`). `documentation/C.md` names the
+/// packages.
 const BUILD_TOOLS: [&str; 12] =
     ["gcc", "g++", "make", "m4", "bison", "flex", "patch", "curl", "meson", "ninja", "cmake", "python3"];
 
@@ -1124,6 +1134,7 @@ const BUILD_TOOLS: [&str; 12] =
 fn shell() -> Result<Command> {
     let missing: Vec<&str> = BUILD_TOOLS
         .iter()
+        .chain(curl::BUILD_TOOLS)
         .chain(architecture::current().port_tools)
         .copied()
         .filter(|t| util::find_on_path(t).is_none())
@@ -1167,8 +1178,10 @@ fn build(jobs: usize) -> Result {
     for port in toolchain_ports()? {
         ports::fetch(&port, &downloads)?;
     }
-    // And the C library's databases, which images take from the downloads.
+    // And the C library's databases, which images take from the downloads,
+    // and curl's ports, with the certificate authorities it trusts.
     ports::fetch(&Port::named(databases::PORT)?, &downloads)?;
+    curl::fetch(&downloads)?;
     let rust_host = rust_host()?;
     let rust_stage0 = fetch_rust_stage0(&downloads, &rust_host)?;
     // The script makes the C library's object of the POSIX layer once its
@@ -1185,6 +1198,8 @@ fn build(jobs: usize) -> Result {
         .env("VEDA_RUST_STAGE0", rust_stage0.join(" "))
         .env("JOBS", jobs.to_string());
     util::run(&mut sh)?;
+    // curl, once the cross toolchain and the C library it stands on are.
+    curl::build(jobs)?;
     // The native programs now have the POSIX layer's object as it is, and
     // the toolchain the ports as they are.
     let object = posix_layer_object();

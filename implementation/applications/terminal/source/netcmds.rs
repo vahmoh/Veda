@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Network commands: `wifi`, `ifconfig`, `ping`, `nslookup`, `netstat`,
-//! `firewall`, `route` and `curl`. They talk to the network and Wi-Fi
-//! services through `net`; every wait is bounded, and the long ones
-//! (pinging, scanning, joining a network) stop between steps after Ctrl+C.
+//! `firewall` and `route`. They talk to the network and Wi-Fi services
+//! through `net`; every wait is bounded, and the long ones (pinging,
+//! scanning, joining a network) stop between steps after Ctrl+C.
 //! `firewall` only reads: the programs run here speak for the Terminal, so
-//! Settings alone changes the firewall.
+//! Settings alone changes the firewall. Transfers by URL are the curl
+//! program's (`/system/bin/curl`).
 
 use net::wifi::{self, ConnState, WlanEvent};
 use net::{Duration, IpAddr, NetError};
@@ -599,39 +600,5 @@ pub fn cmd_route(_sh: &mut Shell, io: &mut Io, _args: &[String]) -> i32 {
             0
         }
         Err(e) => net_err(io, "route", e),
-    }
-}
-
-pub fn cmd_curl(_sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
-    // What may be shown, and what may be saved (`curl URL > FILE`).
-    const SHOWN: usize = 1 << 20;
-    const SAVED: usize = 32 << 20;
-    let head_only = args.iter().any(|a| a == "-I");
-    let Some(url) = args.iter().skip(1).find(|a| !a.starts_with('-')) else {
-        return io.error("curl", "usage: curl [-I] [http[s]://]HOST[:PORT][/PATH]");
-    };
-    let url = if url.contains("://") { url.clone() } else { format!("http://{url}") };
-    let terminal = io.is_terminal();
-    match web::http::get(&url, Duration::from_secs(20), if terminal { SHOWN } else { SAVED }) {
-        Ok(r) => {
-            if head_only {
-                io.println(&format!("HTTP/1.1 {} {}", r.status, r.reason));
-                for (k, v) in &r.headers {
-                    io.println(&format!("{k}: {v}"));
-                }
-            } else if !terminal {
-                // Into a file or a pipe: the body exactly as it came.
-                io.write(&r.body);
-            } else if terminal_core::text::is_binary(&r.body) {
-                io.error("curl", &format!("binary data ({} bytes): save it with > FILE", r.body.len()));
-            } else {
-                io.write(&r.body);
-                if !r.body.ends_with(b"\n") {
-                    io.print("\n");
-                }
-            }
-            if r.status >= 400 { 22 } else { 0 }
-        }
-        Err(e) => io.error("curl", &format!("{e}")),
     }
 }

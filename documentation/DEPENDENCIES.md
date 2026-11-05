@@ -54,8 +54,8 @@ In Veda's terms:
 
 C and C++ come as ports too: GCC, binutils and musl (the toolchain),
 FFmpeg and dav1d (video decoding), Mesa (the driver VM's renderer), Linux
-(the driver VM's kernel), and WPE WebKit with the libraries it stands on
-(the browser's engine).
+(the driver VM's kernel), curl with the libraries libcurl holds, and WPE
+WebKit with the libraries it stands on (the browser's engine).
 
 ## C and C++ libraries
 
@@ -96,6 +96,18 @@ and behaviour Python's programs expect (RustPython, in Rust, runs a part
 of them); its modules stand on the libraries python.org's builds use
 (zlib, bzip2, XZ Utils, Zstandard, mpdecimal, Expat, SQLite, OpenSSL and
 libffi, for `ctypes`), each a port ([Python on Veda](PYTHON.md)).
+
+**curl** is the command people transfer data by URL with, on every other
+system, and libcurl the library C programs written for them do it with;
+Veda's own client (`web`) is its programs' GET, without HTTP/2, uploads,
+proxies, cookies or a C interface. Its TLS is **OpenSSL**, the backend
+of curl's that does the most: OCSP stapling, pinned public keys and the
+TLS context a program may change (`CURLOPT_SSL_CTX_FUNCTION`), which
+curl's backend for rustls (through rustls-ffi) has not, as curl's own
+documents say; the same port and long-term support release as the web
+engine's and Python's, built apart. Its other libraries are those curl
+is built with on Linux's distributions: nghttp2, zlib, Brotli, Zstandard,
+libpsl and libidn2 ([curl on Veda](CURL.md)).
 
 ## Veda's own, and why
 

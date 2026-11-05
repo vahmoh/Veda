@@ -309,14 +309,6 @@ pub static BUILTINS: &[Builtin] = &[
         run: crate::netcmds::cmd_route,
     },
     Builtin {
-        name: "curl",
-        aliases: &["wget"],
-        group: Group::Network,
-        usage: "curl [-I] URL",
-        help: "Fetch a web page over HTTP or HTTPS (-I: headers only)",
-        run: crate::netcmds::cmd_curl,
-    },
-    Builtin {
         name: "uptime",
         aliases: &[],
         group: Group::System,

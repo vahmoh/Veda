@@ -94,6 +94,7 @@
 //! requires native-toolchain        # only with GCC in the image (the same)
 //! requires media                   # only with the media decoder (FFmpeg and dav1d, the same)
 //! requires rust-toolchain          # only with the Rust test programs (the same)
+//! requires curl                    # only with curl (the same)
 //! requires web                     # only with the browser (`cargo automation web`); skipped otherwise
 //! requires python                  # only with Python (`cargo automation python`); skipped otherwise
 //! requires native-speed            # only where the processors are not emulated (ARM64's are on a PC); skipped otherwise
@@ -213,6 +214,8 @@ pub enum Requirement {
     Media,
     /// The Rust test programs.
     RustToolchain,
+    /// curl, which the toolchain's command builds last.
+    Curl,
     /// The browser, with its web engine.
     Web,
     /// Python.
@@ -233,7 +236,7 @@ impl Requirement {
             Requirement::NativeToolchain => Some("native toolchain"),
             Requirement::Media => Some("media libraries"),
             Requirement::RustToolchain => Some("rust toolchain"),
-            Requirement::Web | Requirement::Python | Requirement::NativeSpeed => None,
+            Requirement::Curl | Requirement::Web | Requirement::Python | Requirement::NativeSpeed => None,
         }
     }
 }
@@ -857,12 +860,22 @@ impl Line {
             "requires" => {
                 let what = self.one_of(
                     "requirement",
-                    &["c-toolchain", "native-toolchain", "media", "rust-toolchain", "web", "python", "native-speed"],
+                    &[
+                        "c-toolchain",
+                        "native-toolchain",
+                        "media",
+                        "rust-toolchain",
+                        "curl",
+                        "web",
+                        "python",
+                        "native-speed",
+                    ],
                 )?;
                 boot.requires.push(match what.as_str() {
                     "c-toolchain" => Requirement::CToolchain,
                     "native-toolchain" => Requirement::NativeToolchain,
                     "media" => Requirement::Media,
+                    "curl" => Requirement::Curl,
                     "web" => Requirement::Web,
                     "python" => Requirement::Python,
                     "native-speed" => Requirement::NativeSpeed,
@@ -1013,7 +1026,7 @@ mod tests {
             "boot-cmdline \"run=a\"\nnet none\nnic igb\nmemory 2048\nacpi-table touchpad\nacpi-table nhlt\n\
              firmware-variable A 02f9af02-7734-4233-b43d-93fe5aa35db3 0x7 0a0b\nsound virtio\naudio silent\n\
              live writable\ninput usb\nusb net\ngpu on\nnettest local\nagent-asleep\nrequires media\n\
-             requires native-speed\nboot-cmdline \"b=c\"\nwait 1\n",
+             requires native-speed\nrequires curl\nboot-cmdline \"b=c\"\nwait 1\n",
         )
         .unwrap();
         let boot = &script.boot;
@@ -1031,7 +1044,7 @@ mod tests {
         );
         assert_eq!((boot.input, boot.usb_net, boot.gpu), (Some(InputDevices::Usb), true, Some(true)));
         assert!(boot.nettest_local && boot.agent_asleep && script.needs_agent());
-        assert_eq!(boot.requires, [Requirement::Media, Requirement::NativeSpeed]);
+        assert_eq!(boot.requires, [Requirement::Media, Requirement::NativeSpeed, Requirement::Curl]);
         assert_eq!(script.steps.len(), 1);
         assert_eq!(Script::parse("wait 1\n").unwrap().boot, Boot::default());
     }

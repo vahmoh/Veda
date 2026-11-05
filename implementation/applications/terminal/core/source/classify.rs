@@ -184,7 +184,7 @@ fn builtin_effect(name: &str, args: &[Option<&str>], words: &[Word], reading: &R
     match name {
         "ls" | "pwd" | "cat" | "head" | "tail" | "wc" | "grep" | "find" | "tree" | "stat" | "df" | "ps" | "apps"
         | "uptime" | "free" | "sysinfo" | "date" | "dmesg" | "whoami" | "hostname" | "help" | "echo" | "clear"
-        | "sleep" | "env" | "which" | "ifconfig" | "ping" | "nslookup" | "netstat" | "route" | "curl" | "firewall" => {
+        | "sleep" | "env" | "which" | "ifconfig" | "ping" | "nslookup" | "netstat" | "route" | "firewall" => {
             Effect::Looks
         }
         "cd" | "mkdir" | "touch" | "edit" | "sync" | "logger" | "export" | "unset" => Effect::Changes,
@@ -264,15 +264,14 @@ mod tests {
             const NAMES: &[&str] = &[
                 "ls", "cd", "pwd", "cat", "head", "tail", "wc", "grep", "find", "tree", "mkdir", "rmdir", "rm", "cp",
                 "mv", "touch", "stat", "edit", "open", "sync", "df", "ps", "kill", "run", "apps", "wifi", "ifconfig",
-                "ping", "nslookup", "netstat", "route", "curl", "firewall", "uptime", "free", "sysinfo", "date",
-                "dmesg", "logger", "whoami", "hostname", "help", "echo", "clear", "sleep", "history", "env", "export",
-                "unset", "which", "exit",
+                "ping", "nslookup", "netstat", "route", "firewall", "uptime", "free", "sysinfo", "date", "dmesg",
+                "logger", "whoami", "hostname", "help", "echo", "clear", "sleep", "history", "env", "export", "unset",
+                "which", "exit",
             ];
             match name {
                 "del" => Some("rm"),
                 "set" => Some("export"),
                 "start" => Some("run"),
-                "wget" => Some("curl"),
                 n => NAMES.iter().find(|b| **b == n).copied(),
             }
         }
@@ -333,7 +332,6 @@ mod tests {
             "wifi scan",
             "history",
             "ping -c 2 example.org",
-            "curl example.org",
             // The Terminal only reads the firewall: Settings changes it.
             "firewall",
             "firewall log",
@@ -420,7 +418,10 @@ mod tests {
             "cd a; cd b; cd c; cd d; echo hi > new.txt",
             "echo hi > $D/new.txt; echo hi > $D/new.txt",
             "ls; echo hi > $?.txt",
-            // Programs can do anything; unknown commands too.
+            // Programs can do anything; unknown commands too. curl among
+            // them, which writes files, sends them and reads its
+            // configuration from the home folder.
+            "curl example.org",
             "systest",
             "./script",
             "/system/bin/gcc a.c",

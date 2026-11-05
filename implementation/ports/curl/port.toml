@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# curl: the `curl` command, and libcurl, the library C programs transfer
+# data by URL with (see documentation/CURL.md). Its signature on curl.se was
+# checked against Daniel Stenberg's key
+# (27EDEAF22F3ABCEB50DB9A125CC908FDB71E12C2) when it was pinned.
+name = "curl"
+version = "8.23.0"
+url = "https://curl.se/download/curl-8.23.0.tar.xz"
+sha256 = "8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5"
+license = "curl"

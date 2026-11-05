@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# curl on the real Internet, through QEMU's NAT, in the Terminal: HTTPS to
+# public servers over HTTP/2, their certificates checked against the
+# system's authorities (Mozilla's list), a compressed page, and one whose
+# certificate has expired refused (60). curl's own checks run against
+# servers of theirs and need no Internet (systest's, verification/curl);
+# this does, so it is not part of `cargo automation test`:
+#
+#   cargo automation script verification/real/curl.vts
+requires curl
+net ethernet
+boot-cmdline "run=terminal"
+fail-on "PANIC"
+wait-serial "desktop ready" 90
+wait-serial "started terminal" 60
+wait 3
+key meta_l-up
+wait 2
+# The network comes up after the system: curl tries again until it has.
+type "curl -sSf --retry 30 --retry-delay 2 --retry-all-errors -o /dev/null -w '%{http_version} %{ssl_verify_result}' https://example.com/ | grep '2 0' && logger example-ok"
+key ret
+wait-serial "terminal: example-ok" 180
+type "curl -sSf --compressed -o /dev/null -w '%{http_version} %{size_download}' https://www.wikipedia.org/ | grep '2 ' && logger wikipedia-ok"
+key ret
+wait-serial "terminal: wikipedia-ok" 60
+type "curl -sS -o /dev/null https://expired.badssl.com/; logger expired-$?"
+key ret
+wait-serial "terminal: expired-60" 60
+shot target/veda/curl-internet.png

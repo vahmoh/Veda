@@ -91,7 +91,9 @@ Hello, Veda!
   runtime's are (`/system/lib/libstdc++.so.6`), otherwise by the name it
   was linked by (`libgreet.so`). A library with a versioned soname
   (`-Wl,-soname,libgreet.so.1`) is linked by a script of its unversioned
-  name, as `libgcc_s.so` is (`INPUT(libgreet.so.1)` in `libgreet.so`).
+  name, as `libgcc_s.so` is (`INPUT(libgreet.so.1)` in `libgreet.so`), and
+  libcurl (`/system/lib/libcurl.so.4`, which `-lcurl` links through
+  `libcurl.so`; [curl on Veda](CURL.md)).
 - **Where a library is found**, for a name without a `/`, in this order:
   the directories of `LD_LIBRARY_PATH`; those of the `RUNPATH` (or
   `RPATH`) of the object that needs it, then of the object that needed
@@ -245,6 +247,7 @@ names.
 | GCC's `gcc/config/veda.h` | How each kind of program and library is linked: the start files (`Scrt1.o` for a dynamically linked program, which leaves the bootstrap channel to the dynamic linker), `-dynamic-linker /system/lib/libc.so`, the hardening above, and GCC's runtime, static or shared (`REAL_LIBGCC_SPEC`) |
 | GCC's runtime | libgcc, libstdc++ and libatomic, static (compiled `-fPIC`, for position-independent programs) and shared: `libgcc_s.so.1` (libgcc's `t-slibgcc`, versioned as on Linux), `libstdc++.so.6` and `libatomic.so.1` (libtool, which Veda's patch of `libtool.m4` and the scripts generated from it teaches Veda's shared libraries). The unwinder finds every object's tables through `dl_iterate_phdr` (`unwind-dw2-fde-dip.c`, with `TARGET_DL_ITERATE_PHDR`), and the image has the three stripped, by their sonames |
 | Rust's target | `dynamic_linking` and `has_rpath` (`spec/base/veda.rs`); `cdylib` and `dylib` crates never take the static C library; the unwinder static (`libgcc_eh`) or shared (`libgcc_s.so.1`), as on Linux (`library/unwind`) |
+| curl | libcurl a shared library (`libcurl.so.4`), linked by its own build's libtool, which Veda's patch of curl teaches Veda's shared libraries; the curl program linked dynamically with it ([curl on Veda](CURL.md#the-port)) |
 | CPython | The interpreter linked dynamically, its C API exported; `_ctypes` on libffi, whose closures are memory files mapped twice (its patch); `ctypes.util.find_library` for Veda's names; its configuration (`sysconfig`) naming Veda's own compilers; the tests' extension modules, which must be shared libraries, in images with Python's tests |
 
 **Starting a dynamically linked program.** Programs start in user space

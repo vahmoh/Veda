@@ -45,9 +45,9 @@ COMMANDS:
                 once the web engine is built)
     toolchain   Build the toolchain from implementation/ports/: GCC, binutils and
                 musl (a cross compiler for this machine and the native one the
-                image installs in /system), the media libraries, and Rust for
-                Veda's target (needs build tools; see documentation/C.md and
-                RUST.md; --jobs N)
+                image installs in /system), the media libraries, Rust for Veda's
+                target, and curl with libcurl (needs build tools; see
+                documentation/C.md, RUST.md and CURL.md; --jobs N)
     linux       Build the Linux kernel of the driver VM from
                 implementation/ports/linux (see documentation/DRIVERVM.md;
                 --jobs N); later builds put it in the image, with the guest's

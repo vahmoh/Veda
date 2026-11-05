@@ -1,0 +1,10 @@
+--- a/build-aux/config.sub
++++ b/build-aux/config.sub
+@@ -2134,6 +2134,7 @@
+ 	| unos* \
+ 	| uwin* \
+ 	| uxpv* \
++	| veda* \
+ 	| v88r* \
+ 	|*vms* \
+ 	| vos* \

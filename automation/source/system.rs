@@ -166,10 +166,15 @@ pub fn build(o: &Options) -> Result<System> {
     // Python, its standard library and its checks, once it is built, and
     // its own tests if asked for.
     add_all(&mut initrd, &mut licensed, crate::python::image_files(o.python_tests)?);
-    // The certificate authorities that OpenSSL trusts, whose TLS is the web
-    // engine's and Python's: from the downloads of a build that has them.
-    if crate::web::built() || crate::python::built() {
-        let build = if crate::web::built() { crate::web::root() } else { crate::python::root() };
+    // The certificate authorities that OpenSSL trusts, whose TLS is curl's,
+    // the web engine's and Python's: from the downloads of a build that has
+    // them (curl's are the toolchain's).
+    let openssl = [
+        (crate::curl::built(), toolchain::root()),
+        (crate::web::built(), crate::web::root()),
+        (crate::python::built(), crate::python::root()),
+    ];
+    if let Some((_, build)) = openssl.iter().find(|(built, _)| *built) {
         add_all(&mut initrd, &mut licensed, crate::certificates::image_files(&build.join("downloads"))?);
     }
     // Videos for the stand-in decoder, fakedec (the GUI scripts').

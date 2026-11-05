@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# libidn2: international domain names (IDNA2008, with Unicode's UTS #46
+# mapping), which curl turns into the names DNS knows (bücher.example to
+# xn--bcher-kva.example). Built with the parts of libunistring it carries.
+# Veda takes its library under the LGPL, of the two licences it is offered
+# under.
+name = "libidn2"
+version = "2.3.8"
+url = "https://ftp.gnu.org/gnu/libidn/libidn2-2.3.8.tar.gz"
+sha256 = "f557911bf6171621e1f72ff35f5b1825bb35b52ed45325dcdee931e5d3c0787a"
+license = "LGPL-3.0-or-later OR GPL-2.0-or-later"

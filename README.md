@@ -34,7 +34,7 @@ and the applications.
   <tr>
     <td width="33%" valign="top"><b>A microkernel in Rust</b><br>Capabilities, SMP, and services in user space that restart by themselves. Applications get Rust's standard library.</td>
     <td width="33%" valign="top"><b>Linux's drivers, contained</b><br>Linux drives the hardware in a VM on Veda's own hypervisor, held in by the IOMMU and restarted if it crashes.</td>
-    <td width="33%" valign="top"><b>A complete desktop</b><br>A compositing window system, a lock screen, a web browser on WebKit, OpenGL ES 3.0, GCC in the Terminal, WPA3 Wi-Fi and a firewall that asks first.</td>
+    <td width="33%" valign="top"><b>A complete desktop</b><br>A compositing window system, a lock screen, a web browser on WebKit, OpenGL ES 3.0, GCC and curl in the Terminal, WPA3 Wi-Fi and a firewall that asks first.</td>
   </tr>
 </table>
 
@@ -92,7 +92,7 @@ Then build Veda and boot it:
 
 ```bash
 cargo automation doctor      # check the tools
-cargo automation toolchain   # once, about half an hour: GCC, musl and Rust for Veda
+cargo automation toolchain   # once, about half an hour: GCC, musl, Rust and curl for Veda
 cargo automation linux       # once: the driver VM's Linux and Mesa
 cargo automation web         # once, an hour or more (optional): WebKit, for the browser
 cargo automation python      # once, a few minutes (optional): Python, its standard library
@@ -201,6 +201,7 @@ a stand-in for Deepgram, so they are offline, deterministic and free.
 | [C on Veda](documentation/C.md) and [Rust on Veda](documentation/RUST.md) | Programs, the POSIX layer and the toolchains |
 | [Linking and loading](documentation/LINKING.md) | Static and dynamically linked programs, shared libraries, and loading them at run time from C, C++, Rust and Python |
 | [Python on Veda](documentation/PYTHON.md) | Python, its standard library, and CPython's port |
+| [curl on Veda](documentation/CURL.md) | The `curl` command and libcurl: transfers by URL over HTTP/2 and TLS, in the Terminal and in C programs |
 | [Packages](documentation/PACKAGES.md) | Installing software with `pkg`: the package manager, signed repositories, and changes that survive the power going |
 | [Developing](documentation/DEVELOPING.md) | Commands, the system image and writing applications |
 | [Libraries](documentation/DEPENDENCIES.md) | What Veda builds on, and what it keeps of its own |

@@ -1129,7 +1129,9 @@ the actions every `ui` application offers over the `agentapp` protocol
   application that holds the most, never the process whose access found
   no page), and the C, C++ and Rust test programs, linked statically and
   dynamically, with the libraries they load (`verification/c`,
-  `verification/rust`, `verification/stdcrates`, `verification/plugins`).
+  `verification/rust`, `verification/stdcrates`, `verification/plugins`),
+  and curl's and Python's checks where the image has them
+  (`verification/curl`, `verification/python`).
   `nettest` checks DNS,
   UDP, TCP, HTTP, HTTPS and ping, against a server on the host in the
   network cards' scripts (`nettest local`).
@@ -1220,7 +1222,7 @@ Libraries are crates named after their directory
 | `implementation/services/`, `implementation/drivers/`, `implementation/applications/` | system services, drivers and applications (the applications with their manifests, `<name>.app`, and what they share in `common`) |
 | `implementation/shell/` | the shell ([The shell](#the-shell)): the splash's picture (`components/welcome`), the desktop shell (`components/desktop`), the lock screen (`components/lock`) and what they share (`libraries`) |
 | `implementation/guests/linux/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer, `logkeeper` (the system's log on the live system's stick), and its tests (`bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `timertest`, `kmspause`) |
-| `implementation/ports/` | third-party software built from source, most of it with a small patch of Veda's (see its `README.md`): the C toolchain (GCC, binutils, GMP, MPFR, MPC, musl), Rust for Veda's target, FFmpeg and dav1d, the driver VM's Linux (with zlib and elfutils for its build), its own toolchain (the same GCC, binutils and musl, unpatched) and Mesa, the crates Veda changes (smoltcp, zune-jpeg, libc, getrandom, rustix, errno, socket2, mio, tokio), the web engine (WPE WebKit, the libraries it stands on, and the tools their builds run, built by `wpewebkit/build.sh`), and the fonts and certificate authorities, unmodified |
+| `implementation/ports/` | third-party software built from source, most of it with a small patch of Veda's (see its `README.md`): the C toolchain (GCC, binutils, GMP, MPFR, MPC, musl), Rust for Veda's target, FFmpeg and dav1d, curl (with OpenSSL, nghttp2, zlib, Brotli, Zstandard, libpsl and libidn2, built by `curl/build.sh`), the driver VM's Linux (with zlib and elfutils for its build), its own toolchain (the same GCC, binutils and musl, unpatched) and Mesa, the crates Veda changes (smoltcp, zune-jpeg, libc, getrandom, rustix, errno, socket2, mio, tokio), the web engine (WPE WebKit, the libraries it stands on, and the tools their builds run, built by `wpewebkit/build.sh`), and the fonts and certificate authorities, unmodified |
 | `implementation/generation/` | host programs that make the system image's media at build time: wallpapers and sample pictures, music and the startup sound, sample videos |
 | `verification/` | in-system tests, C and C++ test programs (`verification/c`), Rust's on its standard library (`verification/rust`, `verification/stdcrates`), GUI and agent scripts |
 | `automation/` | build automation, disk image creation, driving QEMU |

@@ -49,7 +49,7 @@ env:
 
 jobs:
   # The heavy builds, from implementation/ports/: the toolchain (GCC, musl,
-  # the media libraries and Rust) and the driver VM's Linux and Mesa. They
+  # the media libraries, Rust and curl) and the driver VM's Linux and Mesa. They
   # take hours on a runner: built once for their ports and the runner's
   # system, and kept in the cache.
   heavy:
@@ -71,7 +71,11 @@ jobs:
             'implementation/ports/mpc/**', 'implementation/ports/musl/**', 'implementation/ports/dav1d/**',
             'implementation/ports/ffmpeg/**', 'implementation/ports/rust/**', 'implementation/ports/iana-etc/**',
             'implementation/ports/zlib/**', 'implementation/ports/elfutils/**', 'implementation/ports/linux/**',
-            'implementation/ports/mesa/**') }}
+            'implementation/ports/mesa/**', 'implementation/ports/libraries.sh', 'implementation/ports/cmake/**',
+            'implementation/ports/curl/**', 'implementation/ports/pkgconf/**', 'implementation/ports/zstd/**',
+            'implementation/ports/brotli/**', 'implementation/ports/nghttp2/**', 'implementation/ports/libpsl/**',
+            'implementation/ports/libidn2/**', 'implementation/ports/openssl/**',
+            'implementation/ports/ca-certificates/**') }}
         run: |
           echo "prefix=heavy-builds-$VEDA_ARCHITECTURE-$ImageOS-" >> "$GITHUB_OUTPUT"
           echo "key=heavy-builds-$VEDA_ARCHITECTURE-$ImageOS-$PORTS" >> "$GITHUB_OUTPUT"

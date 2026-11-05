@@ -17,6 +17,7 @@ mod checks;
 mod cli;
 mod components;
 mod crates;
+mod curl;
 mod databases;
 mod hostweb;
 mod image;
@@ -153,6 +154,10 @@ fn doctor() -> Result {
     match web::status() {
         Ok(v) => println!("  [ok]   web engine: {v}"),
         Err(e) => println!("  [--]   web engine: {e}"),
+    }
+    match curl::status() {
+        Ok(v) => println!("  [ok]   curl: {v}"),
+        Err(e) => println!("  [--]   curl: {e}"),
     }
     match python::status() {
         Ok(v) => println!("  [ok]   python: {v}"),

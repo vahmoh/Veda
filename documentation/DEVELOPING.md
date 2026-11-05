@@ -19,7 +19,7 @@ Each is `cargo automation COMMAND`, run in the repository;
 | Command | What it does |
 |---------|--------------|
 | `doctor` | Checks the tools, and says what is built |
-| `toolchain` | Builds GCC, binutils, musl, the media libraries and Rust for Veda into `target/toolchain`: once, before the first build |
+| `toolchain` | Builds GCC, binutils, musl, the media libraries, Rust and curl for Veda into `target/toolchain`: once, before the first build |
 | `linux` | Rebuilds the driver VM's Linux, its toolchain and Mesa in `target/linux` (the first build builds them, given the tools) |
 | `web` | Builds the web engine, WPE WebKit and the libraries it stands on, in `target/web` (an hour or more): once, before images have the browser ([The web browser](BROWSER.md#building-it)) |
 | `python` | Builds Python, CPython's interpreter and standard library with the libraries its modules stand on, in `target/python` (a few minutes): once, before images have Python ([Python on Veda](PYTHON.md#building-it)) |
@@ -335,7 +335,7 @@ from this machine.
 |--------|--------------|
 | The programs in `PROGRAMS` (`automation/source/components.rs`), without the symbols that `target/x86_64-unknown-linux-musl/` (on `runtime` alone), `target/std/x86_64-unknown-veda/` (on the standard library) and `target/std/dynamic/x86_64-unknown-veda/` (on it, linked dynamically) keep | `/system/bin/<name>` |
 | `LICENSE` (the GPL, version 3) | `/system/LICENSE.txt` |
-| The licence texts of what the image has of others' (as each part's release has them: the toolchain's, the driver VM's and the web engine's `licences` stages, the firmware lists' licences, the crates' packages), each port's `SOURCE`, and `README`, the list of the parts that About Veda shows (`automation/source/notices.rs`) | `/system/licences/` |
+| The licence texts of what the image has of others' (as each part's release has them: the toolchain's, curl's, the driver VM's and the web engine's `licences` stages, the firmware lists' licences, the crates' packages), each port's `SOURCE`, and `README`, the list of the parts that About Veda shows (`automation/source/notices.rs`) | `/system/licences/` |
 | The fonts and their licence, `implementation/ports/fonts/` | `/system/fonts/` |
 | The manifests, `implementation/applications/<name>/<name>.app` | `/system/apps/<name>.app` |
 | What the generators' manifests list | `/system/<same relative path>` |
@@ -347,7 +347,8 @@ from this machine.
 | The databases Linux keeps in `/etc`: `passwd` and `group` (the one user) and `services` (IANA's registry, from the `iana-etc` port) | `/system/etc/` |
 | The system's repository (`automation/source/packages.rs`): its index, signed and offering nothing yet; its configuration, with the public key the index is checked against; what the system provides (`veda` at its version) | `/system/packages/index.vidx`, `/system/etc/packages/repositories/system.repo`, `/system/etc/packages/provides` |
 | The tests' repositories, signed by a key whose secret is no secret, with their public key; their packages hold the C test program `hello`, and the Calculator's program as an application's (`apps`) | `/system/tests/packages/` |
-| The certificate authorities OpenSSL trusts (Mozilla's list, from the `ca-certificates` port), once the web engine or Python is built | `/system/etc/ssl/cert.pem` |
+| The certificate authorities OpenSSL trusts (Mozilla's list, from the `ca-certificates` port), once curl, the web engine or Python is built | `/system/etc/ssl/cert.pem` |
+| curl, once built (`target/toolchain/curl`): the program, libcurl (by its soname, and the linker script `-lcurl` links) and its interface; `verification/curl/checks.c`, linked with libcurl, for `systest` ([curl on Veda](CURL.md)) | `/system/bin/curl`, `/system/lib/libcurl.so.4`, `/system/lib/libcurl.so`, `/system/include/curl/`; `/system/tests/curl/checks` |
 | `media-decoder`, the video decoder (its Rust half, the C shim, FFmpeg, dav1d), and the libraries' `checkasm` programs | `/system/bin/media-decoder`, `/system/tests/media/` |
 | `verification/fakedec/clips/*`, for the stand-in decoder | `/system/tests/videos/fake/` |
 | The driver VM's Linux, once built: its kernel (a bzImage on AMD64) and the programs of `implementation/guests/linux/` | `/system/linux/kernel`, `/system/linux/initramfs.cpio` |

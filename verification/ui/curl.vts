@@ -1,0 +1,63 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# curl in the Terminal (1280x800 with the taskbar): the curl program, which
+# the shell finds in /system/bin, as no command of its own has the name;
+# the host's web server (through QEMU's NAT) to the terminal, through a
+# pipe and into a file, and a missing page an error (-f, status 22); a
+# transfer with its progress bar, slowed down (--limit-rate), which Ctrl+C
+# ends (status 130) and the rest of its command line with it; its manual,
+# built in; and libcurl in a program GCC compiles inside Veda, linked with
+# it (dynamically: -pie, -lcurl), which fetches the host's page. The checks
+# of curl and libcurl themselves are systest's (verification/curl).
+# Results are checked with the shell's `logger` command, which writes to
+# the serial log. (The program takes its URL as its argument: the typed
+# lines need no double quotes.)
+requires curl
+requires native-toolchain
+web-server
+boot-cmdline "run=terminal"
+fail-on "PANIC"
+wait-serial "desktop ready" 90
+wait-serial "started terminal" 60
+wait 3
+key meta_l-up
+wait 2
+type "curl --version | grep OpenSSL/ && logger version-ok"
+key ret
+wait-serial "terminal: version-ok" 60
+type "curl -sS http://{web}/hello; logger hello-$?"
+key ret
+wait-serial "terminal: hello-0" 60
+shot target/veda/curl-1-hello.png
+type "cd /tmp && curl -sS http://{web}/hello | grep 'from the host' && curl -sS -o hello.txt http://{web}/hello && grep 'from the host' hello.txt && logger saved-ok"
+key ret
+wait-serial "terminal: saved-ok" 60
+type "curl -fsS http://{web}/missing; logger missing-$?"
+key ret
+wait-serial "terminal: missing-22" 60
+# A second of sound (192 KB) at 2 KB a second: Ctrl+C ends it on the way.
+type "curl -# --limit-rate 2k -o tone.wav http://{web}/media/tone.wav; logger not-skipped"
+key ret
+wait 5
+shot target/veda/curl-2-progress.png
+key ctrl-c
+wait 2
+type "logger interrupted-$?"
+key ret
+wait-serial "terminal: interrupted-130" 30
+reject-serial "terminal: not-skipped"
+type "curl --manual | grep 'transfer a URL' && logger manual-ok"
+key ret
+wait-serial "terminal: manual-ok" 60
+type "echo '#include <curl/curl.h>' > fetch.c"
+key ret
+type "echo 'int main(int argc, char **argv) { CURL *h = curl_easy_init(); curl_easy_setopt(h, CURLOPT_URL, argv[1]); return argc < 2 || curl_easy_perform(h) != CURLE_OK; }' >> fetch.c"
+key ret
+type "gcc -O2 -Wall -fPIE -pie -o fetch fetch.c -lcurl && logger fetch-compiled"
+key ret
+wait-serial "terminal: fetch-compiled" 600
+type "./fetch http://{web}/hello | grep 'from the host' && logger libcurl-ok"
+key ret
+wait-serial "terminal: libcurl-ok" 60
+shot target/veda/curl-3-done.png
