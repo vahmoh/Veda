@@ -38,8 +38,9 @@ pub fn now_ns() -> u64 {
 
 /// How the clocks follow the counter, which user space reads too. Programs
 /// ask for it once and read the clocks themselves from then on
-/// (`runtime::time`): it must not change once the clock has started (a
-/// clock set later would need a version programs check as they read).
+/// (`runtime::time`, and Linux programs' vDSO, from a copy in its data
+/// page): it must not change once the clock has started (a clock set later
+/// would need a version programs check as they read).
 pub fn info() -> abi::ClockInfo {
     let realtime = (BOOT_EPOCH_SECS.load(Ordering::Relaxed).max(0) as u64) * 1_000_000_000;
     let offset = UTC_OFFSET_S.load(Ordering::Relaxed) * 1_000_000_000;

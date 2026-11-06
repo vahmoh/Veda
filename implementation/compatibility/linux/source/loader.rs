@@ -5,7 +5,8 @@
 //! (`load_elf_binary`): its image where it was linked, or at a random
 //! address if it is position-independent; its dynamic linker, if it names
 //! one (`PT_INTERP`, found in its own tree: `crate::namespace`), at a
-//! random address of its own; its program break after its image; and its
+//! random address of its own; its program break after its image; the vDSO
+//! and its data page (`crate::vdso`), at a random address too; and its
 //! stack, at the top of the address space, with its arguments,
 //! environment and auxiliary vector as the System V ABI lays them out
 //! (`elf::initial_stack`).
@@ -19,7 +20,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use abi::map_flags;
+use abi::{Rights, map_flags};
 use elf::{Elf, PageRun, Relro};
 use runtime::object::Vmo;
 use runtime::vm;
@@ -27,6 +28,7 @@ use runtime::vm;
 use crate::linux::errno::*;
 use crate::linux::mman::{PROT_EXEC, PROT_READ, PROT_WRITE};
 use crate::memory::{self, Kind};
+use crate::vdso;
 
 const PAGE: u64 = abi::PAGE_SIZE as u64;
 
@@ -128,6 +130,7 @@ pub fn load(program: &File, linker: Option<&File>, args: &[&[u8]], env: &[&[u8]]
         })?,
         None => (entry, 0),
     };
+    let sysinfo_ehdr = map_vdso()?;
     let (sp, auxv) = stack(
         program,
         args,
@@ -143,9 +146,54 @@ pub fn load(program: &File, linker: Option<&File>, args: &[&[u8]], env: &[&[u8]]
             gid: runtime::process::UID,
             random: [0; 16],
             execfn: program.path.as_bytes(),
+            sysinfo_ehdr,
         },
     )?;
     Ok(Loaded { entry: start, sp, auxv })
+}
+
+/// Maps the vDSO (`crate::vdso`), its data page right below its image, at
+/// a random address below the libraries'. Each is memory of the program's
+/// own, which no other process shares, and an area of the program's
+/// (`[vvar]`, `[vdso]`): it may unmap them, as on Linux, which takes
+/// nothing of Linux compatibility's. The data page is mapped through a
+/// handle that allows reading alone, so that nothing makes it writable
+/// (`mprotect` fails with `EACCES`, as on Linux). Returns the image's
+/// address, for the auxiliary vector (`AT_SYSINFO_EHDR`): 0 where the
+/// architecture has no vDSO.
+fn map_vdso() -> Result<u64, isize> {
+    let Some(image) = vdso::image() else { return Ok(0) };
+    let size = image.len().next_multiple_of(PAGE as usize);
+    let len = vdso::DATA + size;
+    let near = LIBRARY_TOP - (random() % (1 << 28)) * PAGE - len as u64;
+    // The place, held whole until each part is put there.
+    let at = vm::allocate(None, len, near as usize, 0).map_err(|_| ENOMEM)?;
+    let _ = vm::unmap(None, at, len);
+    let page = vdso::data(runtime::time::scale());
+    let data = memory_of(vdso::DATA, &page, Some(Rights::READ.union(Rights::MAP)))?;
+    let code = memory_of(size, image, None)?;
+    vm::map(None, &data, 0, vdso::DATA, at, map_flags::READ | map_flags::FIXED).map_err(|_| ENOMEM)?;
+    let rx = map_flags::READ | map_flags::EXECUTE | map_flags::FIXED;
+    if vm::map(None, &code, 0, size, at + vdso::DATA, rx).is_err() {
+        let _ = vm::unmap(None, at, vdso::DATA);
+        return Err(ENOMEM);
+    }
+    memory::record(at as u64, vdso::DATA as u64, PROT_READ, Kind::Vvar);
+    memory::record((at + vdso::DATA) as u64, size as u64, PROT_READ | PROT_EXEC, Kind::Vdso);
+    Ok((at + vdso::DATA) as u64)
+}
+
+/// `len` bytes of new memory holding `bytes`, through a handle with
+/// `rights` (all, if `None`): once it is mapped and the handle closed,
+/// nothing but the mapping reaches it, which makes it the program's own
+/// (`fork` copies it).
+fn memory_of(len: usize, bytes: &[u8], rights: Option<Rights>) -> Result<Vmo, isize> {
+    let vmo = Vmo::create(len).map_err(|_| ENOMEM)?;
+    vmo.write(0, bytes).map_err(|_| ENOMEM)?;
+    match rights {
+        Some(rights) => Ok(Vmo(vmo.0.duplicate(Some(rights)).map_err(|_| ENOMEM)?)),
+        None => Ok(vmo),
+    }
 }
 
 /// Maps `elf`'s image (the bytes of `file`): where it was linked, or near

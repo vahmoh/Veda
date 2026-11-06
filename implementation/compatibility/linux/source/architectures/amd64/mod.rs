@@ -4,9 +4,11 @@
 //! Linux's x86-64 ABI, as a Linux program's code has it: where a system
 //! call's number, arguments and result are, how a thread starts, Linux's
 //! signal frame (`struct rt_sigframe`, which handlers and debuggers read
-//! and change), what each exception is as a signal, and the x87, SSE and
-//! AVX registers, which the frame keeps in the processor's own format
-//! (`XSAVE`'s, with Linux's markers).
+//! and change), what each exception is as a signal, the x87, SSE and AVX
+//! registers, which the frame keeps in the processor's own format
+//! (`XSAVE`'s, with Linux's markers), and the vDSO's code ([`vdso`]).
+
+pub mod vdso;
 
 use abi::ForeignState;
 

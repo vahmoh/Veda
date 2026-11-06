@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The Linux program's memory: what it has mapped (its image and its
-//! dynamic linker's, its stack, its program break, what `mmap` gave it),
-//! which Linux compatibility keeps account of, as Linux keeps a process's
-//! areas (`/proc/self/maps` lists them).
+//! dynamic linker's, its stack, its program break, the vDSO and its data
+//! page, what `mmap` gave it), which Linux compatibility keeps account of,
+//! as Linux keeps a process's areas (`/proc/self/maps` lists them).
 //!
 //! The program shares its process with Linux compatibility, whose own
 //! memory (its image, its heap, its threads' stacks) is no area of the
@@ -51,6 +51,14 @@ pub enum Kind {
     Stack,
     /// The program break's (`brk`).
     Heap,
+    /// The vDSO's image (`crate::vdso`), which the program may make
+    /// writable (as a debugger does, to set breakpoints) or unmap, as on
+    /// Linux: memory of its own, which no other program's or Linux
+    /// compatibility's code runs from.
+    Vdso,
+    /// The vDSO's data page, below its image: readable only, ever (its
+    /// mapping allows no more: `mprotect` fails with `EACCES`, as on Linux).
+    Vvar,
 }
 
 /// One of the program's areas: `[start, end)`.

@@ -835,7 +835,8 @@ pub mod clock {
 /// `((ticks - ticks_at_zero) * ns_per_tick) >> 32` nanoseconds; the
 /// real-time clocks are it plus their offsets. It never changes once the
 /// system has started, so that a program asks for it once and reads the
-/// clocks itself (`runtime::time`).
+/// clocks itself (`runtime::time`, and a Linux program's vDSO, whose data
+/// page Linux compatibility fills with it).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ClockInfo {

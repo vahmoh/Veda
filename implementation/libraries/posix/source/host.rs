@@ -25,12 +25,16 @@
 //!
 //! The program's memory, its system calls' arguments included, is the
 //! host's process's, as a C program's is: pointers are used in place.
+//! Which of Veda's clocks a Linux clock reads ([`kernel_clock`]) is the
+//! layer's to say, for a host that reads the clocks itself (Linux
+//! compatibility's vDSO) as the layer's `clock_gettime` does.
 
 pub use crate::error::SysResult;
 pub use crate::linux::{Sigaction, Siginfo};
 pub use crate::path::{Namespace, program_path, set_namespace, vfs_path};
 pub use crate::process::Program;
 pub use crate::signal::{Info, Next, block_for_handler, force, force_default, restore_mask, take_incoming, take_next};
+pub use crate::time::{RESOLUTION_NS, kernel_clock};
 
 /// What the layer reads through a host thread's thread pointer: the words
 /// of the C library's thread structure it uses ([`ThreadBlock::thread_pointer`]).

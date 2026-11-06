@@ -199,6 +199,7 @@ pub mod pt {
     pub const NOTE: u32 = 4;
     pub const PHDR: u32 = 6;
     pub const TLS: u32 = 7;
+    pub const GNU_EH_FRAME: u32 = 0x6474_e550;
     pub const GNU_STACK: u32 = 0x6474_e551;
     pub const GNU_RELRO: u32 = 0x6474_e552;
 }
@@ -938,6 +939,7 @@ pub mod at {
     pub const RANDOM: u64 = 25;
     pub const HWCAP2: u64 = 26;
     pub const EXECFN: u64 = 31;
+    pub const SYSINFO_EHDR: u64 = 33;
 }
 
 /// What the auxiliary vector tells a starting program.
@@ -962,10 +964,19 @@ pub struct AuxInfo<'a> {
     pub random: [u8; 16],
     /// The path the program was started from.
     pub execfn: &'a [u8],
+    /// Where the vDSO is (`AT_SYSINFO_EHDR`): the shared object Linux
+    /// gives a program, its ELF header's address. 0 for none, as Veda's own
+    /// programs have, which leaves the entry out.
+    pub sysinfo_ehdr: u64,
 }
 
-/// The entries of the auxiliary vector, before `AT_NULL`.
+/// The entries of the auxiliary vector, before `AT_NULL`, but the vDSO's.
 const AUXV_LEN: usize = 18;
+
+/// The entries of the auxiliary vector, before `AT_NULL`.
+fn auxv_len(aux: &AuxInfo) -> usize {
+    AUXV_LEN + usize::from(aux.sysinfo_ehdr != 0)
+}
 
 /// The bytes of the strings [`initial_stack`] places.
 fn strings_len(args: &[&[u8]], env: &[&[u8]], aux: &AuxInfo) -> usize {
@@ -974,15 +985,15 @@ fn strings_len(args: &[&[u8]], env: &[&[u8]], aux: &AuxInfo) -> usize {
 
 /// The words [`initial_stack`] places: `argc`, the argument and environment
 /// vectors with their ends, and the auxiliary vector's pairs.
-fn stack_words(args: &[&[u8]], env: &[&[u8]]) -> usize {
-    1 + args.len() + 1 + env.len() + 1 + 2 * (AUXV_LEN + 1)
+fn stack_words(args: &[&[u8]], env: &[&[u8]], aux: &AuxInfo) -> usize {
+    1 + args.len() + 1 + env.len() + 1 + 2 * (auxv_len(aux) + 1)
 }
 
 /// The most bytes [`initial_stack`] needs below the top of the stack for
 /// these arguments, environment and auxiliary vector (the alignment of the
 /// stack pointer included).
 pub fn initial_stack_size(args: &[&[u8]], env: &[&[u8]], aux: &AuxInfo) -> usize {
-    strings_len(args, env, aux) + 8 * stack_words(args, env) + 15
+    strings_len(args, env, aux) + 8 * stack_words(args, env, aux) + 15
 }
 
 /// Lays out the initial stack of a program whose stack ends at `top`:
@@ -1002,7 +1013,7 @@ pub fn initial_stack(top: u64, args: &[&[u8]], env: &[&[u8]], aux: &AuxInfo, out
     // Strings from the top down: random bytes, platform, path, environment
     // and arguments; their addresses are fixed once the total is known.
     let strings_start = top.checked_sub(strings_len(args, env, aux) as u64).ok_or(ElfError::TooLarge)?;
-    let sp = strings_start.checked_sub(8 * stack_words(args, env) as u64).ok_or(ElfError::TooLarge)? & !15;
+    let sp = strings_start.checked_sub(8 * stack_words(args, env, aux) as u64).ok_or(ElfError::TooLarge)? & !15;
     let bottom = top.checked_sub(out.len() as u64).ok_or(ElfError::TooLarge)?;
     if sp < bottom {
         return Err(ElfError::TooLarge);
@@ -1048,6 +1059,11 @@ pub fn initial_stack(top: u64, args: &[&[u8]], env: &[&[u8]], aux: &AuxInfo, out
         addr += e.len() as u64 + 1;
     }
     push(out, 0);
+    // The vDSO's first, as Linux has it.
+    if aux.sysinfo_ehdr != 0 {
+        push(out, at::SYSINFO_EHDR);
+        push(out, aux.sysinfo_ehdr);
+    }
     let auxv: [(u64, u64); AUXV_LEN] = [
         (at::PHDR, aux.phdr),
         (at::PHENT, PHDR_SIZE as u64),

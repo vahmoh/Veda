@@ -24,6 +24,7 @@
 //! | its threads (`clone`), their thread pointers, robust futexes | kernel threads that run its code ([`task`]) |
 //! | signal handlers and their frames, `sigaltstack`, faults' signals | Linux's frame on its stack, `rt_sigreturn` ([`signal`], `architecture`) |
 //! | its memory's areas, `brk`, `mremap` | kept apart from this program's own ([`memory`]) |
+//! | the vDSO, which reads the time without a system call | an image of Linux's, and the clocks' scale ([`vdso`]) |
 //! | `/proc`, `/sys`'s processors, `/etc/resolv.conf` | made as they are opened ([`proc`]) |
 //! | its tree: `/lib`, `/usr`, `/etc` | a Linux root, the user's files Veda's own ([`namespace`]) |
 //! | `uname`, `personality`, `prctl`, capabilities | Linux's answers, those of a program without privileges ([`syscall`]) |
@@ -54,6 +55,7 @@ pub mod signal;
 pub mod syscall;
 pub mod task;
 pub mod user;
+pub mod vdso;
 
 use alloc::string::String;
 use alloc::vec::Vec;

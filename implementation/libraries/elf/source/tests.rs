@@ -736,7 +736,37 @@ fn aux(execfn: &[u8]) -> AuxInfo<'_> {
         gid: 1000,
         random: *b"0123456789abcdef",
         execfn,
+        sysinfo_ehdr: 0,
     }
+}
+
+/// The auxiliary vector of a stack image, before `AT_NULL`.
+fn auxv(img: &StackImage) -> Vec<(u64, u64)> {
+    let argc = word(img, img.sp);
+    let mut p = img.sp + 8 * (argc + 2);
+    while word(img, p) != 0 {
+        p += 8;
+    }
+    p += 8;
+    let mut pairs = Vec::new();
+    while word(img, p) != at::NULL {
+        pairs.push((word(img, p), word(img, p + 8)));
+        p += 16;
+    }
+    pairs
+}
+
+#[test]
+fn the_vdso_is_in_the_auxiliary_vector_where_there_is_one() {
+    let args: [&[u8]; 1] = [b"prog"];
+    let env: [&[u8]; 1] = [b"HOME=/home/user"];
+    let none = auxv(&stack(1 << 40, &args, &env, &aux(b"/p")));
+    assert!(none.iter().all(|&(k, _)| k != at::SYSINFO_EHDR));
+    let vdso = AuxInfo { sysinfo_ehdr: 0x7f00_1234_5000, ..aux(b"/p") };
+    let with = auxv(&stack(1 << 40, &args, &env, &vdso));
+    // First, as Linux has it; the rest as they were.
+    assert_eq!(with[0], (at::SYSINFO_EHDR, 0x7f00_1234_5000));
+    assert_eq!(with[1..], none[..]);
 }
 
 #[test]

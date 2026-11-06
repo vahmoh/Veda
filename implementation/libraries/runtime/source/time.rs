@@ -33,6 +33,14 @@ pub fn clock_info() -> Result<abi::ClockInfo, abi::Error> {
 /// give, when the system call reads them).
 static CLOCKS: Lazy<Option<abi::ClockInfo>> = Lazy::new(|| clock_info().ok().filter(|info| info.ns_per_tick != 0));
 
+/// The scale this program reads the clocks with ([`clock_info`], asked for
+/// once), or `None` where the kernel reads them (a system call each): what
+/// code that reads the clocks itself scales the counter by, to agree with
+/// [`now_ns`] and the rest to the nanosecond (Linux compatibility's vDSO).
+pub fn scale() -> Option<abi::ClockInfo> {
+    *CLOCKS
+}
+
 /// Clock `id` read here as the kernel reads it, or `None` for a clock only
 /// the kernel can read.
 pub(crate) fn read_clock(id: usize) -> Option<u64> {

@@ -9,9 +9,10 @@
  * /sys, pipes, threads and their thread-local storage, signals (handlers
  * with their context, masks, the alternate stack, faults turned into
  * signals, registers kept across a handler, SA_RESTART), robust mutexes,
- * time, sockets, epoll, futexes, starting programs, fork (the copy's
- * memory its own, but what is wiped for it or kept from it, pipes and
- * files shared, a copy that runs another program), and execve in place.
+ * time and the vDSO, sockets, epoll, futexes, starting programs, fork (the
+ * copy's memory its own, but what is wiped for it or kept from it, pipes
+ * and files shared, a copy that runs another program), and execve in
+ * place.
  *
  * Each check prints "ok - NAME" or "not ok - NAME: REASON", and the last
  * line is "PASS: N failed"; the program exits with the number of failed
@@ -21,6 +22,7 @@
 
 #define _GNU_SOURCE
 #include <dirent.h>
+#include <elf.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -86,18 +88,45 @@ static void check_startup(int argc, char **argv)
 	CHECK("main thread", getpid() == (pid_t)syscall(SYS_gettid), "pid %d tid %ld", getpid(), syscall(SYS_gettid));
 }
 
+/* /proc/self/maps, whole, read without allocating: memory the C library
+   mapped for a FILE could be placed where a check looks for none (musl's
+   malloc maps memory of its own). */
+static char maps_text[256 << 10];
+
+static const char *read_maps(void)
+{
+	int fd = open("/proc/self/maps", O_RDONLY | O_CLOEXEC);
+	size_t got = 0;
+	ssize_t n;
+	while (fd >= 0 && got < sizeof maps_text - 1 && (n = read(fd, maps_text + got, sizeof maps_text - 1 - got)) > 0)
+		got += n;
+	if (fd >= 0)
+		close(fd);
+	maps_text[got] = 0;
+	return maps_text;
+}
+
+/* Copies the line `text` starts with into `line` (cut short to fit):
+   where the next line starts. */
+static const char *next_line(const char *text, char *line, size_t size)
+{
+	size_t n = strcspn(text, "\n"), cut = n < size - 1 ? n : size - 1;
+	memcpy(line, text, cut);
+	line[cut] = 0;
+	return text[n] ? text + n + 1 : text + n;
+}
+
 /* Whether /proc/self/maps lists one area that holds the `len` bytes at
    `at`. */
 static int listed(const void *at, size_t len)
 {
-	FILE *f = fopen("/proc/self/maps", "r");
 	char line[4096];
 	unsigned long start, end, from = (unsigned long)at;
 	int found = 0;
-	while (f && fgets(line, sizeof line, f))
+	for (const char *text = read_maps(); *text;) {
+		text = next_line(text, line, sizeof line);
 		found |= sscanf(line, "%lx-%lx", &start, &end) == 2 && start <= from && from + len <= end;
-	if (f)
-		fclose(f);
+	}
 	return found;
 }
 
@@ -614,6 +643,316 @@ static void check_time(void)
 	CHECK("time", time(0) > 1700000000, "time");
 }
 
+/* The area of /proc/self/maps named `name` (as "[vdso]"): where it is, and
+   its permissions ("r-xp"). 0 if there is none. */
+static int maps_area(const char *name, unsigned long *start, unsigned long *end, char perms[5])
+{
+	char line[4096], path[4096];
+	for (const char *text = read_maps(); *text;) {
+		text = next_line(text, line, sizeof line);
+		if (sscanf(line, "%lx-%lx %4s %*s %*s %*s %4095s", start, end, perms, path) == 4 && !strcmp(path, name))
+			return 1;
+	}
+	return 0;
+}
+
+/* ELF's hash of a name, of DT_HASH, and GNU's, of DT_GNU_HASH. */
+static unsigned long elf_hash(const char *name)
+{
+	unsigned long h = 0;
+	for (; *name; name++) {
+		h = (h << 4) + (unsigned char)*name;
+		unsigned long high = h & 0xf0000000;
+		h ^= high >> 24;
+		h &= ~high;
+	}
+	return h;
+}
+
+static uint32_t gnu_hash(const char *name)
+{
+	uint32_t h = 5381;
+	for (; *name; name++)
+		h = h * 33 + (unsigned char)*name;
+	return h;
+}
+
+/* The vDSO's tables, as its dynamic section says where they are. */
+struct vdso {
+	uintptr_t base;
+	const char *strings;
+	const Elf64_Sym *symbols;
+	const Elf64_Word *hash, *gnu_hash;
+	const Elf64_Half *versym;
+	const Elf64_Verdef *verdef;
+};
+
+/* Finds the vDSO's tables, from its image where AT_SYSINFO_EHDR says,
+   through its program headers, as the C libraries and Go do. */
+static int vdso_tables(struct vdso *v)
+{
+	const unsigned char *image = (const void *)getauxval(AT_SYSINFO_EHDR);
+	memset(v, 0, sizeof *v);
+	if (!image || memcmp(image, ELFMAG, SELFMAG))
+		return 0;
+	const Elf64_Ehdr *eh = (const void *)image;
+	const Elf64_Dyn *dyn = 0;
+	int loaded = 0;
+	for (int i = 0; i < eh->e_phnum; i++) {
+		const Elf64_Phdr *ph = (const void *)(image + eh->e_phoff + i * eh->e_phentsize);
+		if (ph->p_type == PT_LOAD && !loaded) {
+			v->base = (uintptr_t)image + ph->p_offset - ph->p_vaddr;
+			loaded = 1;
+		} else if (ph->p_type == PT_DYNAMIC) {
+			dyn = (const void *)(image + ph->p_offset);
+		}
+	}
+	for (; loaded && dyn && dyn->d_tag != DT_NULL; dyn++) {
+		const void *p = (const void *)(v->base + dyn->d_un.d_ptr);
+		switch (dyn->d_tag) {
+		case DT_STRTAB: v->strings = p; break;
+		case DT_SYMTAB: v->symbols = p; break;
+		case DT_HASH: v->hash = p; break;
+		case DT_GNU_HASH: v->gnu_hash = p; break;
+		case DT_VERSYM: v->versym = p; break;
+		case DT_VERDEF: v->verdef = p; break;
+		}
+	}
+	return v->strings && v->symbols && v->hash && v->gnu_hash && v->versym && v->verdef;
+}
+
+/* Whether symbol `i` is function `name`, of version `version`. */
+static int vdso_is(const struct vdso *v, Elf64_Word i, const char *name, const char *version)
+{
+	const Elf64_Sym *s = &v->symbols[i];
+	if (ELF64_ST_TYPE(s->st_info) != STT_FUNC || s->st_shndx == SHN_UNDEF || strcmp(v->strings + s->st_name, name))
+		return 0;
+	for (const Elf64_Verdef *d = v->verdef;; d = (const void *)((const char *)d + d->vd_next)) {
+		if (!(d->vd_flags & VER_FLG_BASE) && d->vd_ndx == (v->versym[i] & 0x7fff)) {
+			const Elf64_Verdaux *aux = (const void *)((const char *)d + d->vd_aux);
+			return !strcmp(v->strings + aux->vda_name, version);
+		}
+		if (!d->vd_next)
+			return 0;
+	}
+}
+
+/* Function `name` of version LINUX_2.6: through DT_HASH, as musl and Go
+   look, or through DT_GNU_HASH and its Bloom filter, as glibc does. */
+static void *vdso_function(const struct vdso *v, const char *name, int gnu)
+{
+	if (!gnu) {
+		Elf64_Word buckets = v->hash[0];
+		const Elf64_Word *chain = v->hash + 2 + buckets;
+		for (Elf64_Word i = v->hash[2 + elf_hash(name) % buckets]; i; i = chain[i])
+			if (vdso_is(v, i, name, "LINUX_2.6"))
+				return (void *)(v->base + v->symbols[i].st_value);
+		return 0;
+	}
+	const Elf64_Word *g = v->gnu_hash;
+	Elf64_Word buckets = g[0], first = g[1], words = g[2], shift = g[3];
+	const uint64_t *bloom = (const void *)(g + 4);
+	const Elf64_Word *bucket = (const void *)(bloom + words), *chain = bucket + buckets;
+	uint32_t h = gnu_hash(name);
+	uint64_t word = bloom[(h / 64) % words];
+	if (!((word >> (h % 64)) & (word >> ((h >> shift) % 64)) & 1))
+		return 0;
+	for (Elf64_Word i = bucket[h % buckets]; i; i++) {
+		if ((chain[i - first] | 1) == (h | 1) && vdso_is(v, i, name, "LINUX_2.6"))
+			return (void *)(v->base + v->symbols[i].st_value);
+		if (chain[i - first] & 1)
+			break;
+	}
+	return 0;
+}
+
+typedef int (*clock_gettime_t)(clockid_t, struct timespec *);
+typedef int (*gettimeofday_t)(struct timeval *, struct timezone *);
+typedef time_t (*time_fn_t)(time_t *);
+typedef int (*getcpu_t)(unsigned *, unsigned *, void *);
+
+static long long nanoseconds(const struct timespec *t)
+{
+	return t->tv_sec * 1000000000LL + t->tv_nsec;
+}
+
+/* The vDSO's clock_gettime, and the latest time a thread has read of its
+   monotonic clock, which no thread reads earlier after seeing it. */
+static clock_gettime_t vdso_clock_gettime;
+static _Atomic long long latest_read;
+static atomic_int went_back;
+
+static void *read_monotonic(void *arg)
+{
+	(void)arg;
+	for (int i = 0; i < 200000; i++) {
+		long long seen = atomic_load(&latest_read);
+		struct timespec t;
+		vdso_clock_gettime(CLOCK_MONOTONIC, &t);
+		long long now = nanoseconds(&t);
+		if (now < seen)
+			atomic_fetch_add(&went_back, 1);
+		while (now > seen && !atomic_compare_exchange_weak(&latest_read, &seen, now))
+			;
+	}
+	return 0;
+}
+
+/* Whether the vDSO's clock `clk` agrees with the system call's: what the
+   call says is between two readings of the vDSO's, every time. */
+static int clock_agrees(clock_gettime_t vdso, clockid_t clk, char *why, size_t size)
+{
+	for (int n = 0; n < 1000; n++) {
+		struct timespec a, s, b;
+		int ra = vdso(clk, &a);
+		long rs = syscall(SYS_clock_gettime, clk, &s);
+		int rb = vdso(clk, &b);
+		if (ra || rs || rb || nanoseconds(&a) > nanoseconds(&s) || nanoseconds(&s) > nanoseconds(&b)) {
+			snprintf(why, size, "clock %d: %d %lld, %ld %lld, %d %lld", (int)clk, ra, nanoseconds(&a), rs,
+				 nanoseconds(&s), rb, nanoseconds(&b));
+			return 0;
+		}
+	}
+	return 1;
+}
+
+/* The vDSO, which the C libraries read the time from: its image where the
+   auxiliary vector says, which /proc/self/maps lists with its data page;
+   its functions, found by name and version through either hash table, as
+   glibc, musl and Go find them; their clocks the system call's, those
+   they cannot read too (by the call); a monotonic clock that no thread
+   reads going back; a data page that cannot be made writable; and a
+   child's, which fork copies. */
+static void check_vdso(void)
+{
+	unsigned long ehdr = getauxval(AT_SYSINFO_EHDR), start = 0, end = 0, data = 0, data_end = 0;
+	char perms[5] = "", data_perms[5] = "";
+	CHECK("vdso in the auxiliary vector", ehdr != 0, "no AT_SYSINFO_EHDR");
+	int listed = maps_area("[vdso]", &start, &end, perms) && maps_area("[vvar]", &data, &data_end, data_perms);
+	CHECK("vdso listed", listed && start == ehdr && !strcmp(perms, "r-xp") && !strcmp(data_perms, "r--p"),
+	      "[vdso] %lx-%lx %s at %lx, [vvar] %lx-%lx %s", start, end, perms, ehdr, data, data_end, data_perms);
+	struct vdso v;
+	if (!ehdr || !vdso_tables(&v)) {
+		CHECK("vdso tables", 0, "no symbols, hash tables or versions");
+		return;
+	}
+	const char *names[] = {"__vdso_clock_gettime", "__vdso_gettimeofday", "__vdso_time", "__vdso_clock_getres",
+			       "__vdso_getcpu"};
+	void *found[5];
+	int all = 1;
+	for (int i = 0; i < 5; i++) {
+		found[i] = vdso_function(&v, names[i], 0);
+		if (!found[i] || vdso_function(&v, names[i], 1) != found[i]) {
+			CHECK("vdso functions", 0, "%s by DT_HASH %p, by DT_GNU_HASH %p", names[i], found[i],
+			      vdso_function(&v, names[i], 1));
+			all = 0;
+		}
+	}
+	if (!all)
+		return;
+	CHECK("vdso functions", vdso_function(&v, "__vdso_nothing", 0) == 0 && vdso_function(&v, "__vdso_nothing", 1) == 0,
+	      "found what is not there");
+	clock_gettime_t clock_gettime_vdso = (clock_gettime_t)found[0];
+	gettimeofday_t gettimeofday_vdso = (gettimeofday_t)found[1];
+	time_fn_t time_vdso = (time_fn_t)found[2];
+	clock_gettime_t clock_getres_vdso = (clock_gettime_t)found[3];
+	getcpu_t getcpu_vdso = (getcpu_t)found[4];
+
+	/* Each clock it reads agrees with the system call; so do the C
+	   library's, through it or not. */
+	clockid_t clocks[] = {CLOCK_REALTIME,	     CLOCK_MONOTONIC,	     CLOCK_MONOTONIC_RAW,
+			      CLOCK_REALTIME_COARSE, CLOCK_MONOTONIC_COARSE, CLOCK_BOOTTIME};
+	char why[256] = "";
+	int agree = 1, resolutions = 1;
+	for (size_t i = 0; i < sizeof clocks / sizeof *clocks; i++) {
+		agree = agree && clock_agrees(clock_gettime_vdso, clocks[i], why, sizeof why) &&
+			clock_agrees(clock_gettime, clocks[i], why, sizeof why);
+		struct timespec r = {-1, -1}, s = {-2, -2};
+		resolutions &= clock_getres_vdso(clocks[i], &r) == 0 && syscall(SYS_clock_getres, clocks[i], &s) == 0 &&
+			       r.tv_sec == s.tv_sec && r.tv_nsec == s.tv_nsec;
+	}
+	CHECK("vdso clocks", agree, "%s", why);
+	CHECK("vdso clock_getres", resolutions && clock_getres_vdso(CLOCK_MONOTONIC, 0) == 0, "not the system call's");
+	struct timeval a, s, b;
+	int ra = gettimeofday_vdso(&a, 0);
+	long rs = syscall(SYS_gettimeofday, &s, 0);
+	int rb = gettimeofday_vdso(&b, 0);
+	long long ua = a.tv_sec * 1000000LL + a.tv_usec, us = s.tv_sec * 1000000LL + s.tv_usec,
+		  ub = b.tv_sec * 1000000LL + b.tv_usec;
+	CHECK("vdso gettimeofday", !ra && !rs && !rb && ua <= us && us <= ub && b.tv_usec < 1000000, "%lld %lld %lld",
+	      ua, us, ub);
+	struct timezone zone;
+	CHECK("vdso gettimeofday's zone", gettimeofday_vdso(&a, &zone) == 0 && gettimeofday_vdso(0, 0) == 0, "failed");
+	time_t t = 0, ta = time_vdso(&t), ts = syscall(SYS_time, 0), tb = time_vdso(0);
+	CHECK("vdso time", ta == t && ta <= ts && ts <= tb && ta > 1700000000, "%ld %ld %ld", (long)ta, (long)ts, (long)tb);
+	unsigned cpu = ~0u, node = ~0u;
+	long processors = sysconf(_SC_NPROCESSORS_CONF);
+	CHECK("vdso getcpu", getcpu_vdso(&cpu, &node, 0) == 0 && cpu < (unsigned long)processors && node != ~0u,
+	      "cpu %u node %u of %ld", cpu, node, processors);
+	/* What it does not read, the system call does: the CPU time, and a
+	   clock that is none (the call's error, as the kernel returns it). */
+	struct timespec spent;
+	CHECK("vdso clock of CPU time", clock_gettime_vdso(CLOCK_PROCESS_CPUTIME_ID, &spent) == 0 && spent.tv_nsec < 1000000000,
+	      "failed");
+	CHECK("vdso clock that is none", clock_gettime_vdso(12345, &spent) == -EINVAL && clock_getres_vdso(-1, 0) == -EINVAL,
+	      "not EINVAL");
+	/* What a reading costs, by the vDSO and by the system call. */
+	struct timespec begin, done;
+	clock_gettime_vdso(CLOCK_MONOTONIC, &begin);
+	for (int i = 0; i < 100000; i++)
+		clock_gettime_vdso(CLOCK_MONOTONIC, &spent);
+	clock_gettime_vdso(CLOCK_MONOTONIC, &done);
+	long long by_vdso = (nanoseconds(&done) - nanoseconds(&begin)) / 100000;
+	clock_gettime_vdso(CLOCK_MONOTONIC, &begin);
+	for (int i = 0; i < 10000; i++)
+		syscall(SYS_clock_gettime, CLOCK_MONOTONIC, &spent);
+	clock_gettime_vdso(CLOCK_MONOTONIC, &done);
+	printf("# a reading of the clock: %lld ns by the vDSO, %lld ns by the system call\n", by_vdso,
+	       (nanoseconds(&done) - nanoseconds(&begin)) / 10000);
+
+	/* No thread reads its monotonic clock going back, after another's. */
+	vdso_clock_gettime = clock_gettime_vdso;
+	pthread_t readers[4];
+	int started = 0;
+	for (int i = 0; i < 4; i++)
+		started += pthread_create(&readers[i], 0, read_monotonic, 0) == 0;
+	for (int i = 0; i < started; i++)
+		pthread_join(readers[i], 0);
+	CHECK("vdso clock monotonic across threads", started == 4 && atomic_load(&went_back) == 0, "%d of 4 threads, %d back",
+	      started, atomic_load(&went_back));
+
+	/* Its data, which the program reads, cannot be made writable. */
+	errno = 0;
+	int r = listed ? mprotect((void *)data, data_end - data, PROT_READ | PROT_WRITE) : -1;
+	CHECK("vdso data read-only", r == -1 && errno == EACCES, "mprotect returned %d", r);
+
+	/* A child has it too, where it was. */
+	fflush(stdout);
+	pid_t pid = fork();
+	if (pid == 0) {
+		char child_why[256];
+		_exit(getauxval(AT_SYSINFO_EHDR) == ehdr && clock_agrees(clock_gettime_vdso, CLOCK_MONOTONIC, child_why,
+									sizeof child_why) ? 0 : 1);
+	}
+	int status = -1;
+	pid_t waited = pid > 0 ? waitpid(pid, &status, 0) : -1;
+	CHECK("vdso in a child", waited == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0, "status %#x", status);
+}
+
+/* After execve in place: the new program's own vDSO, where the auxiliary
+   vector says, whose clock is the system call's. */
+static void check_vdso_after_exec(void)
+{
+	unsigned long ehdr = getauxval(AT_SYSINFO_EHDR), start = 0, end = 0;
+	char perms[5] = "", why[256] = "";
+	struct vdso v;
+	void *f = 0;
+	if (ehdr && maps_area("[vdso]", &start, &end, perms) && start == ehdr && vdso_tables(&v))
+		f = vdso_function(&v, "__vdso_clock_gettime", 0);
+	CHECK("execve maps the vdso again", f && clock_agrees((clock_gettime_t)f, CLOCK_REALTIME, why, sizeof why),
+	      "AT_SYSINFO_EHDR %lx, [vdso] at %lx %s", ehdr, start, why);
+}
+
 static void check_sockets(void)
 {
 	int sv[2];
@@ -1026,6 +1365,7 @@ int main(int argc, char **argv)
 	}
 	if (argc >= 3 && !strcmp(argv[1], "after-exec")) {
 		CHECK("execve keeps the process", getpid() == atoi(argv[2]), "pid %d, was %s", getpid(), argv[2]);
+		check_vdso_after_exec();
 		printf("PASS: %d failed\n", failures);
 		return failures;
 	}
@@ -1052,6 +1392,7 @@ int main(int argc, char **argv)
 	check_restart();
 	check_robust_mutex();
 	check_time();
+	check_vdso();
 	check_sockets();
 	check_futex();
 	check_processes((const char *)getauxval(AT_EXECFN));

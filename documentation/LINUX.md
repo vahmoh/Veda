@@ -38,6 +38,7 @@ programs with none. What Veda's tests run is in [Tests](#tests).
 | Threads, thread-local storage, futexes, robust mutexes | Kernel threads, the thread pointer it sets (`arch_prctl`), kernel futexes |
 | Signal handlers, `sigaltstack`, `SA_RESTART`, `SIGSEGV` and `SIGILL` handlers | Linux's signal frame (`rt_sigframe`), on its stack or the alternate one, the vector registers in it; a fault is the signal it stands for |
 | Its memory: `mmap` and friends, `brk`, `mremap` | The kernel's, kept apart from Linux compatibility's own |
+| The vDSO: `clock_gettime`, `gettimeofday`, `time`, `clock_getres`, `getcpu` | An image of Linux's, which reads the time in the program's own code, without a system call, as Veda's programs read it |
 | Pipes, sockets (TCP, UDP, Unix), `epoll`, `eventfd`, `timerfd`, memory files | What Veda's C programs have ([C on Veda](C.md)) |
 | Starting programs: `posix_spawn`, `vfork`, `system`, `popen` | A process of Veda's for each, which `execve` starts, of a Linux program or of Veda's |
 | `fork` | A copy of the process, its memory copied as either writes it (copy-on-write), as Linux makes it; a shell that forks for each command, a server that forks its workers |
@@ -142,18 +143,49 @@ the handler if it had `SA_RESTART`, as on Linux, by going back over the
 `syscall` instruction. A legacy virtual system call (the `vsyscall` page)
 is carried out as Linux's emulation does.
 
+**The vDSO.** Linux gives every program a shared object of its own, the
+vDSO, where the auxiliary vector says (`AT_SYSINFO_EHDR`), whose
+functions glibc, musl and Go call for the time rather than make the
+system call: Linux compatibility does too (`crate::vdso`). Its image is
+made as Linux's linker makes Linux's, an ELF shared object with its
+symbols, both hash tables (`DT_HASH`, `DT_GNU_HASH`) and their version
+(`LINUX_2.6`), so that each finds `__vdso_clock_gettime`,
+`__vdso_gettimeofday`, `__vdso_time`, `__vdso_clock_getres` and
+`__vdso_getcpu` its own way; its call frame information lets an unwinder
+through them. Its code reads the processor's clock counter (the TSC,
+each reading after every earlier load has completed, so that a time read
+after another thread's never comes before it) and scales it by the scale
+the kernel gives (`abi::ClockInfo`), on a data page below the image: the
+one Linux compatibility's own clocks are read with, for the program's
+system calls. So the vDSO and the system call agree to the nanosecond
+for as long as the program runs: the scale never changes, and the time
+is counted from the clocks' start each time, never from a time taken
+once. Its clocks are those the POSIX layer reads from the counter
+(`posix::host::kernel_clock`): `CLOCK_REALTIME` and its coarse one are
+Veda's UTC clock, as `clock_gettime` gives it, and the monotonic, raw,
+coarse and boot-time clocks Veda's monotonic one. The rest (the clocks
+of CPU time, a time zone, the processor's number) its code asks for with
+the system call, as a C library without a vDSO would. The loader maps
+the image and its data page into each program, and again in place of the
+old program's as `execve` replaces it; they are the program's areas
+(`[vdso]` and `[vvar]` in `/proc/self/maps`), its own memory, which
+`fork` copies and the program may unmap, as on Linux, and its data page
+can never be made writable (`mprotect` fails with `EACCES`, as on
+Linux).
+
 **Memory.** Linux compatibility keeps account of the program's areas, as
-Linux keeps a process's: what it mapped, its image, its stack and its
-program break, which `/proc/self/maps` lists. A system call reaches only
-those: `munmap` of a range unmaps the program's areas in it, `mprotect`
-and `madvise` need them whole (`ENOMEM`), shrinking the program break
-unmaps only its own, and memory Linux compatibility reads or writes for
-the program (a signal frame, `execve`'s arguments) must be in one that
-allows the access while it does, or it is a fault. `mremap` grows and
-moves only private anonymous memory, in place where the pages after the
-area are free (one area still, as on Linux), or else by copying it: a
-file's mapping or shared memory would be neither any more (`ENOMEM`, as
-when there is no room, which programs answer by mapping anew).
+Linux keeps a process's: what it mapped, its image, its stack, its
+program break and its vDSO, which `/proc/self/maps` lists. A system call
+reaches only those: `munmap` of a range unmaps the program's areas in
+it, `mprotect` and `madvise` need them whole (`ENOMEM`), shrinking the
+program break unmaps only its own, and memory Linux compatibility reads
+or writes for the program (a signal frame, `execve`'s arguments) must be
+in one that allows the access while it does, or it is a fault. `mremap`
+grows and moves only private anonymous memory, in place where the pages
+after the area are free (one area still, as on Linux), or else by
+copying it: a file's mapping or shared memory would be neither any more
+(`ENOMEM`, as when there is no room, which programs answer by mapping
+anew).
 
 **Copies.** `fork` has the kernel copy the process (`process_fork`):
 its memory, the program's and Linux compatibility's alike, is the
@@ -202,6 +234,9 @@ process's handles allow, as a program of Veda's.
 - **Its own memory.** Linux compatibility shares the process with the
   program, which could overwrite it, as a C program can its C library: it
   gains nothing that way that its process had not.
+- **Its vDSO** is the program's own memory, in no other process, which
+  holds no more than the program could ask the kernel for: its code, and
+  the clocks' scale, which it can read but never write.
 - **Its copies.** A child `fork` makes can do what its parent could:
   what it gave up stays given up (`process_restrict`), and it has only
   the handles its parent gave it and the memory its parent's handles
@@ -215,11 +250,10 @@ process's handles allow, as a program of Veda's.
 | Symbolic links | None in Veda's files: a Linux root has copies in their place, and `symlink` fails (`EPERM`) |
 | Processors | x86-64 programs (`x86_64`), on AMD64: not 32-bit x86 ones, nor ARM64's yet |
 | Kernel interfaces | No `io_uring`, `inotify`, `signalfd`, System V IPC (`shmget`, `semget`, `msgget`), `ptrace`, `seccomp`, namespaces, `perf_event_open` or eBPF: each fails (`ENOSYS`, or `EPERM` where Linux would refuse it), said once in the system log |
-| Files and memory | What [C on Veda](C.md#limits) lists: no owners or permission bits, shared writable mappings of files refused (`ENODEV`), sockets TCP, UDP and Unix only. `mremap` of a file's mapping or of shared memory only shrinks it (`ENOMEM` otherwise), and one of private anonymous memory that moves is copied, which costs for a large one |
+| Files and memory | What [C on Veda](C.md#limits) lists: no owners or permission bits, shared writable mappings of files refused (`ENODEV`), sockets TCP, UDP and Unix only. `mremap` of a file's mapping, of shared memory or of the vDSO only shrinks it (`ENOMEM` otherwise), and one of private anonymous memory that moves is copied, which costs for a large one |
 | `/proc` and `/sys` | The process's own, the processors, memory and uptime: no other process's, no directory listings (`/proc/self/fd` cannot be listed, though each `/proc/self/fd/N` is there), no devices |
 | `arch_prctl` | The FS base only: a GS base of a thread's own is refused (`EINVAL`) |
 | A bad pointer in a system call | Where Linux compatibility reads it, `EFAULT`; where the POSIX layer reads it, the process ends with a fault, as a C program's does ([C on Veda](C.md)) |
-| The vDSO | None: the C libraries make the system call for the time instead (`clock_gettime`), which costs more |
 | A child `vfork` made | A thread of its parent's process until it starts its program: a `kill` for it before then reaches nothing, and the parent's end ends it |
 
 ## Performance
@@ -228,14 +262,17 @@ A system call costs two passes through the kernel rather than one (the
 program's call, then Linux compatibility's run of its code again), and
 the POSIX layer's own calls to Veda's services. Programs that make few
 calls (computation, most of an interpreter's work) run at the processor's
-full speed; programs that read the time very often pay for the missing
-vDSO.
+full speed, and those that read the time often (a server's timestamps, a
+runtime's timers, a game's frames) read it in their own code, through
+the vDSO, at the cost of a few dozen instructions: no system call.
 
 ## Tests
 
 - **Unit tests** of `implementation/compatibility/linux` run on the host:
   the alternate signal stack, the program's areas, its tree, `/proc`'s
-  names.
+  names, and the vDSO: its image read as glibc, musl, Go, an unwinder and
+  a debugger read it, and its code run as a program runs it, its data
+  page set as the tests choose and its system calls the host's.
 - **`systest`** runs foreign code itself (`verification/systest/source/foreign.rs`:
   a system call, faults, the thread pointer, interruptions), then the
   Linux programs of `verification/linux`, which Linux's own toolchains
@@ -257,7 +294,12 @@ vDSO.
   alternate stack, `SIGSEGV` and `SIGILL`, the vector registers kept
   across a handler, a timer ending a blocking call, a call `SA_RESTART`
   starts again, a fault whose handler has no stack), robust mutexes whose
-  owner ended, time, sockets, `epoll`,
+  owner ended, time, the vDSO (where the auxiliary vector and
+  `/proc/self/maps` say, its functions found through either hash table
+  by version, its clocks the system call's to the nanosecond, those it
+  does not read too, a monotonic clock that no thread reads going back,
+  its data page read-only, a child's, and the new program's after
+  `execve` in place), sockets, `epoll`,
   futexes, starting programs (`posix_spawn` with a file action, `vfork`,
   `SIGCHLD`), `fork` (the child's memory its own but for shared memory,
   which its `mremap` leaves shared, `waitpid`, pipes and a file's offset
@@ -265,6 +307,7 @@ vDSO.
   memory kept from it (`MADV_DONTFORK`), which its `/proc/self/maps` does
   not list, `fork` and `exec`, children made while another thread
   allocates, `clone` with `SIGCHLD`) and, run again with `exec`, `execve` in place; the Rust program checks the standard library (threads, files,
-  time, a panic unwound, memory, TCP on the loopback interface, `Command`).
+  time, its monotonic clock across threads, a panic unwound, memory, TCP
+  on the loopback interface, `Command`).
   Each passes on Linux too, as it does on Veda.
 - **`verification/ui/linux-programs.vts`** runs them in the Terminal.

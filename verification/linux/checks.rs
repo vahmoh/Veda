@@ -5,8 +5,8 @@
 //! musl as Rust ships it (statically), that checks what Veda's Linux
 //! compatibility gives the standard library: threads and their locks and
 //! channels, thread-local storage, files and directories, the program's
-//! path, time, a panic caught as it unwinds, much memory, and TCP on the
-//! loopback interface.
+//! path, time (a monotonic clock, whichever thread reads it), a panic
+//! caught as it unwinds, much memory, and TCP on the loopback interface.
 //!
 //! Each check prints "ok - NAME" or "not ok - NAME: REASON", and the last
 //! line is "PASS: N failed"; the program exits with the number of failed
@@ -15,6 +15,7 @@
 use std::cell::Cell;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -96,6 +97,28 @@ fn time(c: &mut Checks) {
     c.check("sleep", slept >= Duration::from_millis(20) && slept < Duration::from_secs(5), || format!("{slept:?}"));
     let since = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     c.check("system time", since > 1_700_000_000, || format!("{since}"));
+    // The monotonic clock (the C library's, from the vDSO): no thread reads
+    // it going back after it has seen another's reading.
+    let latest = Arc::new(AtomicU64::new(0));
+    let back = Arc::new(AtomicU32::new(0));
+    let readers: Vec<_> = (0..4)
+        .map(|_| {
+            let (latest, back) = (latest.clone(), back.clone());
+            std::thread::spawn(move || {
+                for _ in 0..100_000 {
+                    let seen = latest.load(Ordering::Acquire);
+                    let now = start.elapsed().as_nanos() as u64;
+                    if now < seen {
+                        back.fetch_add(1, Ordering::Relaxed);
+                    }
+                    latest.fetch_max(now, Ordering::AcqRel);
+                }
+            })
+        })
+        .collect();
+    let joined = readers.into_iter().all(|r| r.join().is_ok());
+    let back = back.load(Ordering::Relaxed);
+    c.check("monotonic across threads", joined && back == 0, || format!("{back} readings went back"));
 }
 
 fn memory(c: &mut Checks) {

@@ -134,10 +134,30 @@ fn cpu_clock_ns(clk: u32) -> Result<u64, isize> {
     }
 }
 
+/// The clock of Veda's (`abi::clock`) that Linux's clock `clk` reads, as
+/// `clock_gettime` reads it: UTC for the real-time clocks, and the
+/// monotonic clock for the others that tell the time (the time since boot
+/// among them, as nothing here suspends); `None` for the clocks of CPU
+/// time, and any other. Linux compatibility's vDSO reads the same clocks
+/// the same way.
+pub const fn kernel_clock(clk: u32) -> Option<usize> {
+    match clk {
+        clock::REALTIME | clock::REALTIME_COARSE => Some(abi::clock::UTC),
+        clock::MONOTONIC | clock::MONOTONIC_RAW | clock::MONOTONIC_COARSE | clock::BOOTTIME => {
+            Some(abi::clock::MONOTONIC)
+        }
+        _ => None,
+    }
+}
+
+/// What every clock counts in (`clock_getres`), in nanoseconds.
+pub const RESOLUTION_NS: u64 = 1;
+
 fn now(clk: u32) -> Result<u64, isize> {
+    if let Some(id) = kernel_clock(clk) {
+        return Ok(runtime::sys::clock_get(id));
+    }
     Ok(match clk {
-        clock::REALTIME | clock::REALTIME_COARSE => realtime_ns(),
-        clock::MONOTONIC | clock::MONOTONIC_RAW | clock::MONOTONIC_COARSE | clock::BOOTTIME => monotonic_ns(),
         clock::PROCESS_CPUTIME_ID => cpu_ns(),
         clock::THREAD_CPUTIME_ID => thread_cpu_ns(crate::signal::current_tid()).ok_or(EINVAL)?,
         // The clocks of processes and threads (`clock_getcpuclockid`).
@@ -157,7 +177,7 @@ pub unsafe fn clock_getres(clk: u32, ts: usize) -> SysResult {
     now(clk)?;
     if ts != 0 {
         // SAFETY: as above.
-        unsafe { user::write(ts, Timespec { sec: 0, nsec: 1 })? };
+        unsafe { user::write(ts, Timespec::from_ns(RESOLUTION_NS))? };
     }
     Ok(0)
 }
@@ -223,6 +243,17 @@ pub unsafe fn times(buf: usize) -> SysResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn linux_clocks_are_read_from_veda_clocks() {
+        assert_eq!(kernel_clock(clock::REALTIME), Some(abi::clock::UTC));
+        assert_eq!(kernel_clock(clock::REALTIME_COARSE), Some(abi::clock::UTC));
+        assert_eq!(kernel_clock(clock::BOOTTIME), Some(abi::clock::MONOTONIC));
+        // CPU time, and a process's clock (`clock_getcpuclockid`'s ids are
+        // negative).
+        assert_eq!(kernel_clock(clock::THREAD_CPUTIME_ID), None);
+        assert_eq!(kernel_clock(-6i32 as u32), None);
+    }
 
     #[test]
     fn time_zones_are_posix_strings_of_their_offsets() {

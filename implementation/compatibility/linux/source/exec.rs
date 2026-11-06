@@ -5,8 +5,9 @@
 //!
 //! A Linux program is loaded in place, as Linux does it: the process, its
 //! id and its descriptors stay (but those marked close-on-exec), its other
-//! threads end, its memory and its signals' handlers go, and the new
-//! program starts with its arguments and environment ([`execve`]). What
+//! threads end, its memory (its vDSO's too) and its signals' handlers go,
+//! and the new program starts with its arguments and environment, and a
+//! vDSO mapped for it anew ([`execve`], `crate::loader`). What
 //! could fail is checked first (the file, its format, its dynamic linker),
 //! so that a call that fails leaves the program as it was; once the old
 //! program is gone, a failure ends the process, as on Linux.
@@ -103,7 +104,8 @@ fn replace(t: &mut Task, dirfd: i32, path: usize, argv: usize, envp: usize, flag
 fn in_place(t: &mut Task, file: File, args: &[&[u8]], env: &[&[u8]]) -> Result<(), isize> {
     let linker = loader::with_image(&file, loader::check)?;
     end_others(t)?;
-    // The point of no return: the old program goes.
+    // The point of no return: the old program goes, with its vDSO, which
+    // the new one has mapped again where it is loaded.
     memory::clear();
     posix::host::exec_in_place();
     t.altstack = Default::default();

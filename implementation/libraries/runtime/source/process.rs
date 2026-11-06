@@ -672,6 +672,8 @@ impl<'a> Spawn<'a> {
             gid: UID,
             random,
             execfn: self.path.as_bytes(),
+            // Veda's programs read the clocks themselves (`crate::time`).
+            sysinfo_ehdr: 0,
         };
         // Like Linux, a quarter of the stack at most for the arguments.
         let len = elf::initial_stack_size(&self.args, &self.env, &aux);

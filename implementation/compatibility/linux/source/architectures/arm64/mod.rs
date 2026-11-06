@@ -95,6 +95,15 @@ pub mod fpu {
     pub fn init() {}
 }
 
+/// The vDSO's code (`crate::vdso`): none, as ARM64's Linux programs do
+/// not run yet. Linux's for ARM64 has `__kernel_clock_gettime` and the
+/// rest, of version `LINUX_2.6.39`.
+pub mod vdso {
+    pub fn code() -> Option<crate::vdso::Code> {
+        None
+    }
+}
+
 pub fn hwcap() -> [u64; 2] {
     [0, 0]
 }

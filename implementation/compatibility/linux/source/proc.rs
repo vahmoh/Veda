@@ -281,6 +281,8 @@ fn maps() -> String {
             Kind::Image(path) => path.as_str(),
             Kind::Stack => "[stack]",
             Kind::Heap => "[heap]",
+            Kind::Vdso => "[vdso]",
+            Kind::Vvar => "[vvar]",
             Kind::Mapped { .. } => "",
         };
         let shared = matches!(a.kind, Kind::Mapped { shared: true, .. });
