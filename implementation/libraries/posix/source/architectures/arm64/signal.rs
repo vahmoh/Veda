@@ -140,7 +140,7 @@ pub unsafe fn load_mcontext(m: *const core::ffi::c_void, s: &mut ThreadState) {
 }
 
 /// Where the kernel sends an interrupted thread: `__veda_signal_entry`.
-#[cfg(feature = "layer")]
+#[cfg(feature = "signal-entry")]
 pub fn entry_address() -> usize {
     unsafe extern "C" {
         fn __veda_signal_entry();
@@ -190,9 +190,13 @@ core::arch::global_asm!(
 // floating-point and SIMD registers below, has
 // `crate::interrupt::signal_entry` act on the interruption, takes the
 // registers back, and resumes the thread (`signal_return`), as interrupted
-// or as the signal entry changed it, with the flags it returned.
-#[cfg(feature = "layer")]
+// or as the signal entry changed it, with the flags it returned. The
+// registers are there on a soft-float target too (a host of foreign code
+// keeps them for it), whose assembler is told so.
+#[cfg(feature = "signal-entry")]
 core::arch::global_asm!(
+    ".arch_extension fp",
+    ".arch_extension simd",
     ".global __veda_signal_entry",
     ".hidden __veda_signal_entry",
     ".type __veda_signal_entry, @function",

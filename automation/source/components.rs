@@ -55,28 +55,38 @@ pub struct Program {
     /// a program that loads libraries at run time. Otherwise linked
     /// statically.
     pub dynamic: bool,
+    /// On `runtime` alone, built for the soft-float target
+    /// (`Architecture::soft_float_target`), so that it leaves the vector
+    /// registers alone: Linux compatibility's, whose Linux program has
+    /// them.
+    pub soft_float: bool,
 }
 
 impl Program {
     /// A program on `runtime` alone (`no_std`).
     const fn native(package: &'static str) -> Program {
-        Program { package, binary: package, std: false, web: false, dynamic: false }
+        Program { package, binary: package, std: false, web: false, dynamic: false, soft_float: false }
+    }
+
+    /// A program on `runtime` alone that leaves the vector registers alone.
+    const fn soft_float(package: &'static str) -> Program {
+        Program { soft_float: true, ..Program::native(package) }
     }
 
     /// A program on Rust's standard library.
     const fn std(package: &'static str) -> Program {
-        Program { package, binary: package, std: true, web: false, dynamic: false }
+        Program { package, binary: package, std: true, web: false, dynamic: false, soft_float: false }
     }
 
     /// A program on Rust's standard library with the web engine.
     const fn web(package: &'static str) -> Program {
-        Program { package, binary: package, std: true, web: true, dynamic: false }
+        Program { package, binary: package, std: true, web: true, dynamic: false, soft_float: false }
     }
 
     /// A program on Rust's standard library linked dynamically, which loads
     /// libraries at run time.
     const fn dynamic(package: &'static str) -> Program {
-        Program { package, binary: package, std: true, web: false, dynamic: true }
+        Program { package, binary: package, std: true, web: false, dynamic: true, soft_float: false }
     }
 
     /// The program as the binary `binary`, of a package named otherwise
@@ -101,6 +111,7 @@ pub const PROGRAMS: &[Program] = &[
     Program::native("device-manager"),
     Program::native("driver-virtual-machine"),
     Program::native("nvme"),
+    Program::soft_float("linux-compatibility"),
     Program::native("network"),
     Program::native("wland").named("wlan"),
     Program::native("compositor"),
@@ -176,18 +187,22 @@ fn build_programs(profile: Profile, skip: &[String]) -> Result<Vec<(Program, Pat
     let programs: Vec<Program> =
         PROGRAMS.iter().copied().filter(|p| !skip.iter().any(|s| s == p.binary) && (web || !p.web)).collect();
     let (on_std, native): (Vec<Program>, Vec<Program>) = programs.into_iter().partition(|p| p.std);
+    let (soft_float, native): (Vec<Program>, Vec<Program>) = native.into_iter().partition(|p| p.soft_float);
     let mut built = Vec::new();
-    if !native.is_empty() {
-        let user_target = architecture::current().user_target;
-        util::status("Building", format!("{} user-space programs ({user_target})", native.len()));
-        let mut cmd = util::cargo_for(user_target);
-        cmd.args(["build", "--target", user_target]).args(profile.cargo_flag());
-        for p in &native {
+    let arch = architecture::current();
+    for (programs, target) in [(&native, arch.user_target), (&soft_float, arch.soft_float_target)] {
+        if programs.is_empty() {
+            continue;
+        }
+        util::status("Building", format!("{} user-space programs ({target})", programs.len()));
+        let mut cmd = util::cargo_for(target);
+        cmd.args(["build", "--target", target]).args(profile.cargo_flag());
+        for p in programs {
             cmd.args(["--package", p.package]);
         }
         util::run(&mut cmd)?;
-        let dir = target_dir().join(user_target).join(profile.dir());
-        built.extend(native.iter().map(|p| (*p, dir.join(p.binary))));
+        let dir = target_dir().join(target).join(profile.dir());
+        built.extend(programs.iter().map(|p| (*p, dir.join(p.binary))));
     }
     if !on_std.is_empty() {
         built.extend(build_std_programs(&on_std, profile)?);

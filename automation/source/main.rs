@@ -15,6 +15,7 @@ mod automate;
 mod certificates;
 mod checks;
 mod cli;
+mod compatibility;
 mod components;
 mod crates;
 mod curl;

@@ -59,8 +59,11 @@ pub fn koid() -> u64 {
     k
 }
 
-/// This process's id.
+/// This process's id (a child's `vfork` made, for one: `crate::own`).
 pub fn pid() -> i32 {
+    if let Some(own) = crate::own::current() {
+        return own.pid;
+    }
     match koid() {
         0 => 1,
         k => pid_of(k),
@@ -69,11 +72,100 @@ pub fn pid() -> i32 {
 
 /// The id of the process that started this one.
 pub fn ppid() -> i32 {
+    if let Some(own) = crate::own::current() {
+        return own.ppid;
+    }
     runtime::object::process_self_info().map_or(0, |i| if i.parent_koid == 0 { 0 } else { pid_of(i.parent_koid) })
 }
 
 /// The processes this one started and has not waited for.
 static CHILDREN: Mutex<BTreeMap<i32, Process>> = Mutex::new(BTreeMap::new());
+
+/// Children `vfork` made that ended before they started a program (their
+/// processes never ran), with their exit codes, until waited for.
+static ENDED: Mutex<BTreeMap<i32, i64>> = Mutex::new(BTreeMap::new());
+
+/// A process for a child `vfork` makes, made but not started, whose id the
+/// child has from now on (one that no child of this one not waited for
+/// has): its `execve` starts the program in it.
+pub fn reserve_child() -> Result<(i32, Process), isize> {
+    /// How many processes are made, at most, for one whose id is free.
+    const TRIES: usize = 4;
+    let name = b"vfork";
+    for _ in 0..TRIES {
+        let h = runtime::sys::call(abi::nr::PROCESS_CREATE, [name.as_ptr() as usize, name.len(), 0, 0, 0, 0])
+            .map_err(error::kernel)?;
+        // SAFETY: a fresh handle from the kernel.
+        let p = Process(unsafe { Handle::from_raw(h as u32) });
+        let pid = pid_of(p.0.koid());
+        if !CHILDREN.lock().contains_key(&pid) && !ENDED.lock().contains_key(&pid) {
+            return Ok((pid, p));
+        }
+    }
+    Err(EAGAIN)
+}
+
+/// The child `vfork` made, `pid`, ended with `code` before it started a
+/// program: it is this process's to wait for, as any child is, and its end
+/// sends `SIGCHLD`.
+pub fn child_ended(pid: i32, code: i64) {
+    if !signal::children_go() {
+        ENDED.lock().insert(pid, code);
+    }
+    signal::send_process(sig::CHLD, end_info(pid, code));
+}
+
+/// What `SIGCHLD` says of child `pid`'s end with exit code `code`.
+fn end_info(pid: i32, code: i64) -> signal::Info {
+    let (si_code, status) = match abi::exit_signal(code) {
+        Some(s) => (wait::CLD_KILLED, s as i32),
+        None => (wait::CLD_EXITED, (code & 0xff) as i32),
+    };
+    signal::Info { code: si_code, pid, status: Some(status), ..signal::Info::default() }
+}
+
+/// The port the children's ends come to (a packet each, its key the
+/// child's id), once the first child has started, and the thread of the
+/// layer's that waits on it.
+static WATCH: Mutex<Option<runtime::object::Port>> = Mutex::new(None);
+
+/// Has child `pid`'s end send this process `SIGCHLD`, as on Linux: the
+/// children's watcher, started with the first child, hears of it.
+fn watch(pid: i32, child: abi::RawHandle) {
+    let mut watch = WATCH.lock();
+    if watch.is_none() {
+        let Ok(port) = runtime::object::Port::create() else { return };
+        let raw = port.raw();
+        if runtime::thread::Builder::new().name("children").spawn(move || watch_children(raw)).is_err() {
+            return;
+        }
+        *watch = Some(port);
+    }
+    if let Some(port) = watch.as_ref() {
+        let _ = runtime::object::wait_async(child, port, pid as u64, signals::TERMINATED);
+    }
+}
+
+/// The children's watcher: for each child that ends, `SIGCHLD`, saying how
+/// (`si_code`, `si_status`); a child that nothing is to wait for goes
+/// ([`signal::children_go`]).
+fn watch_children(port: abi::RawHandle) {
+    let mut packets = [abi::PortPacket::default(); 16];
+    loop {
+        let args = [port as usize, packets.as_mut_ptr() as usize, packets.len(), abi::DEADLINE_INFINITE as usize, 0, 0];
+        let Ok(n) = runtime::sys::call_waiting(abi::nr::PORT_WAIT, args) else { return };
+        for packet in &packets[..n] {
+            let pid = packet.key as i32;
+            let code = CHILDREN.lock().get(&pid).and_then(|p| p.info().ok()).map(|i| i.exit_code);
+            // One waited for meanwhile is no one's to hear of.
+            let Some(code) = code else { continue };
+            if signal::children_go() {
+                CHILDREN.lock().remove(&pid);
+            }
+            signal::send_process(sig::CHLD, end_info(pid, code));
+        }
+    }
+}
 
 /// The process that started this one, if it gave this one a handle to it
 /// (a POSIX program's parent does), to signal it with.
@@ -282,6 +374,8 @@ fn spawn_errno(e: SpawnError) -> isize {
         | SpawnError::OtherDynamicLinker => ENOEXEC,
         // As Linux says of a program whose dynamic linker is not there.
         SpawnError::NoDynamicLinker => ENOENT,
+        // As Linux says of a program of a format it cannot run.
+        SpawnError::NoLinuxCompatibility => ENOEXEC,
         SpawnError::TooLarge => E2BIG,
         SpawnError::Refused => EAGAIN,
         SpawnError::Kernel(abi::Error::NoMemory) => ENOMEM,
@@ -292,13 +386,15 @@ fn spawn_errno(e: SpawnError) -> isize {
 /// What runs a program file: the path of the program that runs (the file
 /// itself, or the interpreter of a script), its contents, and the
 /// arguments a script's interpreter is given before the script's own.
-struct Program {
-    path: String,
-    vmo: Vmo,
-    size: usize,
+pub struct Program {
+    /// Its path, the VFS's.
+    pub path: String,
+    pub vmo: Vmo,
+    /// How many bytes it has.
+    pub size: usize,
     /// The arguments that replace the first one (none for a program that is
     /// no script).
-    prefix: Vec<Vec<u8>>,
+    pub prefix: Vec<Vec<u8>>,
 }
 
 /// The executable file `name`, from the directory `cwd`: its absolute
@@ -363,7 +459,7 @@ unsafe fn spawn(res: usize, name: usize, ops: usize, attr: usize, argv: usize, e
     // SAFETY: musl passes its attributes (zero if the program gave none).
     let attr: SpawnAttr = unsafe { user::read(attr)? };
     let (ignored, mask) = attr.signals(signal::ignored(), signal::current_mask());
-    let mut inherited = Inherited { ignored, mask, nice: crate::sched::nice(), ..Inherited::default() };
+    let inherited = Inherited { ignored, mask, nice: crate::sched::nice(), ..Inherited::default() };
     let mut child = ChildState {
         fds: fd::snapshot().into_iter().map(|(n, d, cloexec)| (n, (d, cloexec))).collect(),
         cwd: vfs::cwd(),
@@ -384,6 +480,30 @@ unsafe fn spawn(res: usize, name: usize, ops: usize, attr: usize, argv: usize, e
     }
     // SAFETY: the program passed a path.
     let given = unsafe { user::cstr(name)? };
+    // SAFETY: the program passed NULL-terminated arrays.
+    let (args, env) = unsafe { (user::cstr_array(argv), user::cstr_array(envp)) };
+    let pid = start(child, inherited, given, args, env, None)?;
+    if res != 0 {
+        // SAFETY: the program passed where to store the id.
+        unsafe { user::write(res, pid)? };
+    }
+    Ok(())
+}
+
+/// Starts the program `given` names (from the directory `child.cwd`) with
+/// arguments `args` and environment `env`, the descriptors and directory
+/// of `child` and what `inherited` says: its process id. A script runs
+/// with its interpreter ([`program`]); its process is named after the
+/// script, and knows the interpreter's file as its own (`AT_EXECFN`).
+fn start(
+    child: ChildState,
+    mut inherited: Inherited,
+    given: &[u8],
+    mut args: Vec<&[u8]>,
+    env: Vec<&[u8]>,
+    into: Option<Process>,
+) -> Result<i32, isize> {
+    let (ignored, mask) = (inherited.ignored, inherited.mask);
     let program = program(&child.cwd, given)?;
 
     let mut handles = child.handles(&mut inherited)?;
@@ -410,12 +530,12 @@ unsafe fn spawn(res: usize, name: usize, ops: usize, attr: usize, argv: usize, e
         return Err(EMFILE);
     }
 
-    // SAFETY: the program passed NULL-terminated arrays.
-    let (mut args, env) = unsafe { (user::cstr_array(argv), user::cstr_array(envp)) };
-    if !program.prefix.is_empty() {
+    let args: Vec<&[u8]> = if program.prefix.is_empty() {
+        args
+    } else {
         let given: Vec<&[u8]> = args.drain(1.min(args.len())..).collect();
-        args = program.prefix.iter().map(Vec::as_slice).chain(given).collect();
-    }
+        program.prefix.iter().map(Vec::as_slice).chain(given).collect()
+    };
     let name = path::resolve(&child.cwd, given)?.path;
     let name = path::file_name(&name);
     let name = &name[..name.floor_char_boundary(abi::NAME_MAX)];
@@ -430,6 +550,7 @@ unsafe fn spawn(res: usize, name: usize, ops: usize, attr: usize, argv: usize, e
     spawn.signals_inherited = (ignored, mask);
     let unused = |koid: u64| !CHILDREN.lock().contains_key(&pid_of(koid));
     spawn.accept = Some(&unused);
+    spawn.process = into;
     // A program linked dynamically starts with the system's dynamic
     // linker, which the system image's pages are.
     let linker = |path: &str| {
@@ -437,14 +558,37 @@ unsafe fn spawn(res: usize, name: usize, ops: usize, attr: usize, argv: usize, e
         Some((vmo, usize::try_from(size).ok()?))
     };
     spawn.dynamic_linker = Some(&linker);
+    // A Linux program runs on Veda's Linux compatibility, a program of the
+    // system image too.
+    spawn.linux_compatibility = Some(&linker);
     let process = spawn.start_file(&program.vmo, program.size).map_err(spawn_errno)?;
     let pid = pid_of(process.0.koid());
+    // A child first, then heard of: its end finds it among the children.
+    let raw = process.raw();
     CHILDREN.lock().insert(pid, process);
-    if res != 0 {
-        // SAFETY: the program passed where to store the id.
-        unsafe { user::write(res, pid)? };
-    }
-    Ok(())
+    watch(pid, raw);
+    Ok(pid)
+}
+
+/// Starts the program `given` names with arguments `args` and environment
+/// `env`, as `execve` would replace this one with it: with every
+/// descriptor not marked close-on-exec, the working directory, the
+/// signals ignored and the mask. Its process id: it is a child of this
+/// process.
+pub fn start_as_exec(given: &[u8], args: Vec<&[u8]>, env: Vec<&[u8]>, into: Option<Process>) -> Result<i32, isize> {
+    let (ignored, mask) = (signal::ignored(), signal::current_mask());
+    let inherited = Inherited { ignored, mask, nice: crate::sched::nice(), ..Inherited::default() };
+    let child = ChildState {
+        fds: fd::snapshot().into_iter().map(|(n, d, cloexec)| (n, (d, cloexec))).collect(),
+        cwd: vfs::cwd(),
+    };
+    start(child, inherited, given, args, env, into)
+}
+
+/// The program file `name` names, from the working directory, as
+/// `execve` runs it ([`program`]).
+pub fn find_program(name: &[u8]) -> Result<Program, isize> {
+    program(&vfs::cwd(), name)
 }
 
 /// musl's `posix_spawn` without the `PATH` search (see the C library's
@@ -532,6 +676,16 @@ fn select_children(pid: i32) -> Result<Vec<(i32, Process)>, isize> {
 /// exit code, or `None` if `nohang` and none has. A signal for the thread
 /// ends the wait (`ERESTARTSYS`).
 fn wait_child(pid: i32, nohang: bool, reap: bool) -> Result<Option<(i32, i64)>, isize> {
+    {
+        // A child that ended before it started a program has ended.
+        let mut ended = ENDED.lock();
+        if let Some((&p, &code)) = ended.iter().find(|&(&p, _)| pid <= 0 || p == pid) {
+            if reap {
+                ended.remove(&p);
+            }
+            return Ok(Some((p, code)));
+        }
+    }
     let children = select_children(pid)?;
     let mut items: Vec<WaitItem> = children
         .iter()

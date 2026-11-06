@@ -15,10 +15,16 @@ path = "source/lib.rs"
 # Built as the C library's layer, not for the host's tests: its allocator and
 # panic handler, and the entry points C programs reach. The targets it is
 # built for differ (`Architecture::bare_target`), so no `cfg` of theirs says.
-layer = ["runtime/unwinding"]
+layer = ["signal-entry", "runtime/unwinding"]
+# The signal entry, where the kernel sends an interrupted thread, and what
+# it stands on: the C library's layer has it, and so does a program that
+# hosts foreign code with the layer (`host`), which has an allocator, a
+# panic handler and entry point of its own.
+signal-entry = []
 
 [dependencies]
 abi = { workspace = true }
+elf = { workspace = true }
 runtime = { workspace = true, default-features = false }
 ipc = { workspace = true }
 proto = { workspace = true }

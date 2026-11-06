@@ -48,6 +48,33 @@ pub unsafe fn syscall6(n: usize, a0: usize, a1: usize, a2: usize, a3: usize, a4:
     (ret, rdx)
 }
 
+/// `foreign_run(state, flags)` (see `crate::foreign`): its raw result.
+/// Foreign code may leave any register changed but those the kernel
+/// restores (every general-purpose register but `rax`, and the thread
+/// pointer): the x87, SSE and AVX registers are the caller's to keep, so
+/// all are marked as the C ABI's calls mark them.
+#[cfg(not(veda_guest))]
+#[inline(always)]
+pub fn foreign_run(state: *mut abi::ForeignState, flags: usize) -> isize {
+    let ret: isize;
+    // SAFETY: the kernel writes only `state`, which the caller lends; the
+    // caller's own registers are as they were but `rax`, `rcx`, `r11` and
+    // those of the vector unit.
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inlateout("rax") abi::nr::FOREIGN_RUN as isize => ret,
+            in("rdi") state,
+            in("rsi") flags,
+            lateout("rcx") _,
+            lateout("r11") _,
+            clobber_abi("C"),
+            options(nostack),
+        );
+    }
+    ret
+}
+
 /// The process entry point (`--entry=_rt_start`, see `build`). The
 /// kernel passes the bootstrap channel handle in `rdi`.
 #[cfg(all(feature = "runtime", not(test), not(target_os = "veda")))]

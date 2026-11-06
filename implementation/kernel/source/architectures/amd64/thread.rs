@@ -145,6 +145,13 @@ impl Context {
         self.fs_base
     }
 
+    /// The thread pointer of the running thread, whose context this is, as
+    /// the processor has it: user code may have changed it since it was
+    /// set (`wrfsbase`).
+    pub fn running_tls(&self) -> u64 {
+        rdmsr(MSR_FS_BASE)
+    }
+
     /// Sets the thread pointer of the running thread, whose context this
     /// is: the FS base, through which it finds its thread-local storage.
     pub fn set_tls(&mut self, value: u64) {
@@ -152,6 +159,18 @@ impl Context {
         // SAFETY: loading a user-space address into FS.base.
         unsafe { wrmsr(MSR_FS_BASE, value) };
     }
+}
+
+/// The thread pointer of user registers `state`: their FS base.
+pub fn tls_of(state: &abi::ThreadState) -> u64 {
+    state.fs_base
+}
+
+/// Whether user code can have `value` for its thread pointer: any
+/// canonical address, as `wrfsbase` sets the FS base where the processor
+/// lets user code (`CR4.FSGSBASE`), and as the MSR takes it.
+pub fn is_thread_pointer(value: u64) -> bool {
+    ((value << 16) as i64 >> 16) as u64 == value
 }
 
 /// Switches this CPU from the thread whose context is `prev` to the one

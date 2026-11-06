@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Linux programs in the Terminal (1280x800 with the taskbar): programs
+# built for Linux by Linux's toolchains (verification/linux, on musl and on
+# Rust's standard library) run as any program does, found by their path,
+# their output on the terminal or in a file, their exit status in $?; one
+# starts others (posix_spawn, and Rust's Command), and replaces itself
+# (execve). Results are checked with the shell's `logger` command, which
+# writes to the serial log.
+requires linux-programs
+boot-cmdline "run=terminal"
+wait-serial "desktop ready" 90
+wait-serial "started terminal" 60
+wait 3
+key meta_l-up
+wait 2
+# Every check of the C program on musl, its output in a file.
+type "cd /tmp && /system/tests/linux/checks-musl > linux.txt; logger linux-status-$?"
+key ret
+wait-serial "terminal: linux-status-0" 120
+type "grep 'PASS: 0 failed' linux.txt && logger linux-passed"
+key ret
+wait-serial "terminal: linux-passed" 30
+# It replaces itself, in the same process.
+type "/system/tests/linux/checks-musl exec | grep 'ok - execve' && logger linux-exec"
+key ret
+wait-serial "terminal: linux-exec" 60
+# A program on Rust's standard library, its output on the terminal and its
+# status the shell's.
+type "/system/tests/linux/checks-rust child; logger rust-child-$?"
+key ret
+wait-serial "terminal: rust-child-5" 60
+shot target/veda/linux-programs.png

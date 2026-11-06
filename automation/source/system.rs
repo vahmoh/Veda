@@ -131,9 +131,14 @@ pub fn build(o: &Options) -> Result<System> {
     ];
     let (on_std, native): (Vec<&components::Program>, Vec<_>) =
         artifacts.programs.iter().map(|(p, _)| p).partition(|p| p.std);
+    let (soft_float, native): (Vec<&components::Program>, Vec<_>) = native.into_iter().partition(|p| p.soft_float);
     groups.push(notices::Group::new(
         architecture::current().user_target,
         &native.iter().map(|p| p.package).collect::<Vec<_>>(),
+    ));
+    groups.push(notices::Group::new(
+        architecture::current().soft_float_target,
+        &soft_float.iter().map(|p| p.package).collect::<Vec<_>>(),
     ));
     let mut std_programs =
         notices::Group::new(architecture::current().std_target, &on_std.iter().map(|p| p.package).collect::<Vec<_>>());
@@ -163,6 +168,9 @@ pub fn build(o: &Options) -> Result<System> {
     // What the web engine needs of the system (its fonts' configuration,
     // the certificate authorities, its licences), once it is built.
     add_all(&mut initrd, &mut licensed, crate::web::image_files()?);
+    // The Linux programs that check Linux compatibility, built by Linux's
+    // toolchains.
+    add_all(&mut initrd, &mut licensed, crate::compatibility::image_files()?);
     // Python, its standard library and its checks, once it is built, and
     // its own tests if asked for.
     add_all(&mut initrd, &mut licensed, crate::python::image_files(o.python_tests)?);

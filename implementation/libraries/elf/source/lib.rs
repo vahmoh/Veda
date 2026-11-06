@@ -14,7 +14,9 @@
 //!   if they are position-independent. Linked dynamically, they name the
 //!   system's dynamic linker ([`INTERPRETER`], their `PT_INTERP`), which
 //!   the loader places beside them and starts in their place, and which
-//!   links them with the C library and their other shared libraries.
+//!   links them with the C library and their other shared libraries;
+//! * Linux's programs, as they were built for Linux, which Veda's Linux
+//!   compatibility runs ([`Kind::Linux`]).
 //!
 //! Loading one takes:
 //!
@@ -80,23 +82,33 @@ pub const NATIVE: Machine = arm64::MACHINE;
 /// program cannot have another run in its place.
 pub const INTERPRETER: &str = "/system/lib/libc.so";
 
-/// The note that marks a Veda program, one built on Veda's runtime
-/// (`runtime`, which carries it): its loader relocates it, makes its RELRO
-/// read-only, and starts it with Veda's startup message (`abi::startup`).
-/// POSIX programs have none. Its descriptor is the version of these
-/// conventions the program follows ([`VERSION`](veda::VERSION),
-/// little-endian), so that a loader refuses a program of others
-/// ([`Kind`]).
+/// The notes that mark Veda's programs. A Veda program, one built on
+/// Veda's runtime (`runtime`, which carries the note), has one of
+/// [`NOTE_TYPE`](veda::NOTE_TYPE): its loader relocates it, makes its
+/// RELRO read-only, and starts it with Veda's startup message
+/// (`abi::startup`). A POSIX program linked statically has one of
+/// [`POSIX_NOTE_TYPE`](veda::POSIX_NOTE_TYPE), from its POSIX layer (the C
+/// library's); one linked dynamically names the system's dynamic linker
+/// instead. Each descriptor is the version of these conventions the program
+/// follows ([`VERSION`](veda::VERSION), little-endian), so that a loader
+/// refuses a Veda program of others ([`Kind`]).
 pub mod veda {
-    /// The note's owner (`n_name`, without its terminating NUL).
+    /// The notes' owner (`n_name`, without its terminating NUL).
     pub const NOTE_NAME: &[u8] = b"Veda";
-    /// Its type (`n_type`).
+    /// The type (`n_type`) of a Veda program's.
     pub const NOTE_TYPE: u32 = 1;
+    /// The type of a POSIX program's.
+    pub const POSIX_NOTE_TYPE: u32 = 2;
     /// The version of the conventions.
     pub const VERSION: u32 = 1;
+    /// Bytes every POSIX program linked statically before its POSIX layer
+    /// carried [`POSIX_NOTE_TYPE`] has, and no Linux program: its POSIX
+    /// layer's message for a panic, which stripping its symbols leaves.
+    pub const POSIX_LAYER_MARK: &[u8] = b"POSIX layer panic: ";
 }
 
-/// Which kind of program an executable is, by its note ([`veda`]).
+/// Which kind of program an executable is, by its notes ([`veda`]) and its
+/// dynamic linker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     /// A Veda program: its loader relocates it.
@@ -106,6 +118,9 @@ pub enum Kind {
     /// A POSIX program: it starts as the System V ABI has it, and relocates
     /// itself if it is position-independent.
     Posix,
+    /// A Linux program: none of Veda's, which names another dynamic linker
+    /// than Veda's, or none. Veda's Linux compatibility runs it.
+    Linux,
 }
 
 /// Errors produced while parsing an executable, relocating it or laying
@@ -581,12 +596,26 @@ impl<'a> Elf<'a> {
         self.notes().find(|n| n.name == name && n.kind == kind).map(|n| n.desc)
     }
 
-    /// Which kind of program the executable is.
+    /// Which kind of program the executable is: a Veda program by its note;
+    /// a POSIX program by its note, by the dynamic linker it names (the
+    /// system's, [`INTERPRETER`]), or, linked statically before its POSIX
+    /// layer marked it, by its POSIX layer's bytes
+    /// ([`POSIX_LAYER_MARK`](veda::POSIX_LAYER_MARK)); and any other a Linux
+    /// program.
     pub fn kind(&self) -> Kind {
         match self.note(veda::NOTE_NAME, veda::NOTE_TYPE) {
-            None => Kind::Posix,
-            Some(desc) if desc == veda::VERSION.to_le_bytes() => Kind::Veda,
-            Some(_) => Kind::OtherVeda,
+            Some(desc) if desc == veda::VERSION.to_le_bytes() => return Kind::Veda,
+            Some(_) => return Kind::OtherVeda,
+            None => {}
+        }
+        if self.note(veda::NOTE_NAME, veda::POSIX_NOTE_TYPE).is_some() {
+            return Kind::Posix;
+        }
+        match self.interpreter() {
+            Some(path) if path == INTERPRETER.as_bytes() => Kind::Posix,
+            Some(_) => Kind::Linux,
+            None if self.data.windows(veda::POSIX_LAYER_MARK.len()).any(|w| w == veda::POSIX_LAYER_MARK) => Kind::Posix,
+            None => Kind::Linux,
         }
     }
 

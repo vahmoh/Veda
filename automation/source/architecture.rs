@@ -48,6 +48,10 @@ pub struct Architecture {
     pub kernel_target: &'static str,
     /// Rust's target of user-space programs.
     pub user_target: &'static str,
+    /// Rust's target of user-space programs that leave the vector
+    /// registers alone (Linux compatibility, whose Linux program has them):
+    /// freestanding and soft-float.
+    pub soft_float_target: &'static str,
     /// Rust's target of the code C programs link: the POSIX layer and the
     /// media decoder's Rust half.
     pub bare_target: &'static str,

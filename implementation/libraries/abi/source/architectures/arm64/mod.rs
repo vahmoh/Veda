@@ -76,6 +76,25 @@ pub struct ThreadState {
     pub tpidr: u64,
 }
 
+/// A thread's foreign code (`foreign_run`, see the crate's "Foreign
+/// code"): the registers it runs from and leaves, and what made it leave.
+/// The floating point and SIMD registers are not in it: foreign code and
+/// its host share them, and a host that keeps the foreign code's (built
+/// without them) needs nothing done.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ForeignState {
+    /// Its registers, with its thread pointer (`tpidr`). A system call
+    /// leaves `pc` after the `svc` instruction.
+    pub registers: ThreadState,
+    /// The exception it took (`foreign_exit::EXCEPTION`): its syndrome
+    /// (`ESR_EL1`)...
+    pub syndrome: u64,
+    /// ... and the address it faulted at (`FAR_EL1`), for an exception
+    /// that has one (an abort, a misaligned access, a watchpoint).
+    pub fault_address: u64,
+}
+
 /// Where an interrupted thread's [`ThreadState`] goes, its stack pointer
 /// being `sp` as it left user code: below it, 64-byte aligned (see "Signal
 /// entry").

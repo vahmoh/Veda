@@ -55,17 +55,17 @@ pub unsafe fn word_of(tp: usize) -> &'static AtomicUsize {
 /// The bytes the signal entry keeps the x87, SSE and AVX registers in
 /// (XSAVE's area for what the kernel enabled, or FXSAVE's 512), set by
 /// [`init`]; 0 before.
-#[cfg_attr(not(feature = "layer"), allow(dead_code))]
+#[cfg_attr(not(feature = "signal-entry"), allow(dead_code))]
 static SAVE_SIZE: AtomicUsize = AtomicUsize::new(0);
 
 /// Whether the processor saves its registers with XSAVE (else FXSAVE).
-#[cfg_attr(not(feature = "layer"), allow(dead_code))]
+#[cfg_attr(not(feature = "signal-entry"), allow(dead_code))]
 static XSAVE: AtomicUsize = AtomicUsize::new(0);
 
 /// Learns how the signal entry saves the registers of the code it
 /// interrupts: the processor's XSAVE area for what the kernel enabled
 /// (CPUID leaf 0xD), or FXSAVE's.
-#[cfg_attr(not(feature = "layer"), allow(dead_code))]
+#[cfg_attr(not(feature = "signal-entry"), allow(dead_code))]
 pub fn init() {
     let osxsave = core::arch::x86_64::__cpuid(1).ecx & (1 << 27) != 0;
     if osxsave {
@@ -185,7 +185,7 @@ pub unsafe fn load_mcontext(m: *const core::ffi::c_void, s: &mut ThreadState) {
 }
 
 /// Where the kernel sends an interrupted thread: `__veda_signal_entry`.
-#[cfg(feature = "layer")]
+#[cfg(feature = "signal-entry")]
 pub fn entry_address() -> usize {
     unsafe extern "C" {
         fn __veda_signal_entry();
@@ -254,7 +254,7 @@ core::arch::global_asm!(
 // has `crate::interrupt::signal_entry` act on the interruption, takes the
 // registers back, and resumes the thread (`signal_return`), as interrupted
 // or as the signal entry changed it, with the flags it returned.
-#[cfg(feature = "layer")]
+#[cfg(feature = "signal-entry")]
 core::arch::global_asm!(
     ".global __veda_signal_entry",
     ".hidden __veda_signal_entry",

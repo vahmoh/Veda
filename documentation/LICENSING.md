@@ -35,6 +35,7 @@ Other parts keep their own licences:
 | curl an image may contain: the program, and libcurl with the libraries it holds | curl: its own MIT-style licence (`curl`); OpenSSL: the Apache 2.0 licence; nghttp2 and libpsl: the MIT licence, and the Public Suffix List libpsl builds in, the Mozilla Public License 2.0; zlib: the zlib licence; Brotli: the MIT licence; Zstandard: the BSD 3-clause licence (or the GPL version 2, at the choice of whoever uses it); libidn2: the LGPL version 3 or later (or the GPL version 2 or later, at the choice of whoever uses it), with the Unicode licence of its data. libcurl, a shared library, holds them; as its source is Veda's build of them, whoever has the image can build it again with a changed libidn2, as the LGPL asks. Their licence texts are in the image, in `/system/licences/curl` | The releases `implementation/ports/*/port.toml` name, with the patches beside them |
 | The certificate authorities curl, the web engine and Python trust (`/system/etc/ssl/cert.pem`) | Mozilla's list, under the Mozilla Public License 2.0 | The release `implementation/ports/ca-certificates` names, unmodified |
 | The services the C library knows by name (`/system/etc/services`) | IANA's registry of service names and port numbers, which IANA and the IETF dedicate to the public domain (CC0 1.0) | The release `implementation/ports/iana-etc` names, unmodified |
+| The C library of the Linux programs that test Linux compatibility (`/system/tests/linux/glibc`): glibc's dynamic linker and C library, as the build machine's Linux has them, where it has them | The LGPL version 2.1 or later | The build machine's distribution's glibc, unmodified, whose source that distribution offers |
 | The other ports: the driver VM's Linux kernel, Mesa, and the crates ported to Veda's target | Their own licences, which [the ports' README](../implementation/ports/README.md) lists for each (the Linux kernel: the GPL version 2 only; Mesa: the MIT licence, for the parts the renderer uses) | The releases their `port.toml` files name, with the patches beside them |
 
 Some formats the video decoder decodes (H.264, HEVC, AAC) are covered by
@@ -63,6 +64,7 @@ its About page, whose Licence texts button opens About Veda on them
 | `python` | Python and the libraries built into it (`python/<port>`), and pip and the packages it vendors (`python/python/ensurepip`, from its wheel) | The `licences` stage of `implementation/ports/python/build.sh` (`cargo automation python`) |
 | `curl` | curl and the libraries libcurl holds (`curl/<port>`) | The `licences` stage of `implementation/ports/curl/build.sh` (`cargo automation toolchain`) |
 | `ca-certificates`, `iana-etc` | Where Mozilla's certificate authorities and IANA's registry come from, under which terms (`SOURCE`) | The image build (`automation/source/certificates.rs`, `automation/source/databases.rs`) |
+| `glibc` | glibc's terms, as the build machine's distribution has them (its `copyright`) | The image build (`automation/source/compatibility.rs`), from the build machine |
 
 Beside a port's texts, `SOURCE` says where its source is: the release its
 `port.toml` pins (its address and SHA-256) and Veda's patches of it, which
@@ -71,7 +73,8 @@ parts the GNU GPL or LGPL covers (GCC and its libraries, binutils, GMP,
 MPFR, MPC, FFmpeg, the driver VM's Linux, curl's libidn2, the web engine's
 GLib, libsoup and others), whoever passes the image on offers their source
 too, as
-those licences ask: those releases and `implementation/ports/`.
+those licences ask: those releases and `implementation/ports/` (and, for
+the Linux tests' glibc, the build machine's distribution's source of it).
 
 An image build fails where it would leave a part's texts out: a port a
 build adds without its texts in the `LICENCE_FILES` of its script, a

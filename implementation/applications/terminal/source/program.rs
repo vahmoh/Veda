@@ -376,6 +376,9 @@ pub fn run(console: &Console, run: Run, out: &Output, interrupt: &AtomicBool) ->
         Some((vmo, usize::try_from(size).ok()?))
     };
     spawn.dynamic_linker = Some(&linker);
+    // A Linux program runs on Veda's Linux compatibility, a program of the
+    // system image too.
+    spawn.linux_compatibility = Some(&linker);
     // The program runs from the file's pages where it can.
     let process: Process =
         spawn.start_file(program.image.vmo(), program.size).map_err(|e| spawn_error(&program.path, e))?;

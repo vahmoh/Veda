@@ -189,15 +189,39 @@ pub struct Table {
 
 static TABLE: Mutex<Table> = Mutex::new(Table { slots: Vec::new() });
 
+/// Runs `f` with the calling thread's table: the process's, or that of a
+/// child `vfork` made which has its own (`crate::own`).
+fn with<R>(f: impl FnOnce(&mut Table) -> R) -> R {
+    match crate::own::current() {
+        Some(own) if own.fds.is_some() => f(&mut own.fds.as_ref().unwrap().lock()),
+        _ => f(&mut TABLE.lock()),
+    }
+}
+
+/// A copy of the calling thread's table: the same descriptions, as `fork`
+/// copies a process's.
+pub fn copy() -> Table {
+    with(|t| Table { slots: t.slots.clone() })
+}
+
 /// The description behind `fd`.
 pub fn get(fd: i32) -> Result<Arc<Description>, isize> {
-    let t = TABLE.lock();
-    usize::try_from(fd).ok().and_then(|i| t.slots.get(i)).and_then(|s| s.as_ref()).map(|s| s.desc.clone()).ok_or(EBADF)
+    with(|t| {
+        usize::try_from(fd)
+            .ok()
+            .and_then(|i| t.slots.get(i))
+            .and_then(|s| s.as_ref())
+            .map(|s| s.desc.clone())
+            .ok_or(EBADF)
+    })
 }
 
 /// Installs `desc` at the lowest free descriptor at least `min`.
 pub fn insert(desc: Arc<Description>, cloexec: bool, min: usize) -> Result<i32, isize> {
-    let mut t = TABLE.lock();
+    with(|t| insert_into(t, desc, cloexec, min))
+}
+
+fn insert_into(t: &mut Table, desc: Arc<Description>, cloexec: bool, min: usize) -> Result<i32, isize> {
     let free = (min..MAX_FDS).find(|&i| t.slots.get(i).is_none_or(|s| s.is_none())).ok_or(EMFILE)?;
     if t.slots.len() <= free {
         t.slots.resize(free + 1, None);
@@ -209,13 +233,12 @@ pub fn insert(desc: Arc<Description>, cloexec: bool, min: usize) -> Result<i32, 
 /// Installs `desc` at `fd`, closing what was there.
 pub fn replace(fd: i32, desc: Arc<Description>, cloexec: bool) -> Result<(), isize> {
     let i = usize::try_from(fd).ok().filter(|&i| i < MAX_FDS).ok_or(EBADF)?;
-    let old = {
-        let mut t = TABLE.lock();
+    let old = with(|t| {
         if t.slots.len() <= i {
             t.slots.resize(i + 1, None);
         }
         t.slots[i].replace(Slot { desc, cloexec })
-    };
+    });
     if let Some(old) = old {
         close(old);
     }
@@ -224,10 +247,7 @@ pub fn replace(fd: i32, desc: Arc<Description>, cloexec: bool) -> Result<(), isi
 
 /// Closes `fd`.
 pub fn remove(fd: i32) -> Result<(), isize> {
-    let old = {
-        let mut t = TABLE.lock();
-        usize::try_from(fd).ok().and_then(|i| t.slots.get_mut(i)).and_then(|s| s.take()).ok_or(EBADF)?
-    };
+    let old = with(|t| usize::try_from(fd).ok().and_then(|i| t.slots.get_mut(i)).and_then(|s| s.take()).ok_or(EBADF))?;
     close(old);
     Ok(())
 }
@@ -264,37 +284,44 @@ pub fn flush_logs() {
 
 /// Closes every descriptor in `first..=last` (`close_range`).
 pub fn remove_range(first: usize, last: usize) {
-    let old: Vec<Slot> = {
-        let mut t = TABLE.lock();
+    let old: Vec<Slot> = with(|t| {
         let end = t.slots.len().min(last.saturating_add(1));
         (first.min(end)..end).filter_map(|i| t.slots[i].take()).collect()
-    };
+    });
     old.into_iter().for_each(close);
 }
 
 /// Sets close-on-exec on every descriptor in `first..=last`.
 pub fn set_cloexec_range(first: usize, last: usize) {
-    let mut t = TABLE.lock();
-    let end = t.slots.len().min(last.saturating_add(1));
-    for s in t.slots[first.min(end)..end].iter_mut().flatten() {
-        s.cloexec = true;
-    }
+    with(|t| {
+        let end = t.slots.len().min(last.saturating_add(1));
+        for s in t.slots[first.min(end)..end].iter_mut().flatten() {
+            s.cloexec = true;
+        }
+    })
 }
 
 pub fn cloexec(fd: i32) -> Result<bool, isize> {
-    let t = TABLE.lock();
-    usize::try_from(fd).ok().and_then(|i| t.slots.get(i)).and_then(|s| s.as_ref()).map(|s| s.cloexec).ok_or(EBADF)
+    with(|t| {
+        usize::try_from(fd).ok().and_then(|i| t.slots.get(i)).and_then(|s| s.as_ref()).map(|s| s.cloexec).ok_or(EBADF)
+    })
 }
 
 pub fn set_cloexec(fd: i32, on: bool) -> Result<(), isize> {
-    let mut t = TABLE.lock();
-    let s = usize::try_from(fd).ok().and_then(|i| t.slots.get_mut(i)).and_then(|s| s.as_mut()).ok_or(EBADF)?;
-    s.cloexec = on;
-    Ok(())
+    with(|t| {
+        let s = usize::try_from(fd).ok().and_then(|i| t.slots.get_mut(i)).and_then(|s| s.as_mut()).ok_or(EBADF)?;
+        s.cloexec = on;
+        Ok(())
+    })
 }
 
 /// Every open descriptor: `(fd, description, close-on-exec)`.
 pub fn snapshot() -> Vec<(i32, Arc<Description>, bool)> {
-    let t = TABLE.lock();
-    t.slots.iter().enumerate().filter_map(|(i, s)| s.as_ref().map(|s| (i as i32, s.desc.clone(), s.cloexec))).collect()
+    with(|t| {
+        t.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| s.as_ref().map(|s| (i as i32, s.desc.clone(), s.cloexec)))
+            .collect()
+    })
 }

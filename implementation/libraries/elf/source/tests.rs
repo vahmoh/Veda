@@ -521,7 +521,32 @@ fn tells_veda_programs_from_posix_ones() {
     assert_eq!(kind(&with_note(&veda::VERSION.to_le_bytes())), Kind::Veda);
     assert_eq!(kind(&with_note(&(veda::VERSION + 1).to_le_bytes())), Kind::OtherVeda);
     assert_eq!(kind(&with_note(&[])), Kind::OtherVeda);
-    assert_eq!(kind(&typical().build()), Kind::Posix);
+    // A POSIX program's POSIX layer marks it.
+    let mut posix = typical();
+    let note = note_bytes(veda::NOTE_NAME, veda::POSIX_NOTE_TYPE, &veda::VERSION.to_le_bytes(), 4);
+    posix.extra.push(Extra { kind: pt::NOTE, vaddr: 0, mem_size: 0, align: 4, file: note });
+    assert_eq!(kind(&posix.build()), Kind::Posix);
+}
+
+#[test]
+fn tells_linux_programs_from_vedas() {
+    let kind = |bytes: &[u8]| Elf::parse_for(bytes, amd64::MACHINE).unwrap().kind();
+    // Unmarked and static: a Linux program, but for one built for Veda
+    // before its start files marked it, which has the POSIX layer in it.
+    assert_eq!(kind(&typical().build()), Kind::Linux);
+    let mut old = typical();
+    let mut text = b"..".to_vec();
+    text.extend(veda::POSIX_LAYER_MARK);
+    old.extra.push(Extra { kind: pt::NOTE, vaddr: 0, mem_size: 0, align: 4, file: text });
+    assert_eq!(kind(&old.build()), Kind::Posix);
+    // Linked dynamically: by the dynamic linker it names.
+    assert_eq!(kind(&dynamic(b"/system/lib/libc.so\0").build()), Kind::Posix);
+    assert_eq!(kind(&dynamic(b"/lib64/ld-linux-x86-64.so.2\0").build()), Kind::Linux);
+    assert_eq!(kind(&dynamic(b"/lib/ld-musl-x86_64.so.1\0").build()), Kind::Linux);
+    // A GNU note says nothing of its own.
+    let mut gnu = typical();
+    gnu.extra.push(Extra { kind: pt::NOTE, vaddr: 0, mem_size: 0, align: 4, file: note_bytes(b"GNU", 1, &[0; 16], 4) });
+    assert_eq!(kind(&gnu.build()), Kind::Linux);
 }
 
 #[test]

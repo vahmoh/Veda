@@ -50,6 +50,8 @@ pub mod architecture;
 #[cfg(all(feature = "runtime", not(test), not(target_os = "veda")))]
 mod crt;
 pub mod env;
+#[cfg(not(veda_guest))]
+pub mod foreign;
 #[cfg(veda_guest)]
 pub mod guest;
 pub mod heap;

@@ -8,3 +8,8 @@
 /// for it (nothing of Linux or musl is linked; see
 /// `.cargo/architectures/arm64`).
 pub const TARGET: &str = "aarch64-unknown-linux-musl";
+
+/// The target of a program that must leave the vector registers alone
+/// (Veda's Linux compatibility, whose Linux program has them):
+/// freestanding and soft-float, as the kernel's.
+pub const SOFT_FLOAT_TARGET: &str = "aarch64-unknown-none-softfloat";

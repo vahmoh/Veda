@@ -101,6 +101,11 @@ pub struct Info {
     pub overrun: i32,
     /// `sigqueue`'s or a timer's value.
     pub value: u64,
+    /// For a fault, the address it was at (`si_addr`).
+    pub addr: Option<u64>,
+    /// For a child's end (`SIGCHLD`), its exit status or signal
+    /// (`si_status`).
+    pub status: Option<i32>,
 }
 
 impl Info {
@@ -115,8 +120,17 @@ impl Info {
     }
 
     /// The `siginfo_t` of signal `s`.
-    fn siginfo(&self, s: u32) -> Siginfo {
+    pub fn siginfo(&self, s: u32) -> Siginfo {
         let mut info = Siginfo { signo: s as i32, code: self.code, pid: self.pid, ..Siginfo::default() };
+        if let Some(addr) = self.addr {
+            // `si_addr`, where a sender's id and user are.
+            (info.pid, info.uid) = (addr as u32 as i32, (addr >> 32) as u32);
+            return info;
+        }
+        if let Some(status) = self.status {
+            (info.uid, info.status) = (crate::vfs::UID, status);
+            return info;
+        }
         if self.code == sig::SI_TIMER {
             // `si_timerid` and `si_overrun`, where a sender's id is.
             info.uid = self.overrun as u32;
@@ -142,6 +156,11 @@ enum Target {
 
 struct State {
     actions: [Sigaction; sig::NSIG as usize],
+    /// The threads that are processes of their own, sharing this one's
+    /// memory (children `vfork` made, `crate::own`): they take none of the
+    /// process's signals, and have dispositions of their own unless they
+    /// share its (`None`).
+    apart: BTreeMap<usize, Option<[Sigaction; sig::NSIG as usize]>>,
     /// Threads by thread pointer.
     threads: BTreeMap<usize, ThreadState>,
     /// Thread pointers by thread id.
@@ -165,6 +184,7 @@ struct State {
 
 static STATE: Mutex<State> = Mutex::new(State {
     actions: [Sigaction { handler: sig::DFL, flags: 0, restorer: 0, mask: 0 }; sig::NSIG as usize],
+    apart: BTreeMap::new(),
     threads: BTreeMap::new(),
     tids: BTreeMap::new(),
     next_tid: 1,
@@ -198,6 +218,7 @@ impl State {
 
     /// Forgets thread `tp`: its state, its id, and its pending signals.
     fn forget(&mut self, tp: usize) {
+        self.apart.remove(&tp);
         if let Some(t) = self.threads.remove(&tp)
             && self.tids.get(&t.tid) == Some(&tp)
         {
@@ -221,14 +242,36 @@ impl State {
         None
     }
 
-    /// Whether signal `s` is ignored: by its disposition, or because its
-    /// default action does nothing.
-    fn ignores(&self, s: u32) -> bool {
-        match self.actions[s as usize].handler {
+    /// Thread `tp`'s disposition of signal `s`: its own, if it is a
+    /// process of its own with dispositions of its own, else the process's.
+    fn action(&self, tp: usize, s: u32) -> Sigaction {
+        match self.apart.get(&tp) {
+            Some(Some(own)) => own[s as usize],
+            _ => self.actions[s as usize],
+        }
+    }
+
+    /// [`State::action`], to change.
+    fn action_mut(&mut self, tp: usize, s: u32) -> &mut Sigaction {
+        match self.apart.get_mut(&tp) {
+            Some(Some(own)) => &mut own[s as usize],
+            _ => &mut self.actions[s as usize],
+        }
+    }
+
+    /// Whether thread `tp` ignores signal `s`: by its disposition, or
+    /// because its default action does nothing.
+    fn ignores(&self, tp: usize, s: u32) -> bool {
+        match self.action(tp, s).handler {
             sig::IGN => true,
             sig::DFL => !abi::posix_signal::ends_process(s as usize),
             _ => false,
         }
+    }
+
+    /// Whether thread `tp` is a process of its own ([`State::apart`]).
+    fn is_apart(&self, tp: usize) -> bool {
+        self.apart.contains_key(&tp)
     }
 
     /// Makes signal `s` pending for `target`, with what it says: returns
@@ -240,23 +283,33 @@ impl State {
     /// to one that does not block it, and while every thread blocks it, it
     /// is the process's.
     fn generate(&mut self, s: u32, info: Info, target: Target) -> Option<usize> {
+        // What a thread that is a process of its own sends its process is
+        // its own.
+        let target = match target {
+            Target::Process(Some(tp)) if self.is_apart(tp) => Target::Thread(tp),
+            t => t,
+        };
         let tp = match target {
             Target::Thread(tp) => {
-                if self.ignores(s) && self.get(tp).mask & bit(s) == 0 {
+                if self.ignores(tp, s) && self.get(tp).mask & bit(s) == 0 {
                     return None;
                 }
                 Some(tp)
             }
             Target::Process(prefer) => {
-                let receiver = prefer.or(Some(self.main)).filter(|tp| *tp != 0 && self.threads.contains_key(tp));
+                let receiver = prefer
+                    .or(Some(self.main))
+                    .filter(|tp| *tp != 0 && self.threads.contains_key(tp) && !self.is_apart(*tp));
                 let blocked = receiver.is_some_and(|tp| self.get(tp).mask & bit(s) != 0);
-                if self.ignores(s) && !blocked {
+                if self.ignores(self.main, s) && !blocked {
                     return None;
                 }
+                let apart = &self.apart;
+                let mine = || self.threads.iter().filter(|(tp, _)| !apart.contains_key(*tp));
                 receiver
                     .filter(|&tp| self.get(tp).wants(s))
-                    .or_else(|| self.threads.iter().find(|(_, t)| t.waiting & bit(s) != 0).map(|(&tp, _)| tp))
-                    .or_else(|| self.threads.iter().find(|(_, t)| t.mask & bit(s) == 0).map(|(&tp, _)| tp))
+                    .or_else(|| mine().find(|(_, t)| t.waiting & bit(s) != 0).map(|(&tp, _)| tp))
+                    .or_else(|| mine().find(|(_, t)| t.mask & bit(s) == 0).map(|(&tp, _)| tp))
             }
         };
         let Some(tp) = tp else {
@@ -314,7 +367,7 @@ impl State {
     /// Drops the signals ready for thread `tp` that are ignored now (their
     /// disposition changed since they came, or they were blocked then).
     fn drop_ignored(&mut self, tp: usize) {
-        let ignored = signals(self.get(tp).ready()).filter(|&s| self.ignores(s)).fold(0, |set, s| set | bit(s));
+        let ignored = signals(self.get(tp).ready()).filter(|&s| self.ignores(tp, s)).fold(0, |set, s| set | bit(s));
         if ignored != 0 {
             self.update(tp, |t| t.pending &= !ignored);
             self.infos.retain(|&(owner, s), _| owner != tp || ignored & bit(s) == 0);
@@ -454,18 +507,26 @@ pub unsafe fn rt_sigaction(s: u32, act: usize, old: usize, size: usize) -> SysRe
         return Err(EINVAL);
     }
     let prev = {
+        let me = current();
         let mut st = STATE.lock();
-        let prev = st.actions[s as usize];
+        let prev = st.action(me, s);
         if let Some(a) = new {
-            st.actions[s as usize] = a;
-            // Ignoring a pending signal discards it, blocked or not.
-            if st.ignores(s) {
-                let threads: Vec<usize> = st.threads.keys().copied().collect();
-                for tp in threads {
-                    st.update(tp, |t| t.pending &= !bit(s));
+            *st.action_mut(me, s) = a;
+            // Ignoring a pending signal discards it, blocked or not: of the
+            // threads whose disposition it is.
+            if st.ignores(me, s) {
+                let own = matches!(st.apart.get(&me), Some(Some(_)));
+                let threads: Vec<usize> =
+                    st.threads.keys().copied().filter(|&tp| if own { tp == me } else { !st.is_apart(tp) }).collect();
+                for tp in &threads {
+                    st.update(*tp, |t| t.pending &= !bit(s));
                 }
-                st.pending &= !bit(s);
-                st.infos.retain(|&(_, signal), _| signal != s);
+                if !own {
+                    st.pending &= !bit(s);
+                }
+                st.infos.retain(|&(owner, signal), _| {
+                    signal != s || !(threads.contains(&owner) || owner == PROCESS && !own)
+                });
             }
         }
         prev
@@ -561,11 +622,24 @@ pub fn take_incoming() {
     poke(tids);
 }
 
+/// Whether every thread's blocking call is to end, as a host replaces the
+/// program (`crate::host::stop_others`).
+static STOPPING: AtomicBool = AtomicBool::new(false);
+
+/// Has every blocking call that is interrupted end, while `on`.
+pub fn set_stopping(on: bool) {
+    STOPPING.store(on, Ordering::Release);
+}
+
 /// Whether the calling thread, interrupted in a wait, has a signal to act
 /// on (or one it waits for, `sigtimedwait`), after taking what other
 /// processes sent: then the blocking call it is in ends; else the wait goes
-/// on. Ready signals now ignored are dropped.
+/// on. Ready signals now ignored are dropped. Every one ends while a host
+/// has its threads end ([`set_stopping`]).
 pub fn interrupted() -> bool {
+    if STOPPING.load(Ordering::Acquire) {
+        return true;
+    }
     take_incoming();
     let tp = current();
     let mut st = STATE.lock();
@@ -585,6 +659,117 @@ pub struct Delivered {
     pub redirected: bool,
 }
 
+/// A signal the calling thread is to act on now ([`take_next`]).
+#[derive(Debug, Clone, Copy)]
+pub struct Next {
+    pub signal: u32,
+    /// What it says of itself.
+    pub info: Info,
+    /// Its disposition as it was taken (before `SA_RESETHAND` reset it).
+    pub action: Sigaction,
+    /// The mask its handler leaves the thread with as it returns (its
+    /// context's, which the handler may change): the thread's, or one a
+    /// call that waits with a mask of its own set aside, for the first
+    /// handler.
+    pub restore: u64,
+}
+
+/// Takes the calling thread's next ready signal, lowest first, with what
+/// it says and what is to be done of it: what acting on a signal begins
+/// with (a timer's expirations taken, `SA_RESETHAND`, the mask a call set
+/// aside). `None` once none is ready, the thread's mask then its own again
+/// if a call had set it aside and no handler took it.
+pub fn take_next() -> Option<Next> {
+    let tp = current();
+    let next = loop {
+        let mut st = STATE.lock();
+        st.claim(tp, 0);
+        let ready = st.get(tp).ready();
+        if ready == 0 {
+            if let Some(m) = st.get(tp).saved_mask {
+                st.update(tp, |t| {
+                    t.mask = m;
+                    t.saved_mask = None;
+                });
+                st.claim(tp, 0);
+                continue;
+            }
+            return None;
+        }
+        let s = ready.trailing_zeros() + 1;
+        let (_, info) = st.take(tp, bit(s)).unwrap_or_default();
+        let action = st.action(tp, s);
+        let handled = action.handler != sig::IGN && action.handler != sig::DFL;
+        if handled && action.flags & sig::SA_RESETHAND != 0 {
+            st.action_mut(tp, s).handler = sig::DFL;
+        }
+        // The mask a handler restores: one a call set aside, for the
+        // first handler.
+        let saved = if handled { st.update(tp, |t| t.saved_mask.take()) } else { None };
+        let restore = saved.unwrap_or(st.get(tp).mask);
+        break Next { signal: s, info, action, restore };
+    };
+    if next.info.code == sig::SI_TIMER {
+        crate::timer::taken(next.info.pid, next.info.overrun);
+    }
+    Some(next)
+}
+
+/// Blocks what a handler of signal `s` with disposition `a` runs with: the
+/// signal, unless `SA_NODEFER`, and the handler's mask.
+pub fn block_for_handler(s: u32, a: &Sigaction) {
+    let tp = current();
+    STATE.lock().update(tp, |t| {
+        let mut block = a.mask;
+        if a.flags & sig::SA_NODEFER == 0 {
+            block |= bit(s);
+        }
+        t.mask = (t.mask | block) & !UNCATCHABLE;
+    });
+}
+
+/// Sets the calling thread's mask to `mask` (but the signals none blocks),
+/// as a handler's context leaves it: those pending for the process that it
+/// no longer blocks become its own.
+pub fn restore_mask(mask: u64) {
+    let tp = current();
+    let mut st = STATE.lock();
+    st.update(tp, |t| t.mask = mask & !UNCATCHABLE);
+    st.claim(tp, 0);
+}
+
+/// Makes signal `s` pending for the calling thread as a fault of its own
+/// raises it (`SIGSEGV`, `SIGILL`...): one it blocks or ignores is
+/// unblocked and given its default action first, as Linux forces it, so
+/// that a fault no handler takes ends the process.
+pub fn force(s: u32, info: Info) {
+    if !valid(s) {
+        return;
+    }
+    let tp = current();
+    let mut st = STATE.lock();
+    let blocked = st.get(tp).mask & bit(s) != 0;
+    if blocked || st.action(tp, s).handler == sig::IGN {
+        st.action_mut(tp, s).handler = sig::DFL;
+        st.update(tp, |t| t.mask &= !bit(s));
+    }
+    st.generate(s, info, Target::Thread(tp));
+}
+
+/// As [`force`], with the signal's default action whatever its
+/// disposition: as Linux ends a thread whose handler for `SIGSEGV` cannot
+/// be entered for `SIGSEGV` itself (`force_sigsegv`).
+pub fn force_default(s: u32, info: Info) {
+    if !valid(s) {
+        return;
+    }
+    let tp = current();
+    let mut st = STATE.lock();
+    st.action_mut(tp, s).handler = sig::DFL;
+    st.update(tp, |t| t.mask &= !bit(s));
+    st.generate(s, info, Target::Thread(tp));
+}
+
 /// Acts on the calling thread's ready signals: runs their handlers, with
 /// `context` the registers of the code they interrupted (as their
 /// `ucontext_t` has them, and as they leave them), or the default action.
@@ -594,37 +779,7 @@ pub fn deliver(mut context: Option<&mut Registers>) -> Delivered {
     let tp = current();
     let mut done = Delivered { restart: true, ..Delivered::default() };
     loop {
-        let (s, info, action, restore) = {
-            let mut st = STATE.lock();
-            st.claim(tp, 0);
-            let ready = st.get(tp).ready();
-            if ready == 0 {
-                if let Some(m) = st.get(tp).saved_mask {
-                    st.update(tp, |t| {
-                        t.mask = m;
-                        t.saved_mask = None;
-                    });
-                    st.claim(tp, 0);
-                    continue;
-                }
-                return done;
-            }
-            let s = ready.trailing_zeros() + 1;
-            let (_, info) = st.take(tp, bit(s)).unwrap_or_default();
-            let action = st.actions[s as usize];
-            let handled = action.handler != sig::IGN && action.handler != sig::DFL;
-            if handled && action.flags & sig::SA_RESETHAND != 0 {
-                st.actions[s as usize].handler = sig::DFL;
-            }
-            // The mask a handler restores: one a call set aside, for the
-            // first handler.
-            let saved = if handled { st.update(tp, |t| t.saved_mask.take()) } else { None };
-            let restore = saved.unwrap_or(st.get(tp).mask);
-            (s, info, action, restore)
-        };
-        if info.code == sig::SI_TIMER {
-            crate::timer::taken(info.pid, info.overrun);
-        }
+        let Some(Next { signal: s, info, action, restore }) = take_next() else { return done };
         match action.handler {
             sig::IGN => {}
             sig::DFL => {
@@ -697,7 +852,7 @@ fn act(caller: &mut arch::Caller) -> Delivered {
 /// every change of what is ready says it ([`State::mark`]): signals pending
 /// for the process become a thread's only as it unblocks them, which
 /// claims them, or as one is made ready.
-fn has_ready() -> bool {
+pub fn has_ready() -> bool {
     if !threads_are_ready() || !interrupt::anything_to_do() {
         return false;
     }
@@ -760,13 +915,7 @@ fn call_handler(
     restore: u64,
     registers: Option<&mut Registers>,
 ) -> bool {
-    STATE.lock().update(tp, |t| {
-        let mut block = a.mask;
-        if a.flags & sig::SA_NODEFER == 0 {
-            block |= bit(s);
-        }
-        t.mask = (t.mask | block) & !UNCATCHABLE;
-    });
+    block_for_handler(s, a);
     let given = registers.as_ref().map_or(Registers::default(), |r| **r);
     let mut context = Context::new(&given, restore);
     if a.flags & sig::SA_SIGINFO != 0 {
@@ -1029,8 +1178,9 @@ pub unsafe fn sigqueue(pid: i32, tid: i32, s: u32, info: usize) -> SysResult {
 /// The signals whose disposition is to be ignored, which a program it
 /// starts inherits (handlers become the default there).
 pub fn ignored() -> u64 {
+    let me = current();
     let st = STATE.lock();
-    (1..sig::NSIG).filter(|&s| st.actions[s as usize].handler == sig::IGN).fold(0, |set, s| set | bit(s))
+    (1..sig::NSIG).filter(|&s| st.action(me, s).handler == sig::IGN).fold(0, |set, s| set | bit(s))
 }
 
 /// The calling thread's mask, which a program it starts inherits.
@@ -1047,6 +1197,37 @@ pub fn inherit(ignored: u64, mask: u64) {
         st.actions[s as usize].handler = sig::IGN;
     }
     st.update(tp, |t| t.mask = mask & !UNCATCHABLE);
+}
+
+/// Gives every signal with a handler its default action again, as `execve`
+/// does (the program that had the handlers is gone): those ignored stay so.
+pub fn reset_handlers() {
+    let me = current();
+    let mut st = STATE.lock();
+    for s in 1..sig::NSIG {
+        let a = st.action_mut(me, s);
+        if a.handler != sig::IGN && a.handler != sig::DFL {
+            *a = Sigaction { handler: sig::DFL, flags: 0, restorer: 0, mask: 0 };
+        }
+    }
+}
+
+/// Whether the process's children go as they end, as nothing is to wait
+/// for them: `SIGCHLD` is ignored, or its handler asked for that
+/// (`SA_NOCLDWAIT`), as on Linux.
+pub fn children_go() -> bool {
+    let a = STATE.lock().actions[sig::CHLD as usize];
+    a.handler == sig::IGN || a.flags & sig::SA_NOCLDWAIT != 0
+}
+
+/// Makes thread `tp` a process of its own (a child `vfork` made, which
+/// shares this process's memory, `crate::own`): it takes none of the
+/// process's signals from now on, and has a copy of the process's
+/// dispositions unless it shares them (`share`).
+pub fn set_apart(tp: usize, share: bool) {
+    let mut st = STATE.lock();
+    let own = (!share).then_some(st.actions);
+    st.apart.insert(tp, own);
 }
 
 pub unsafe fn sigaltstack(old: usize) -> SysResult {
@@ -1073,6 +1254,7 @@ mod tests {
     fn state() -> State {
         State {
             actions: [Sigaction::default(); sig::NSIG as usize],
+            apart: BTreeMap::new(),
             threads: BTreeMap::new(),
             tids: BTreeMap::new(),
             next_tid: 1,
@@ -1100,6 +1282,28 @@ mod tests {
     }
 
     const HANDLER: Sigaction = Sigaction { handler: 0x1000, flags: 0, restorer: 0, mask: 0 };
+
+    #[test]
+    fn a_process_of_its_own_takes_none_of_the_processs_signals() {
+        // Thread 2 is a child `vfork` made, with dispositions of its own.
+        let mut st = with_threads(&[(1, !0), (2, 0)]);
+        st.actions[10] = HANDLER;
+        st.apart.insert(2, Some(st.actions));
+        // The process's signal waits for its own thread, which blocks it,
+        // rather than going to the child.
+        assert_eq!(st.generate(10, Info::default(), Target::Process(None)), None);
+        assert_eq!(st.pending, bit(10));
+        assert_eq!(st.get(2).pending, 0);
+        // What the child sends itself is its own, by its own dispositions:
+        // it ignores signal 12, which the process handles.
+        st.apart.get_mut(&2).unwrap().as_mut().unwrap()[12].handler = sig::IGN;
+        st.actions[12] = HANDLER;
+        assert_eq!(st.generate(12, Info::default(), Target::Process(Some(2))), None);
+        assert_eq!(st.generate(10, Info::default(), Target::Process(Some(2))), Some(2));
+        assert_eq!(st.get(2).pending, bit(10));
+        assert_eq!(st.action(2, 12).handler, sig::IGN);
+        assert_eq!(st.action(1, 12).handler, HANDLER.handler);
+    }
 
     #[test]
     fn signals_pending_for_the_process_go_to_the_thread_that_takes_them() {
@@ -1170,7 +1374,7 @@ mod tests {
         st.actions[10] = HANDLER;
         st.generate(10, Info::user(5), Target::Thread(0x100));
         st.generate(10, Info::user(6), Target::Thread(0x100));
-        let timer = Info { code: sig::SI_TIMER, pid: 3, overrun: 2, value: 99 };
+        let timer = Info { code: sig::SI_TIMER, pid: 3, overrun: 2, value: 99, addr: None, status: None };
         st.generate(14, timer, Target::Thread(0x100));
         assert_eq!(st.take(0x100, bit(10)), Some((10, Info::user(5))));
         assert_eq!(st.take(0x100, bit(10)), None);

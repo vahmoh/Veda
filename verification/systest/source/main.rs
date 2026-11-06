@@ -35,6 +35,8 @@ mod architecture;
 #[cfg(target_arch = "aarch64")]
 #[path = "architectures/arm64/mod.rs"]
 mod architecture;
+mod foreign;
+mod linux;
 mod media;
 mod memory;
 mod packages;
@@ -858,6 +860,7 @@ fn main() -> i32 {
         Some("end") => return posix::end(runtime::env::args().get(2)),
         Some("restricted") => return posix::restricted(),
         Some("unmapped") => return posix::unmapped(),
+        Some("foreign") => return foreign::interrupted(),
         Some("wait") => {
             posix::wait();
             return 0;
@@ -865,7 +868,7 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 53] = [
+    let tests: [Test; 55] = [
         ("starved threads run", test_starved_threads_run),
         ("ipc primitives", test_ipc_primitives),
         ("short sleeps", test_short_sleeps),
@@ -898,6 +901,7 @@ fn main() -> i32 {
         ("programs run from the system image", posix::test_shared_program_pages),
         ("c programs", posix::test_c_programs),
         ("rust programs", posix::test_rust_programs),
+        ("linux programs", linux::test_linux_programs),
         ("crates on the standard library", posix::test_std_crates),
         ("libraries loaded at run time", posix::test_plugins),
         ("python", posix::test_python),
@@ -909,6 +913,7 @@ fn main() -> i32 {
         ("ended processes go", posix::test_ended_processes_go),
         ("processes killed before they start", posix::test_killed_before_start),
         ("interruptions", posix::test_interruptions),
+        ("foreign code", foreign::test_foreign_code),
         ("giving abilities up", posix::test_process_restrict),
         ("launcher", test_launcher),
         ("packages", packages::test_packages),

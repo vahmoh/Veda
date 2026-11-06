@@ -206,8 +206,21 @@ pub fn main_thread_ready() {
     }
 }
 
+/// Keeps the handle of the calling thread, `tid`, which a host started
+/// itself (`crate::host`), as [`__veda_clone`] keeps those it starts: at
+/// its process's priority.
+pub fn keep(tid: i32, thread: Thread) {
+    let thread = Arc::new(thread);
+    let mut handles = HANDLES.lock();
+    let priority = PRIORITY.load(Ordering::Relaxed);
+    if priority != 0 {
+        let _ = call(nr::THREAD_SET_PRIORITY, [thread.raw() as usize, priority, 0, 0, 0, 0]);
+    }
+    handles.insert(tid, thread);
+}
+
 /// The calling thread is ending: its handle goes.
-fn forget_current() {
+pub(crate) fn forget_current() {
     let tid = crate::signal::current_tid();
     let gone = HANDLES.lock().remove(&tid);
     drop(gone);
@@ -223,6 +236,16 @@ fn handle_of(tid: i32) -> Result<Arc<Thread>, i32> {
 /// has ended.
 pub fn interrupt(tid: i32) {
     if let Ok(t) = handle_of(tid) {
+        let _ = call(nr::THREAD_INTERRUPT, [t.raw() as usize, 0, 0, 0, 0, 0]);
+    }
+}
+
+/// Interrupts every thread of this process but the calling one.
+pub fn interrupt_all_but_current() {
+    let me = crate::signal::current_tid();
+    let others: alloc::vec::Vec<Arc<Thread>> =
+        HANDLES.lock().iter().filter(|(tid, _)| **tid != me).map(|(_, t)| t.clone()).collect();
+    for t in others {
         let _ = call(nr::THREAD_INTERRUPT, [t.raw() as usize, 0, 0, 0, 0, 0]);
     }
 }

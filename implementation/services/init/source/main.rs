@@ -261,6 +261,9 @@ impl Init {
             Some((self.initrd_vmo.slice(file.offset as usize, file.data.len()).ok()?, file.data.len()))
         };
         spawn = spawn.dynamic_linker(&linker);
+        // A Linux program (a package's) runs on Veda's Linux compatibility,
+        // a program of the system image too.
+        spawn = spawn.linux_compatibility(&linker);
         let started = match image {
             // It runs from the image's pages, which every process running
             // it shares (from a copy of them if they cannot be had).
@@ -279,7 +282,8 @@ impl Init {
                 | runtime::process::SpawnError::BadElf(_)
                 | runtime::process::SpawnError::Incompatible
                 | runtime::process::SpawnError::OtherDynamicLinker
-                | runtime::process::SpawnError::NoDynamicLinker => LaunchError::BadImage,
+                | runtime::process::SpawnError::NoDynamicLinker
+                | runtime::process::SpawnError::NoLinuxCompatibility => LaunchError::BadImage,
                 runtime::process::SpawnError::Kernel(abi::Error::NoMemory) => LaunchError::NoMemory,
                 _ => LaunchError::Failed,
             }

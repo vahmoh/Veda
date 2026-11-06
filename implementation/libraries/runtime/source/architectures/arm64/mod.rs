@@ -10,7 +10,11 @@
 //! threads start as it starts them, and the C library has the C runtime's
 //! symbols.
 
-#[cfg(all(feature = "runtime", not(test), not(target_os = "veda")))]
+// On the soft-float target (a program that leaves the vector registers
+// alone, `build::arm64::SOFT_FLOAT_TARGET`), whose memory primitives
+// `compiler_builtins` has, as the target's precompiled `core` asks for no
+// unwinder.
+#[cfg(all(feature = "runtime", not(test), not(target_os = "veda"), target_feature = "neon"))]
 mod crt;
 #[cfg(veda_guest)]
 pub(crate) mod linux;
@@ -45,6 +49,46 @@ pub unsafe fn syscall6(n: usize, a0: usize, a1: usize, a2: usize, a3: usize, a4:
         );
     }
     (ret, second)
+}
+
+/// `foreign_run(state, flags)` (see `crate::foreign`): its raw result.
+/// Foreign code may leave any register changed but those the kernel
+/// restores (every general-purpose one but `x0`, and the thread pointer):
+/// the floating point and SIMD registers are the caller's to keep, the
+/// low halves of `v8` to `v15` too, which the AAPCS64 has calls keep.
+#[cfg(not(veda_guest))]
+#[inline(always)]
+pub fn foreign_run(state: *mut abi::ForeignState, flags: usize) -> isize {
+    let ret: isize;
+    // SAFETY: the kernel writes only `state`, which the caller lends; the
+    // caller's own registers are as they were but `x0` and the vector
+    // unit's.
+    #[cfg(target_feature = "neon")]
+    unsafe {
+        core::arch::asm!(
+            "svc #0",
+            in("x8") abi::nr::FOREIGN_RUN,
+            inlateout("x0") state as isize => ret,
+            in("x1") flags,
+            out("v8") _, out("v9") _, out("v10") _, out("v11") _,
+            out("v12") _, out("v13") _, out("v14") _, out("v15") _,
+            clobber_abi("C"),
+            options(nostack),
+        );
+    }
+    // SAFETY: as above; code built without the vector unit has nothing in it.
+    #[cfg(not(target_feature = "neon"))]
+    unsafe {
+        core::arch::asm!(
+            "svc #0",
+            in("x8") abi::nr::FOREIGN_RUN,
+            inlateout("x0") state as isize => ret,
+            in("x1") flags,
+            clobber_abi("C"),
+            options(nostack),
+        );
+    }
+    ret
 }
 
 /// The process entry point (`--entry=_rt_start`, see `build`). The

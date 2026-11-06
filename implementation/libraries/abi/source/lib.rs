@@ -42,6 +42,20 @@
 //! signal reaches a thread that waits. Only the threads of a process with
 //! a signal entry ([`nr::SIGNAL_ENTRY_SET`]) that have a thread pointer
 //! are. Each of those calls takes [`wait_flags`] as its last argument.
+//!
+//! # Foreign code
+//!
+//! A thread can run code of another system's ABI, such as a Linux
+//! program's, in *foreign mode* ([`nr::FOREIGN_RUN`]): the kernel carries
+//! out none of its system calls and handles none of its exceptions, but
+//! gives each back to the code that ran it, the *host*, with the
+//! registers the foreign code left (a [`ForeignState`]), as a virtual
+//! processor's exits go to its monitor. The host is code of the same
+//! process, in its own registers and thread pointer, which carries out
+//! what the foreign code asked with the process's handles, and runs it
+//! again. So foreign code can do nothing its process could not, and
+//! no less is checked of it: it reaches the kernel only through its
+//! host.
 
 #![no_std]
 
@@ -61,7 +75,7 @@ pub use arm64 as architecture;
 
 pub use architecture::barrier;
 pub use architecture::{
-    PAGE_SIZE, PROGRAM_BASE, PROGRAM_SPAN, ThreadState, USER_SPACE_END, USER_SPACE_START, VcpuState,
+    ForeignState, PAGE_SIZE, PROGRAM_BASE, PROGRAM_SPAN, ThreadState, USER_SPACE_END, USER_SPACE_START, VcpuState,
     entry_stack_pointer, vcpu_exit,
 };
 
@@ -496,6 +510,27 @@ pub mod nr {
     /// `n`; [`posix_signal::KILL`](crate::posix_signal::KILL) is never
     /// ignored or blocked.
     pub const PROCESS_SIGNALS_INHERITED: usize = 109;
+
+    // --- foreign code ---------------------------------------------------
+    /// `foreign_run(state: *mut ForeignState, flags) -> exit`: runs the
+    /// calling thread's foreign code (see "Foreign code" above) from the
+    /// registers and thread pointer at `state`, until it makes a system
+    /// call or takes an exception the kernel does not resolve (a page
+    /// fault where nothing is mapped, say); then its registers as it left
+    /// them are at `state`, with the exception's details, and the call
+    /// returns which it was ([`foreign_exit`](crate::foreign_exit)). The
+    /// calling thread's own registers and thread pointer are as they were.
+    /// It ends as a wait does when the thread is interrupted
+    /// ([`Interrupted`](crate::Error::Interrupted), the registers at
+    /// `state` as the foreign code left them): at once if it was, or with
+    /// [`wait_flags::DEFERRED`](crate::wait_flags::DEFERRED) if it
+    /// deferred an interruption, without running the foreign code.
+    /// `InvalidArgs` for registers user code cannot have: an instruction
+    /// or stack pointer outside user space, or a thread pointer the
+    /// processor does not take (on AMD64 a non-canonical one; any other
+    /// is foreign code's own, as user code can set it). A thread killed
+    /// meanwhile ends there, as it would in a wait.
+    pub const FOREIGN_RUN: usize = 110;
 }
 
 /// Error codes returned (negated) by system calls.
@@ -871,6 +906,19 @@ pub mod wait_flags {
     /// (`signal_take`): the waits of the blocking calls a POSIX signal
     /// ends, which the thread may begin after its interruption came.
     pub const DEFERRED: usize = 1 << 16;
+}
+
+/// Why foreign code stopped (what `foreign_run` returns), its registers
+/// as it left them in the [`ForeignState`](crate::ForeignState).
+pub mod foreign_exit {
+    /// It made a system call: the call's number and arguments are in its
+    /// registers, where its own ABI has them, and it resumes after the
+    /// instruction, which is where its instruction pointer is.
+    pub const SYSCALL: usize = 1;
+    /// It took an exception: the state says which, and where. Its
+    /// instruction pointer is where the processor reported it (at the
+    /// instruction that faulted, for most).
+    pub const EXCEPTION: usize = 2;
 }
 
 /// Flags of `signal_return`.

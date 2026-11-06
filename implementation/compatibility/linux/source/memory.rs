@@ -1,0 +1,470 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
+//! The Linux program's memory: what it has mapped (its image and its
+//! dynamic linker's, its stack, its program break, what `mmap` gave it),
+//! which Linux compatibility keeps account of, as Linux keeps a process's
+//! areas (`/proc/self/maps` lists them).
+//!
+//! The program shares its process with Linux compatibility, whose own
+//! memory (its image, its heap, its threads' stacks) is no area of the
+//! program's: the program's calls change only its own areas. `MAP_FIXED`
+//! replaces only what the program mapped there, `munmap` and `mprotect`
+//! reach only its areas, and an area the kernel finds taken by Linux
+//! compatibility's memory is refused (`ENOMEM`), where Linux would have
+//! found nothing. So nothing the program does with its memory can take
+//! Linux compatibility's from under it. What the program's memory holds
+//! is read and written for it only where it has an area that allows the
+//! access ([`accessible`]): a bad pointer in a system call is `EFAULT`, a
+//! signal frame for a stack that has run out is a fault, as on Linux.
+
+use alloc::collections::BTreeMap;
+use alloc::string::String;
+use alloc::vec::Vec;
+
+use abi::map_flags;
+use runtime::sync::Mutex;
+use runtime::vm;
+
+use crate::linux::errno::*;
+use crate::linux::mman::*;
+use crate::linux::nr;
+
+const PAGE: u64 = abi::PAGE_SIZE as u64;
+
+/// What an area holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Kind {
+    /// A program's or a library's image (the dynamic linker's, for one
+    /// the kernel loads), from its file.
+    Image(String),
+    /// Memory `mmap` gave: of nothing (`MAP_ANONYMOUS`) or of a file, the
+    /// program's alone (`MAP_PRIVATE`) or shared.
+    Mapped { anonymous: bool, shared: bool },
+    /// The main thread's stack.
+    Stack,
+    /// The program break's (`brk`).
+    Heap,
+}
+
+/// One of the program's areas: `[start, end)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Area {
+    pub end: u64,
+    /// `PROT_READ`, `PROT_WRITE` and `PROT_EXEC`.
+    pub prot: u32,
+    pub kind: Kind,
+}
+
+/// The program's areas, by where they start, and its program break.
+struct Map {
+    areas: BTreeMap<u64, Area>,
+    /// Where the program break starts, and where it is.
+    brk: (u64, u64),
+}
+
+static MAP: Mutex<Map> = Mutex::new(Map { areas: BTreeMap::new(), brk: (0, 0) });
+
+impl Map {
+    /// Takes `[start, end)` out of every area, splitting those it cuts.
+    fn cut(&mut self, start: u64, end: u64) {
+        let touched: Vec<u64> =
+            self.areas.range(..end).filter(|(s, a)| **s < end && a.end > start).map(|(s, _)| *s).collect();
+        for s in touched {
+            let a = self.areas.remove(&s).unwrap();
+            if s < start {
+                self.areas.insert(s, Area { end: start, ..a.clone() });
+            }
+            if a.end > end {
+                self.areas.insert(end, Area { end: a.end, ..a });
+            }
+        }
+    }
+
+    /// The program's areas' pieces in `[start, end)`.
+    fn pieces(&self, start: u64, end: u64) -> Vec<(u64, u64)> {
+        self.areas.range(..end).filter(|(_, a)| a.end > start).map(|(s, a)| ((*s).max(start), a.end.min(end))).collect()
+    }
+
+    /// Whether the program may read (or with `write`, write) `len` bytes
+    /// at `at`: its areas cover them, with that access.
+    fn allows(&self, at: usize, len: usize, write: bool) -> bool {
+        let Some(end) = (at as u64).checked_add(len as u64) else { return false };
+        if len == 0 {
+            return true;
+        }
+        let mut covered = at as u64;
+        for (s, a) in self.areas.range(..end) {
+            if a.end <= covered {
+                continue;
+            }
+            if *s > covered {
+                return false;
+            }
+            let allowed =
+                if write { a.prot & PROT_WRITE != 0 } else { a.prot & (PROT_READ | PROT_WRITE | PROT_EXEC) != 0 };
+            if !allowed {
+                return false;
+            }
+            covered = a.end;
+            if covered >= end {
+                return true;
+            }
+        }
+        covered >= end
+    }
+
+    /// Whether areas cover `[start, end)` without a gap.
+    fn covers(&self, start: u64, end: u64) -> bool {
+        let mut at = start;
+        for (s, e) in self.pieces(start, end) {
+            if s > at {
+                return false;
+            }
+            at = at.max(e);
+        }
+        at >= end
+    }
+}
+
+/// Notes a new area `[start, start + len)`, in place of any it covers.
+pub fn record(start: u64, len: u64, prot: u32, kind: Kind) {
+    let end = start + len;
+    let mut map = MAP.lock();
+    map.cut(start, end);
+    map.areas.insert(start, Area { end, prot, kind });
+}
+
+/// Forgets every area, as `execve` leaves none: unmapping each.
+pub fn clear() {
+    let mut map = MAP.lock();
+    for (s, a) in core::mem::take(&mut map.areas) {
+        let _ = vm::unmap(None, s as usize, (a.end - s) as usize);
+    }
+    map.brk = (0, 0);
+}
+
+/// Runs `f` if the program may read (or with `write`, write) `len` bytes
+/// at `at`, its areas covering them with that access; they are held
+/// meanwhile, so that no other thread's `munmap` or `mprotect` takes the
+/// memory away while `f` uses it (which would be this process's fault,
+/// not the program's). `None` if the program may not.
+pub fn while_accessible<R>(at: usize, len: usize, write: bool, f: impl FnOnce() -> R) -> Option<R> {
+    let map = MAP.lock();
+    if !map.allows(at, len, write) {
+        return None;
+    }
+    let r = f();
+    drop(map);
+    Some(r)
+}
+
+/// Every area, for `/proc/self/maps`.
+pub fn areas() -> Vec<(u64, Area)> {
+    MAP.lock().areas.iter().map(|(s, a)| (*s, a.clone())).collect()
+}
+
+/// Where the program break starts (`start`, past the program's image),
+/// where it is now as well.
+pub fn set_break(start: u64) {
+    MAP.lock().brk = (start, start);
+}
+
+/// The kernel's mapping flags for a protection.
+fn flags_of(prot: u32) -> usize {
+    let mut f = 0;
+    if prot & PROT_READ != 0 {
+        f |= map_flags::READ;
+    }
+    if prot & PROT_WRITE != 0 {
+        f |= map_flags::READ | map_flags::WRITE;
+    }
+    if prot & PROT_EXEC != 0 {
+        f |= map_flags::READ | map_flags::EXECUTE;
+    }
+    f
+}
+
+fn page_up(v: u64) -> Option<u64> {
+    v.checked_next_multiple_of(PAGE)
+}
+
+/// `brk`: moves the program break to `to`, mapping memory up to it or
+/// unmapping what is above it, and returns where it is (where it was, if
+/// it cannot move: Linux's convention, which C libraries check).
+pub fn brk(to: u64) -> isize {
+    let mut map = MAP.lock();
+    let (start, now) = map.brk;
+    if to < start || start == 0 {
+        return now as isize;
+    }
+    let (Some(old_top), Some(new_top)) = (page_up(now), page_up(to)) else { return now as isize };
+    if new_top > old_top {
+        let len = (new_top - old_top) as usize;
+        let rw = map_flags::READ | map_flags::WRITE | map_flags::FIXED;
+        if vm::allocate(None, len, old_top as usize, rw).is_err() {
+            return now as isize;
+        }
+        map.cut(old_top, new_top);
+        // One area for the whole break, as Linux keeps it.
+        let begin = map.areas.range(..=old_top).next_back().filter(|(_, a)| a.kind == Kind::Heap && a.end == old_top);
+        let first = begin.map_or(old_top, |(s, _)| *s);
+        map.areas.insert(first, Area { end: new_top, prot: PROT_READ | PROT_WRITE, kind: Kind::Heap });
+    } else if new_top < old_top {
+        // The program's areas there go: only they, as Linux
+        // compatibility's own memory may be where the program unmapped
+        // some of its heap.
+        for (s, e) in map.pieces(new_top, old_top) {
+            let _ = vm::unmap(None, s as usize, (e - s) as usize);
+        }
+        map.cut(new_top, old_top);
+    }
+    map.brk.1 = to;
+    to as isize
+}
+
+/// `mmap`, for the program: the POSIX layer maps, Linux compatibility
+/// keeps the area. `MAP_FIXED` replaces only the program's own areas.
+///
+/// # Safety
+/// As the POSIX layer's `mmap`: the arguments are the program's.
+pub unsafe fn mmap(addr: u64, len: u64, prot: u32, flags: u32, fd: usize, offset: u64) -> Result<u64, isize> {
+    if len == 0 {
+        return Err(EINVAL);
+    }
+    let len = page_up(len).ok_or(ENOMEM)?;
+    // There are no huge pages to give, as on a Linux that reserved none.
+    if flags & MAP_HUGETLB != 0 {
+        return Err(ENOMEM);
+    }
+    let replace = flags & MAP_FIXED != 0 && flags & MAP_FIXED_NOREPLACE == 0;
+    let mut given = flags;
+    if replace {
+        if !addr.is_multiple_of(PAGE) {
+            return Err(EINVAL);
+        }
+        let end = addr.checked_add(len).ok_or(ENOMEM)?;
+        unmap_own(addr, end);
+        given = (flags & !MAP_FIXED) | MAP_FIXED_NOREPLACE;
+    }
+    // Below 2 GiB where asked (`MAP_32BIT`), as Linux places it.
+    let low = flags & MAP_32BIT != 0 && flags & (MAP_FIXED | MAP_FIXED_NOREPLACE) == 0;
+    let hint = if low && addr == 0 { 0x4000_0000 } else { addr };
+    let args = [hint as usize, len as usize, prot as usize, (given & !MAP_32BIT) as usize, fd, offset as usize];
+    // SAFETY: per the caller.
+    let at = match unsafe { posix::host::syscall(nr::MMAP, args) } {
+        Ok(at) => at as u64,
+        // Linux compatibility's own memory is there: for the program,
+        // there is no room.
+        Err(EEXIST) if replace => return Err(ENOMEM),
+        Err(e) => return Err(e),
+    };
+    if low && at.saturating_add(len) > 1 << 31 {
+        let _ = vm::unmap(None, at as usize, len as usize);
+        return Err(ENOMEM);
+    }
+    let anonymous = flags & MAP_ANONYMOUS != 0;
+    let shared = matches!(flags & MAP_TYPE, MAP_SHARED | MAP_SHARED_VALIDATE);
+    record(at, len, prot & (PROT_READ | PROT_WRITE | PROT_EXEC), Kind::Mapped { anonymous, shared });
+    Ok(at)
+}
+
+/// Unmaps the program's areas in `[start, end)`, and forgets them.
+fn unmap_own(start: u64, end: u64) {
+    let mut map = MAP.lock();
+    for (s, e) in map.pieces(start, end) {
+        let _ = vm::unmap(None, s as usize, (e - s) as usize);
+    }
+    map.cut(start, end);
+}
+
+/// `munmap`: the program's areas in the range go; there is no error for
+/// where it has none.
+pub fn munmap(addr: u64, len: u64) -> Result<u64, isize> {
+    if !addr.is_multiple_of(PAGE) || len == 0 {
+        return Err(EINVAL);
+    }
+    let end = page_up(len).and_then(|l| addr.checked_add(l)).ok_or(EINVAL)?;
+    unmap_own(addr, end);
+    Ok(0)
+}
+
+/// `madvise`: the POSIX layer's, for a range the program's areas cover
+/// whole (`ENOMEM` otherwise, as Linux says of a range not mapped), so
+/// that the memory it gives up (`MADV_DONTNEED`) is only ever the
+/// program's.
+pub fn madvise(addr: u64, len: u64, advice: u32) -> Result<usize, isize> {
+    if !addr.is_multiple_of(PAGE) {
+        return Err(EINVAL);
+    }
+    let end = page_up(len).and_then(|l| addr.checked_add(l)).ok_or(EINVAL)?;
+    if end == addr {
+        return Ok(0);
+    }
+    let map = MAP.lock();
+    if !map.covers(addr, end) {
+        return Err(ENOMEM);
+    }
+    // SAFETY: the program's arguments, for its own areas, which stay its
+    // own meanwhile.
+    unsafe { posix::host::syscall(nr::MADVISE, [addr as usize, len as usize, advice as usize, 0, 0, 0]) }
+}
+
+/// `mprotect`: the range must be the program's areas, whole (`ENOMEM`
+/// otherwise, as Linux says of a range with holes).
+pub fn mprotect(addr: u64, len: u64, prot: u32) -> Result<u64, isize> {
+    let prot = prot & !(PROT_GROWSDOWN | PROT_GROWSUP);
+    if !addr.is_multiple_of(PAGE) || prot & !(PROT_READ | PROT_WRITE | PROT_EXEC) != 0 {
+        return Err(EINVAL);
+    }
+    if len == 0 {
+        return Ok(0);
+    }
+    let end = page_up(len).and_then(|l| addr.checked_add(l)).ok_or(ENOMEM)?;
+    let mut map = MAP.lock();
+    if !map.covers(addr, end) {
+        return Err(ENOMEM);
+    }
+    vm::protect(None, addr as usize, (end - addr) as usize, flags_of(prot)).map_err(|e| match e {
+        abi::Error::AccessDenied => EACCES,
+        _ => ENOMEM,
+    })?;
+    let pieces: Vec<(u64, Area)> = map
+        .areas
+        .range(..end)
+        .filter(|(_, a)| a.end > addr)
+        .map(|(s, a)| ((*s).max(addr), Area { end: a.end.min(end), prot, kind: a.kind.clone() }))
+        .collect();
+    map.cut(addr, end);
+    for (s, a) in pieces {
+        map.areas.insert(s, a);
+    }
+    Ok(0)
+}
+
+/// `mremap`: shrinks an area in place, grows one of anonymous memory in
+/// place where the pages after it are free, or else, with
+/// `MREMAP_MAYMOVE`, moves it: its contents copied to new memory, as the
+/// kernel's own moves are not had. Only anonymous memory grows or moves:
+/// a copy of a file's pages or of shared memory would not be the file's,
+/// or the others', any more (`ENOMEM`, as when there is no room, which
+/// programs answer with a mapping of their own).
+pub fn mremap(old: u64, old_len: u64, new_len: u64, flags: u32, new_addr: u64) -> Result<u64, isize> {
+    if !old.is_multiple_of(PAGE) || flags & !(MREMAP_MAYMOVE | MREMAP_FIXED | MREMAP_DONTUNMAP) != 0 {
+        return Err(EINVAL);
+    }
+    if flags & (MREMAP_FIXED | MREMAP_DONTUNMAP) != 0 && flags & MREMAP_MAYMOVE == 0 {
+        return Err(EINVAL);
+    }
+    let (Some(old_len), Some(new_len)) = (page_up(old_len), page_up(new_len)) else { return Err(EINVAL) };
+    if new_len == 0 || old_len == 0 {
+        return Err(EINVAL);
+    }
+    // What `MREMAP_DONTUNMAP` moves leaves its old place empty: the same
+    // size, as Linux has it.
+    if flags & MREMAP_DONTUNMAP != 0 && old_len != new_len {
+        return Err(EINVAL);
+    }
+    let old_end = old.checked_add(old_len).ok_or(EINVAL)?;
+    // The range must be one area of the program's.
+    let area = {
+        let map = MAP.lock();
+        let (s, a) = map.areas.range(..=old).next_back().ok_or(EFAULT)?;
+        if a.end < old_end || *s > old {
+            return Err(EFAULT);
+        }
+        a.clone()
+    };
+    let anonymous = matches!(area.kind, Kind::Mapped { anonymous: true, .. } | Kind::Heap | Kind::Stack);
+    if flags & MREMAP_FIXED == 0 {
+        if new_len <= old_len {
+            unmap_own(old + new_len, old_end);
+            return Ok(old);
+        }
+        // Anonymous memory grows in place where the pages after it are free.
+        if anonymous && area.kind != Kind::Stack {
+            let grow = (new_len - old_len) as usize;
+            if vm::allocate(None, grow, old_end as usize, flags_of(area.prot) | map_flags::FIXED).is_ok() {
+                record(old_end, grow as u64, area.prot, area.kind);
+                return Ok(old);
+            }
+        }
+        if flags & MREMAP_MAYMOVE == 0 {
+            return Err(ENOMEM);
+        }
+    }
+    if !anonymous {
+        return Err(ENOMEM);
+    }
+    // Moved: new memory, the old contents copied in.
+    let placement = if flags & MREMAP_FIXED != 0 {
+        if !new_addr.is_multiple_of(PAGE) {
+            return Err(EINVAL);
+        }
+        let new_end = new_addr.checked_add(new_len).ok_or(EINVAL)?;
+        // Not onto itself, as Linux refuses.
+        if new_addr < old_end && old < new_end {
+            return Err(EINVAL);
+        }
+        unmap_own(new_addr, new_end);
+        new_addr as usize
+    } else {
+        0
+    };
+    let fixed = if placement != 0 { map_flags::FIXED } else { 0 };
+    let rw = map_flags::READ | map_flags::WRITE;
+    let at = vm::allocate(None, new_len as usize, placement, rw | fixed).map_err(|_| ENOMEM)? as u64;
+    // What the program cannot read is read all the same: it is its memory,
+    // which goes with it.
+    let unreadable = area.prot & PROT_READ == 0;
+    if unreadable {
+        let _ = vm::protect(None, old as usize, old_len as usize, map_flags::READ);
+    }
+    // SAFETY: the old area is the program's and readable now, the new one
+    // fresh; they do not overlap (the new one was free memory).
+    unsafe { core::ptr::copy_nonoverlapping(old as *const u8, at as *mut u8, old_len.min(new_len) as usize) };
+    if area.prot != PROT_READ | PROT_WRITE {
+        let _ = vm::protect(None, at as usize, new_len as usize, flags_of(area.prot));
+    }
+    record(at, new_len, area.prot, area.kind);
+    if flags & MREMAP_DONTUNMAP == 0 {
+        unmap_own(old, old_end);
+    } else {
+        // The old place stays, its pages gone with what moved.
+        let _ = vm::decommit(None, old as usize, old_len as usize);
+        if unreadable {
+            let _ = vm::protect(None, old as usize, old_len as usize, flags_of(area.prot));
+        }
+    }
+    Ok(at)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn map(areas: &[(u64, u64)]) -> Map {
+        let mut m = Map { areas: BTreeMap::new(), brk: (0, 0) };
+        for &(s, e) in areas {
+            m.areas.insert(s, Area { end: e, prot: PROT_READ, kind: Kind::Mapped { anonymous: true, shared: false } });
+        }
+        m
+    }
+
+    #[test]
+    fn cutting_splits_the_areas_it_reaches() {
+        let mut m = map(&[(0x1000, 0x5000), (0x6000, 0x8000)]);
+        m.cut(0x2000, 0x7000);
+        let left: Vec<(u64, u64)> = m.areas.iter().map(|(s, a)| (*s, a.end)).collect();
+        assert_eq!(left, [(0x1000, 0x2000), (0x7000, 0x8000)]);
+    }
+
+    #[test]
+    fn pieces_and_coverage() {
+        let m = map(&[(0x1000, 0x3000), (0x3000, 0x4000), (0x6000, 0x8000)]);
+        assert_eq!(m.pieces(0x2000, 0x7000), [(0x2000, 0x3000), (0x3000, 0x4000), (0x6000, 0x7000)]);
+        assert!(m.covers(0x1000, 0x4000));
+        assert!(!m.covers(0x1000, 0x7000));
+        assert!(!m.covers(0x0, 0x2000));
+    }
+}

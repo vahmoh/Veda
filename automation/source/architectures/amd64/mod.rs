@@ -27,6 +27,9 @@ pub const ARCHITECTURE: Architecture = Architecture {
     // stable Rust, and linked by LLVM's linker with nothing of Linux's or
     // musl's (`implementation/libraries/build`).
     user_target: build::amd64::TARGET,
+    // Freestanding and soft-float: the kernel's own, for what runs beside a
+    // Linux program in its process and must not touch its vector registers.
+    soft_float_target: build::amd64::SOFT_FLOAT_TARGET,
     bare_target: "x86_64-unknown-none",
     // Linux's, on musl. It is the user-space programs' too: these are built
     // apart, with musl (`implementation/guests/linux/.cargo/config.toml`).

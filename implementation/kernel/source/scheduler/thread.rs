@@ -93,6 +93,10 @@ pub struct Thread {
     /// long a ready thread has waited for a processor
     /// (`super::boost_starved`).
     pub ready_since: AtomicU64,
+    /// While it runs foreign code (`FOREIGN_RUN`): its host's registers,
+    /// which it goes back to as the foreign code stops
+    /// ([`super::foreign`]).
+    pub foreign: SpinLock<Option<super::foreign::Host>>,
     /// Until when it runs at `NORMAL` at least (monotonic nanoseconds): a
     /// time slice the scheduler gives a thread below `NORMAL` that waited
     /// too long ready (`super::boost_starved`), `u64::MAX` until the slice
@@ -141,6 +145,7 @@ impl Thread {
             suspensions: AtomicU32::new(0),
             parked: AtomicBool::new(false),
             ready_since: AtomicU64::new(0),
+            foreign: SpinLock::new(None),
             boost_until: AtomicU64::new(0),
         }))
     }

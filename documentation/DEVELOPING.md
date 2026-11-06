@@ -190,6 +190,9 @@ the run, with its number.
 * **The network.** The network cards' scripts check it against a server on
   the host (`nettest local`, `automation/source/hostweb.rs`), without the
   Internet.
+* **Linux programs.** Their script says `requires linux-programs`, and
+  is skipped where they are not built: they need the driver VM's
+  toolchain (`cargo automation linux`), on AMD64.
 * **Python.** Its script says `requires python`, and is skipped where
   Python is not built; CPython's own tests run inside Veda in an image
   built with `--python-tests` ([Python on Veda](PYTHON.md#tests)).
@@ -333,7 +336,8 @@ from this machine.
 
 | Source | Installed as |
 |--------|--------------|
-| The programs in `PROGRAMS` (`automation/source/components.rs`), without the symbols that `target/x86_64-unknown-linux-musl/` (on `runtime` alone), `target/std/x86_64-unknown-veda/` (on the standard library) and `target/std/dynamic/x86_64-unknown-veda/` (on it, linked dynamically) keep | `/system/bin/<name>` |
+| The programs in `PROGRAMS` (`automation/source/components.rs`), without the symbols that `target/x86_64-unknown-linux-musl/` (on `runtime` alone), `target/x86_64-unknown-none/` (on it, soft-float: Linux compatibility, which leaves the vector registers to the Linux program it runs), `target/std/x86_64-unknown-veda/` (on the standard library) and `target/std/dynamic/x86_64-unknown-veda/` (on it, linked dynamically) keep | `/system/bin/<name>` |
+| `verification/linux`'s Linux programs, by Linux's toolchains, and the Linux roots of those linked dynamically: the dynamic linkers and C libraries they load ([Linux programs on Veda](LINUX.md#tests)) | `/system/tests/linux/` |
 | `LICENSE` (the GPL, version 3) | `/system/LICENSE.txt` |
 | The licence texts of what the image has of others' (as each part's release has them: the toolchain's, curl's, the driver VM's and the web engine's `licences` stages, the firmware lists' licences, the crates' packages), each port's `SOURCE`, and `README`, the list of the parts that About Veda shows (`automation/source/notices.rs`) | `/system/licences/` |
 | The fonts and their licence, `implementation/ports/fonts/` | `/system/fonts/` |

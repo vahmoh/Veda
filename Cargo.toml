@@ -12,6 +12,7 @@ members = [
     "implementation/libraries/initrd",
     "implementation/libraries/elf",
     "implementation/libraries/posix",
+    "implementation/compatibility/linux",
     "implementation/libraries/raster",
     "implementation/libraries/font",
     "implementation/libraries/image",
@@ -139,6 +140,7 @@ build = { path = "implementation/libraries/build" }
 runtime = { path = "implementation/libraries/runtime" }
 ipc = { path = "implementation/libraries/ipc" }
 proto = { path = "implementation/libraries/proto" }
+posix = { path = "implementation/libraries/posix" }
 gfx = { path = "implementation/libraries/gfx" }
 ui = { path = "implementation/libraries/ui" }
 text = { path = "implementation/libraries/text" }

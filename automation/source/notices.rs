@@ -101,6 +101,12 @@ const PARTS: &[(&str, &str, &str)] = &[
          libidn2), each under its own licence",
     ),
     (
+        "glibc",
+        "GNU C Library",
+        "The C library and dynamic linker of the Linux programs that test Linux compatibility \
+         (/system/tests/linux/glibc), as the build machine's Linux has them",
+    ),
+    (
         "python",
         "Python",
         "CPython, the Python interpreter and its standard library, the libraries built into it (zlib, bzip2, \
@@ -472,6 +478,7 @@ pub fn readme(parts: &BTreeSet<String>, crates: &[Crate], noto: bool) -> Result<
                 part(name, "", &format!("each crate's: {licences}"), &what, &texts);
             }
             "firmware" => part(name, "", "redistributable: each maker's terms", what, &texts),
+            "glibc" => part(name, "", "LGPL-2.1-or-later", what, &texts),
             "web" => {
                 let webkit = Port::named("wpewebkit")?;
                 part(name, &webkit.version, &format!("{}, and each library's own", webkit.licence), what, &texts);

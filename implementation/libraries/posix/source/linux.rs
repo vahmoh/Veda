@@ -375,6 +375,7 @@ pub mod sig {
     pub const SA_NODEFER: u64 = linux_raw_sys::general::SA_NODEFER as u64;
     pub const SA_RESETHAND: u64 = linux_raw_sys::general::SA_RESETHAND as u64;
     pub const SA_RESTART: u64 = linux_raw_sys::general::SA_RESTART as u64;
+    pub const SA_NOCLDWAIT: u64 = linux_raw_sys::general::SA_NOCLDWAIT as u64;
     pub const BLOCK: u32 = linux_raw_sys::general::SIG_BLOCK;
     pub const UNBLOCK: u32 = linux_raw_sys::general::SIG_UNBLOCK;
     pub const SETMASK: u32 = linux_raw_sys::general::SIG_SETMASK;

@@ -586,7 +586,7 @@ pub fn test_ended_processes_go() -> TestResult {
             for variant in ["", "-pie", "-dynamic"] {
                 let path = format!("/system/tests/c/hello{variant}");
                 // What it writes stays on the socket, unread.
-                let (process, _output) = start_c(&path, &[], "/tmp")?;
+                let (process, _output) = start_c(&path, &[], "/tmp", &[])?;
                 wait_for(process, &path, 42)?;
             }
         }
@@ -899,7 +899,18 @@ pub(crate) fn run_c(path: &str, args: &[&str], cwd: &str) -> Result<(i64, String
 
 /// [`run_c`], giving the program `seconds` to finish.
 pub(crate) fn run_c_for(path: &str, args: &[&str], cwd: &str, seconds: u64) -> Result<(i64, String), String> {
-    let (process, ours) = start_c(path, args, cwd)?;
+    run_with(path, args, cwd, &[], seconds)
+}
+
+/// [`run_c_for`], the program's environment `env` too.
+pub(crate) fn run_with(
+    path: &str,
+    args: &[&str],
+    cwd: &str,
+    env: &[&str],
+    seconds: u64,
+) -> Result<(i64, String), String> {
+    let (process, ours) = start_c(path, args, cwd, env)?;
     let deadline = runtime::time::deadline_after(runtime::time::Duration::from_secs(seconds));
     let mut out = Vec::new();
     let mut buf = [0u8; 4096];
@@ -919,9 +930,9 @@ pub(crate) fn run_c_for(path: &str, args: &[&str], cwd: &str, seconds: u64) -> R
     Ok((code, String::from_utf8_lossy(&out).into_owned()))
 }
 
-/// Starts a program of the C library's, its output on the socket that
-/// comes with it.
-fn start_c(path: &str, args: &[&str], cwd: &str) -> Result<(Process, Socket), String> {
+/// Starts a program of the C library's (or a Linux program), its output on
+/// the socket that comes with it, with `env` beside its usual environment.
+fn start_c(path: &str, args: &[&str], cwd: &str, env: &[&str]) -> Result<(Process, Socket), String> {
     let fs = vfs_client()?;
     let (vmo, size) = fs.read_file(path.into()).map_err(s)?.map_err(|e| format!("{path}: {e}"))?;
     let image = vm::Mapping::new(vmo, size as usize, map_flags::READ).map_err(s)?;
@@ -938,6 +949,7 @@ fn start_c(path: &str, args: &[&str], cwd: &str) -> Result<(Process, Socket), St
     let mut spawn = Spawn::new("c-test")
         .path(path)
         .dynamic_linker(&linker)
+        .linux_compatibility(&linker)
         .cwd(cwd)
         .env("HOME=/home/user")
         .env("PATH=/system/bin")
@@ -946,6 +958,9 @@ fn start_c(path: &str, args: &[&str], cwd: &str) -> Result<(Process, Socket), St
         .handle(role::REGISTRY, registry.into_handle());
     for a in args {
         spawn = spawn.arg(a);
+    }
+    for e in env {
+        spawn = spawn.env(e);
     }
     // SAFETY: a read-only mapping of the VFS's copy of the file.
     let process: Process = spawn.start(unsafe { image.as_slice() }).map_err(|e| format!("{path}: {e}"))?;

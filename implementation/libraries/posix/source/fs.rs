@@ -315,7 +315,7 @@ pub unsafe fn linkat(olddir: i32, old: usize, newdir: i32, new: usize, flags: u3
 }
 
 pub unsafe fn getcwd(buf: usize, size: usize) -> SysResult {
-    let cwd = vfs::cwd();
+    let cwd = crate::path::program_path(&vfs::cwd());
     if size <= cwd.len() {
         return Err(ERANGE);
     }

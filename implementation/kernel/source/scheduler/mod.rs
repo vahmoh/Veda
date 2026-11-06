@@ -32,6 +32,7 @@
 //!   runs its process's signal entry: how POSIX signals reach a thread,
 //!   whatever it is doing.
 
+pub mod foreign;
 pub mod percpu;
 pub mod process;
 pub mod thread;
@@ -427,11 +428,11 @@ pub fn block_interruptible(deadline: Option<u64>, how: Interruptible) -> WakeRea
 
 /// Whether `t` acts on an interruption: its process has a signal entry,
 /// and it has a thread pointer, by which the entry finds the thread's
-/// state. Another thread's waits are not ended by one, which would end
-/// them again each time they began.
+/// state (its host's, while it runs foreign code: [`foreign`]). Another
+/// thread's waits are not ended by one, which would end them again each
+/// time they began.
 pub fn takes_interruptions(t: &Thread) -> bool {
-    // SAFETY: the context's thread pointer, read under the BKL.
-    t.process.as_ref().is_some_and(|p| p.signal_entry().is_some()) && unsafe { (*t.ctx_ptr()).tls() } != 0
+    t.process.as_ref().is_some_and(|p| p.signal_entry().is_some()) && foreign::host_tls(t) != 0
 }
 
 fn block_as(deadline: Option<u64>, how: Interruptible) -> WakeReason {
@@ -757,6 +758,12 @@ pub fn return_to_user_hook(frame: &mut TrapFrame) {
     if !cur.interrupt.load(Ordering::Acquire) || !takes_interruptions(&cur) {
         return;
     }
+    // Foreign code knows nothing of the signal entry: its host goes there,
+    // its `FOREIGN_RUN` ended as an interrupted wait is.
+    if !foreign::leave(frame, foreign::Stop::Interrupted) {
+        drop(cur);
+        exit_current();
+    }
     let Some(entry) = cur.process.as_ref().and_then(|p| p.signal_entry()) else { return };
     // SAFETY: the current thread's context, under the BKL.
     let tls = unsafe { (*cur.ctx_ptr()).tls() };
@@ -912,6 +919,14 @@ pub fn user_exception(frame: &mut TrapFrame) {
                 total >> 20,
                 holders
             );
+        } else if foreign::active(&cur) {
+            // Foreign code's faults are its host's to make something of
+            // (a Linux program's, a signal).
+            if !foreign::leave(frame, foreign::Stop::Exception) {
+                drop(cur);
+                exit_current();
+            }
+            return;
         } else {
             crate::kerror!(
                 "{} (thread {}): page fault at {:#x} ({} {}), {}{}",
@@ -930,6 +945,12 @@ pub fn user_exception(frame: &mut TrapFrame) {
                 in_image
             );
         }
+    } else if foreign::active(&cur) {
+        if !foreign::leave(frame, foreign::Stop::Exception) {
+            drop(cur);
+            exit_current();
+        }
+        return;
     } else {
         crate::kerror!("{} (thread {}): {}{}", cur.process_name(), cur.koid, frame.describe(), in_image);
     }

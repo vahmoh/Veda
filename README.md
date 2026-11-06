@@ -171,7 +171,7 @@ covers the rest.
 | **Services** | Drivers, the file system, the window system, audio, networking and the agent, in user space; `init` restarts them if they fail |
 | **Drivers** | Veda drives its own disks; Linux drives the rest in the [driver VM](documentation/DRIVERVM.md), on Veda's hypervisor |
 | **Graphics** | A compositing window system, the immediate-mode `ui` toolkit, and OpenGL ES 3.0 on the GPU through Mesa or in software |
-| **Programs** | Rust's standard library, and C with GCC 16 and musl, over `posix`, a POSIX layer in Rust; static or dynamically linked, loading shared libraries at run time |
+| **Programs** | Rust's standard library, and C with GCC 16 and musl, over `posix`, a POSIX layer in Rust; static or dynamically linked, loading shared libraries at run time; and Linux's programs as they were built, on glibc or musl, through Linux compatibility |
 | **Network** | IPv4 and IPv6, TLS 1.3, WPA3 Wi-Fi, and a firewall in stealth mode by default |
 
 Where a proven library exists, Veda uses it: smoltcp, rustls, RustCrypto,
@@ -200,6 +200,7 @@ a stand-in for Deepgram, so they are offline, deterministic and free.
 | [The web browser](documentation/BROWSER.md) | The browser, WebKit's port to Veda, and how pages are drawn |
 | [C on Veda](documentation/C.md) and [Rust on Veda](documentation/RUST.md) | Programs, the POSIX layer and the toolchains |
 | [Linking and loading](documentation/LINKING.md) | Static and dynamically linked programs, shared libraries, and loading them at run time from C, C++, Rust and Python |
+| [Linux programs](documentation/LINUX.md) | Running Linux's programs as they were built: Linux compatibility, foreign mode, Linux roots, and the limits |
 | [Python on Veda](documentation/PYTHON.md) | Python, its standard library, and CPython's port |
 | [curl on Veda](documentation/CURL.md) | The `curl` command and libcurl: transfers by URL over HTTP/2 and TLS, in the Terminal and in C programs |
 | [Packages](documentation/PACKAGES.md) | Installing software with `pkg`: the package manager, signed repositories, and changes that survive the power going |

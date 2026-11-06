@@ -28,9 +28,11 @@ pub mod arm64;
 ///   an address of its own).
 pub const LINK_ARGS: &[&str] = &["--entry=_rt_start", "-zpack-relative-relocs", "--icf=all"];
 
-/// Whether `target` is one Veda programs are built for.
+/// Whether `target` is one Veda programs are built for: the user target,
+/// or the soft-float one of a program that leaves the vector registers
+/// alone.
 fn is_user_target(target: &str) -> bool {
-    target == amd64::TARGET || target == arm64::TARGET
+    [amd64::TARGET, arm64::TARGET, amd64::SOFT_FLOAT_TARGET, arm64::SOFT_FLOAT_TARGET].contains(&target)
 }
 
 /// Emits the linker arguments for a Veda user-space executable. Call this

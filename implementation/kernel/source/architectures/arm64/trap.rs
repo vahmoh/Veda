@@ -15,6 +15,9 @@ const EC_INSTRUCTION_ABORT_LOWER: u64 = 0x20;
 const EC_INSTRUCTION_ABORT: u64 = 0x21;
 const EC_DATA_ABORT_LOWER: u64 = 0x24;
 const EC_DATA_ABORT: u64 = 0x25;
+const EC_PC_ALIGNMENT: u64 = 0x22;
+const EC_WATCHPOINT_LOWER: u64 = 0x34;
+const EC_WATCHPOINT: u64 = 0x35;
 
 /// `ESR_ELx.ISS` of an abort: the access was a write; and it was a cache
 /// operation, which is reported as a write and reads as much as it does.
@@ -94,7 +97,7 @@ impl TrapFrame {
     /// stack, whose address it starts with. `Fault` if its stack cannot
     /// take them (it is left as it was).
     pub fn divert(&mut self, entry: u64, tls: u64) -> Result<(), abi::Error> {
-        let state = abi::ThreadState { x: self.x, sp: self.sp, pc: self.pc, pstate: self.pstate, tpidr: tls };
+        let state = self.registers(tls);
         let at = abi::architecture::signal_frame(self.sp as usize);
         crate::memory::user::write(at as u64, &state)?;
         self.pc = entry;
@@ -102,6 +105,39 @@ impl TrapFrame {
         self.x[0] = at as u64;
         self.pstate = 0;
         Ok(())
+    }
+
+    /// The user registers trapped, with the thread pointer `tls`.
+    fn registers(&self, tls: u64) -> abi::ThreadState {
+        abi::ThreadState { x: self.x, sp: self.sp, pc: self.pc, pstate: self.pstate, tpidr: tls }
+    }
+
+    /// What foreign code trapped here leaves its host
+    /// (`scheduler::foreign`): its registers, with its thread pointer
+    /// `tls`, and if it took an `exception`, which and where.
+    pub fn foreign_state(&self, tls: u64, exception: bool) -> abi::ForeignState {
+        let mut state = abi::ForeignState { registers: self.registers(tls), ..abi::ForeignState::default() };
+        if exception {
+            state.syndrome = self.esr;
+            state.fault_address = if self.far_is_valid() { self.far } else { 0 };
+        }
+        state
+    }
+
+    /// Whether the fault address register holds this exception's address:
+    /// for an abort that gives one (no `FnV`), a misaligned pc and a
+    /// watchpoint. For any other it holds what an earlier exception on the
+    /// processor left there, perhaps another process's.
+    fn far_is_valid(&self) -> bool {
+        /// The syndrome's "FAR not valid" bit, of an abort.
+        const FNV: u64 = 1 << 10;
+        match self.class() {
+            EC_INSTRUCTION_ABORT_LOWER | EC_INSTRUCTION_ABORT | EC_DATA_ABORT_LOWER | EC_DATA_ABORT => {
+                self.esr & FNV == 0
+            }
+            EC_PC_ALIGNMENT | EC_WATCHPOINT_LOWER | EC_WATCHPOINT => true,
+            _ => false,
+        }
     }
 
     /// Resumes user registers `state` (`signal_return`), but its thread

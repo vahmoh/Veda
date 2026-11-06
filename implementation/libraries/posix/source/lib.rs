@@ -83,6 +83,7 @@ mod eventfd;
 mod fd;
 mod file;
 mod fs;
+pub mod host;
 mod inet;
 mod inherit;
 mod interrupt;
@@ -94,6 +95,7 @@ mod mem;
 mod memfd;
 mod native;
 mod network;
+mod own;
 mod path;
 mod process;
 mod resolve;
@@ -119,6 +121,22 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use abi::startup::role;
 use runtime::object::Vmo;
 use runtime::sync::Mutex;
+
+/// The note that marks a program the layer is linked into, statically, as
+/// a POSIX program of Veda's (`elf::veda::POSIX_NOTE_TYPE`), not a Linux
+/// program, which Veda's Linux compatibility would run: `n_namesz`,
+/// `n_descsz`, `n_type`, the name with its NUL padded to 8 bytes, and the
+/// version of Veda's conventions. The linker keeps every note section of
+/// the objects it takes, and every such program takes this one.
+#[cfg(feature = "layer")]
+#[used]
+#[unsafe(link_section = ".note.veda.posix")]
+static PROGRAM_NOTE: [u32; 6] = {
+    let n = elf::veda::NOTE_NAME;
+    assert!(n.len() == 4);
+    let name = u32::from_le_bytes([n[0], n[1], n[2], n[3]]);
+    [5, 4, elf::veda::POSIX_NOTE_TYPE, name, 0, elf::veda::VERSION]
+};
 
 /// The bootstrap channel the kernel passed the process, stored by `_start`
 /// (by the dynamic linker's, in a dynamically linked program).
@@ -147,6 +165,13 @@ pub extern "C" fn __veda_startup() {
     }
     let _layer = interrupt::Layer::enter();
     runtime::env::adopt(__veda_bootstrap.swap(0, Ordering::Relaxed));
+    adopt_startup();
+}
+
+/// Takes what the startup message the runtime read says: the working
+/// directory, the descriptors the program was given, the terminal, the
+/// registry, and what it inherits that is no handle.
+fn adopt_startup() {
     let entries = runtime::env::vars();
     let inherited = inherit::Inherited::parse(entries.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     *INHERITED.lock() = (inherited.ignored, inherited.mask, inherited.nice);

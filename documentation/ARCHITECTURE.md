@@ -96,7 +96,7 @@ key, and **Install Veda** does nothing yet. A disk's system has no menu.
 |--------|----------------|
 | `architecture` | the processor architecture and its platform, behind one interface (`source/architectures/mod.rs`, each architecture in a directory beside it); on AMD64 the GDT, TSS, IDT and entry paths, APICs, timers, SMP bring-up, TLB shootdowns, page tables, the context switch, VMX and EPT, and the IOMMU (VT-d) |
 | `memory` | frame allocator, page tables, kernel heap, kernel stacks and MMIO windows, VMOs, address spaces, user copies |
-| `scheduler` | processes and threads, priority round-robin scheduling, blocking with timeouts, idle loop, and what the kernel keeps for each CPU (`percpu`) |
+| `scheduler` | processes and threads, priority round-robin scheduling, blocking with timeouts, idle loop, what the kernel keeps for each CPU (`percpu`), and foreign code (`foreign`) |
 | `capability` | handles, through which user space reaches kernel objects, and the objects' signals |
 | `ipc` | channels, sockets, events, ports |
 | `interrupt` | interrupt objects: devices' interrupts, and programs' own, delivered to drivers or to guests |
@@ -211,6 +211,14 @@ key, and **Install Veda** does nothing yet. A disk's system has no menu.
   gives): an ignored one does nothing, a blocked one waits for the entry;
   another ends it if it ends a process by default (`abi::posix_signal`),
   and leaves it alone if not.
+- **Foreign code.** A thread can run code of another system's ABI in
+  *foreign mode* (`foreign_run`), as a virtual processor runs a guest: its
+  system calls, the exceptions the kernel does not resolve and its
+  interruptions come back to the code of the same process that ran it,
+  with its registers, its thread pointer switched back too
+  (`scheduler::foreign`). The kernel carries out nothing for it, so it can
+  do nothing its process could not: how Linux programs run
+  ([Linux programs on Veda](LINUX.md)).
 - **Time.** On AMD64 the monotonic clock counts the TSC, calibrated against
   the HPET (or the PIT); on an Intel processor not under a hypervisor, the
   frequency the processor reports (CPUID leaves 0x15 and 0x16) wins over a
@@ -311,6 +319,12 @@ each is:
   layer keeps; `posix_spawn` starts processes (see [C on Veda](C.md)).
   Python is such a program too, CPython with its modules built in
   ([Python on Veda](PYTHON.md)).
+- **Linux programs** run as they were built for Linux: any executable
+  that is not Veda's own (by its note or its dynamic linker) starts with
+  Linux compatibility (`implementation/compatibility/linux`) in its
+  process, which loads it, runs its threads in foreign mode and carries out
+  its system calls with the POSIX layer, in a tree of its own whose `/` is
+  a Linux root ([Linux programs on Veda](LINUX.md)).
 - **Services** register by name with the registry in `init`, and clients
   connect by name; a connection to a service not registered yet waits for
   it (up to 64 per process). Protocols are declared with `ipc`'s macros,
@@ -1205,7 +1219,8 @@ Libraries are crates named after their directory
 | `implementation/libraries/{runtime,heap,build}` | user runtime, allocator, build helper |
 | `implementation/libraries/frames` | the searches of the kernel's bitmap of physical memory frames, a word at a time |
 | `implementation/libraries/entropy` | the ChaCha20 random number generator and BLAKE2s entropy pool |
-| `implementation/libraries/posix` | the POSIX layer under the C library |
+| `implementation/libraries/posix` | the POSIX layer under the C library, and under Linux compatibility |
+| `implementation/compatibility/linux` | Linux compatibility (`linux-compatibility`): Linux programs, as they were built, run in foreign mode ([Linux programs on Veda](LINUX.md)) |
 | `implementation/libraries/{ipc,proto}` | message encoding and the service protocols |
 | `implementation/libraries/{raster,font,image}` | vector rasterisation, fonts, images |
 | `implementation/libraries/{gfx,ui,text}` | 2D drawing, the GUI toolkit, the text editing model |
@@ -1224,6 +1239,6 @@ Libraries are crates named after their directory
 | `implementation/guests/linux/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer, `logkeeper` (the system's log on the live system's stick), and its tests (`bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `timertest`, `kmspause`) |
 | `implementation/ports/` | third-party software built from source, most of it with a small patch of Veda's (see its `README.md`): the C toolchain (GCC, binutils, GMP, MPFR, MPC, musl), Rust for Veda's target, FFmpeg and dav1d, curl (with OpenSSL, nghttp2, zlib, Brotli, Zstandard, libpsl and libidn2, built by `curl/build.sh`), the driver VM's Linux (with zlib and elfutils for its build), its own toolchain (the same GCC, binutils and musl, unpatched) and Mesa, the crates Veda changes (smoltcp, zune-jpeg, libc, getrandom, rustix, errno, socket2, mio, tokio), the web engine (WPE WebKit, the libraries it stands on, and the tools their builds run, built by `wpewebkit/build.sh`), and the fonts and certificate authorities, unmodified |
 | `implementation/generation/` | host programs that make the system image's media at build time: wallpapers and sample pictures, music and the startup sound, sample videos |
-| `verification/` | in-system tests, C and C++ test programs (`verification/c`), Rust's on its standard library (`verification/rust`, `verification/stdcrates`), GUI and agent scripts |
+| `verification/` | in-system tests, C and C++ test programs (`verification/c`), Rust's on its standard library (`verification/rust`, `verification/stdcrates`), Linux's (`verification/linux`), GUI and agent scripts |
 | `automation/` | build automation, disk image creation, driving QEMU |
 | `documentation/` | documentation |

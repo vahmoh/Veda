@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "linux-compatibility"
+description = "Veda's Linux compatibility: runs Linux programs as they are, in foreign mode, carrying out their system calls with the POSIX layer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "source/lib.rs"
+
+[[bin]]
+name = "linux-compatibility"
+path = "source/main.rs"
+test = false
+
+[dependencies]
+abi = { workspace = true }
+elf = { workspace = true }
+runtime = { workspace = true, default-features = false }
+posix = { workspace = true, features = ["signal-entry"] }
+proto = { workspace = true }
+linux-raw-sys = { workspace = true }
+
+# The program's entry point, allocator and panic handler (`runtime`'s
+# `runtime` feature) on its target alone (the soft-float one): they would
+# clash with std's in the library's tests on the host ("Library crates" in
+# documentation/CODING.md).
+[target.'cfg(target_os = "none")'.dependencies]
+runtime = { workspace = true }
+
+[build-dependencies]
+build = { workspace = true }
+
+[lints]
+workspace = true

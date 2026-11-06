@@ -48,13 +48,38 @@ pub fn lock_owner() -> Result<Vec<u8>, isize> {
     Ok(secret)
 }
 
+/// The calling thread's working directory: the process's, or that of a
+/// child `vfork` made which has its own (`crate::own`).
 pub fn cwd() -> String {
-    let c = CWD.lock();
+    let own = crate::own::current();
+    let c = match own.as_ref().and_then(|o| o.cwd.as_ref()) {
+        Some(own) => own.lock(),
+        None => CWD.lock(),
+    };
     if c.is_empty() { String::from("/") } else { c.clone() }
 }
 
 pub fn set_cwd(dir: String) {
-    *CWD.lock() = dir;
+    match crate::own::current().as_ref().and_then(|o| o.cwd.as_ref()) {
+        Some(own) => *own.lock() = dir,
+        None => *CWD.lock() = dir,
+    }
+}
+
+/// The program's own path for `name` against the directory `dirfd`
+/// (`AT_FDCWD`: the working directory), in its namespace
+/// (`path::Namespace`): what it calls the file, as `/proc` is named.
+pub fn program_path_at(dirfd: i32, name: &[u8]) -> Result<String, isize> {
+    let base = if name.first() == Some(&b'/') {
+        String::from("/")
+    } else if dirfd == at::FDCWD {
+        cwd()
+    } else {
+        let desc = fd::get(dirfd)?;
+        let Object::Dir(d) = &desc.object else { return Err(ENOTDIR) };
+        d.path.clone()
+    };
+    path::resolve_program(&base, name)
 }
 
 /// Resolves `name` against the directory `dirfd` (`AT_FDCWD`: the working

@@ -67,6 +67,12 @@ pub mod role {
     pub const FD: u32 = 0x100;
     /// File descriptors that can be passed at startup.
     pub const MAX_FDS: u32 = 0x100;
+    /// The file of the Linux program that Veda's Linux compatibility, the
+    /// program started, is to run: a VMO of its bytes ([`linux`](super::linux)
+    /// says how many).
+    pub const PROGRAM: u32 = 20;
+    /// A VMO of what starts that Linux program ([`linux`](super::linux)).
+    pub const LAUNCH: u32 = 21;
     /// The second handle of file descriptor `n`, which has two (role
     /// `FD_EXTRA + n`): a network connection's channel to the network
     /// service, beside the socket its bytes go on.
@@ -215,12 +221,143 @@ impl Startup<'_> {
     }
 }
 
+/// What starts a Linux program (the VMO of role [`role::LAUNCH`]), which
+/// Veda's Linux compatibility, the program started in its place, reads:
+/// the length of its file (the VMO of role [`role::PROGRAM`]), its path,
+/// arguments and environment, as bytes, which need not be UTF-8 (the
+/// startup message's text cannot carry every byte a Linux program may be
+/// given).
+///
+/// ```text
+/// u32 magic = "VLNX", u32 version, u64 file length, u32 n_args, u32 n_env
+/// u32 len, bytes                    the program's path
+/// n_args x (u32 len, bytes)         its arguments, the first its name
+/// n_env  x (u32 len, bytes)         "KEY=VALUE"
+/// ```
+pub mod linux {
+    use super::{StartupError, u32_at};
+
+    /// `"VLNX"`
+    pub const MAGIC: u32 = u32::from_le_bytes(*b"VLNX");
+    pub const VERSION: u32 = 1;
+    /// The most bytes a launch holds: Linux's limit on the arguments and
+    /// environment (a quarter of the 8 MiB its stacks start with) and a
+    /// path.
+    pub const MAX_LEN: usize = (2 << 20) + 4096;
+
+    /// What a launch says.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct Launch<'s> {
+        pub file_len: u64,
+        pub path: &'s [u8],
+        pub args: &'s [&'s [u8]],
+        pub env: &'s [&'s [u8]],
+    }
+
+    impl Launch<'_> {
+        /// Serialises it into `out`.
+        pub fn encode(&self, out: &mut impl FnMut(&[u8])) {
+            out(&MAGIC.to_le_bytes());
+            out(&VERSION.to_le_bytes());
+            out(&self.file_len.to_le_bytes());
+            out(&(self.args.len() as u32).to_le_bytes());
+            out(&(self.env.len() as u32).to_le_bytes());
+            for s in [self.path].iter().chain(self.args).chain(self.env) {
+                out(&(s.len() as u32).to_le_bytes());
+                out(s);
+            }
+        }
+
+        /// The size of its encoding.
+        pub fn encoded_len(&self) -> usize {
+            24 + [self.path].iter().chain(self.args).chain(self.env).map(|s| 4 + s.len()).sum::<usize>()
+        }
+    }
+
+    /// A launch read back, checked whole.
+    #[derive(Debug, Clone, Copy)]
+    pub struct LaunchView<'a> {
+        data: &'a [u8],
+        pub file_len: u64,
+        n_args: usize,
+        n_env: usize,
+    }
+
+    /// The string at `off`, and where the next one starts.
+    fn bytes_at(d: &[u8], off: usize) -> Result<(&[u8], usize), StartupError> {
+        let len = u32_at(d, off)? as usize;
+        let end = (off + 4).checked_add(len).ok_or(StartupError::Truncated)?;
+        Ok((d.get(off + 4..end).ok_or(StartupError::Truncated)?, end))
+    }
+
+    impl<'a> LaunchView<'a> {
+        pub fn parse(data: &'a [u8]) -> Result<Self, StartupError> {
+            if u32_at(data, 0)? != MAGIC || u32_at(data, 4)? != VERSION {
+                return Err(StartupError::BadMagic);
+            }
+            let file_len = u64::from(u32_at(data, 8)?) | u64::from(u32_at(data, 12)?) << 32;
+            let (n_args, n_env) = (u32_at(data, 16)? as usize, u32_at(data, 20)? as usize);
+            let mut off = 24;
+            for _ in 0..n_args.checked_add(n_env).and_then(|n| n.checked_add(1)).ok_or(StartupError::Truncated)? {
+                off = bytes_at(data, off)?.1;
+            }
+            Ok(LaunchView { data, file_len, n_args, n_env })
+        }
+
+        fn strings(&self) -> impl Iterator<Item = &'a [u8]> + 'a {
+            let data = self.data;
+            let mut off = 24;
+            core::iter::from_fn(move || {
+                let (s, next) = bytes_at(data, off).ok()?;
+                off = next;
+                Some(s)
+            })
+        }
+
+        pub fn path(&self) -> &'a [u8] {
+            self.strings().next().unwrap_or_default()
+        }
+
+        pub fn args(&self) -> impl Iterator<Item = &'a [u8]> + 'a {
+            self.strings().skip(1).take(self.n_args)
+        }
+
+        pub fn env(&self) -> impl Iterator<Item = &'a [u8]> + 'a {
+            self.strings().skip(1 + self.n_args).take(self.n_env)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
     use std::vec::Vec;
 
     use super::*;
+
+    #[test]
+    fn linux_launches_round_trip() {
+        let launch = linux::Launch {
+            file_len: 0x1_0000_0042,
+            path: b"/home/user/a\xffb",
+            args: &[b"a\xffb", b"", b"--x"],
+            env: &[b"HOME=/home/user"],
+        };
+        let mut bytes = Vec::new();
+        launch.encode(&mut |b| bytes.extend_from_slice(b));
+        assert_eq!(bytes.len(), launch.encoded_len());
+        let v = linux::LaunchView::parse(&bytes).unwrap();
+        assert_eq!(v.file_len, 0x1_0000_0042);
+        assert_eq!(v.path(), launch.path);
+        assert_eq!(v.args().collect::<Vec<_>>(), launch.args);
+        assert_eq!(v.env().collect::<Vec<_>>(), launch.env);
+        for len in 0..bytes.len() {
+            assert!(linux::LaunchView::parse(&bytes[..len]).is_err(), "accepted {len} of {} bytes", bytes.len());
+        }
+        let mut huge = bytes.clone();
+        huge[16..20].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(linux::LaunchView::parse(&huge).is_err());
+    }
 
     fn encode(s: &Startup) -> Vec<u8> {
         let mut v = Vec::new();

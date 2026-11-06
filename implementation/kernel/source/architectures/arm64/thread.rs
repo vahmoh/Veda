@@ -189,6 +189,13 @@ impl Context {
         self.tls
     }
 
+    /// The thread pointer of the running thread, whose context this is, as
+    /// the processor has it: user code may have changed it since it was
+    /// set (`TPIDR_EL0` is its to write).
+    pub fn running_tls(&self) -> u64 {
+        read_register!("tpidr_el0")
+    }
+
     /// Sets the thread pointer of the running thread, whose context this
     /// is: `TPIDR_EL0`, through which it finds its thread-local storage.
     pub fn set_tls(&mut self, value: u64) {
@@ -196,6 +203,17 @@ impl Context {
         // SAFETY: a value for user code to use.
         unsafe { write_register!("tpidr_el0", value) };
     }
+}
+
+/// The thread pointer of user registers `state`: their `TPIDR_EL0`.
+pub fn tls_of(state: &abi::ThreadState) -> u64 {
+    state.tpidr
+}
+
+/// Whether user code can have `value` for its thread pointer: any, as
+/// `TPIDR_EL0` is its own to write.
+pub fn is_thread_pointer(_value: u64) -> bool {
+    true
 }
 
 /// Switches this CPU from the thread whose context is `prev` to the one

@@ -99,7 +99,19 @@ impl TrapFrame {
     /// stack, whose address it starts with. `Fault` if its stack cannot
     /// take them (it is left as it was).
     pub fn divert(&mut self, entry: u64, tls: u64) -> Result<(), abi::Error> {
-        let state = abi::ThreadState {
+        let state = self.registers(tls);
+        let at = abi::architecture::signal_frame(self.rsp as usize);
+        crate::memory::user::write(at as u64, &state)?;
+        self.rip = entry;
+        self.rsp = abi::entry_stack_pointer(at) as u64;
+        self.rdi = at as u64;
+        self.rflags = abi::architecture::INTERRUPT_FLAG;
+        Ok(())
+    }
+
+    /// The user registers trapped, with the thread pointer `tls`.
+    fn registers(&self, tls: u64) -> abi::ThreadState {
+        abi::ThreadState {
             rax: self.rax,
             rbx: self.rbx,
             rcx: self.rcx,
@@ -119,14 +131,20 @@ impl TrapFrame {
             rip: self.rip,
             rflags: self.rflags,
             fs_base: tls,
-        };
-        let at = abi::architecture::signal_frame(self.rsp as usize);
-        crate::memory::user::write(at as u64, &state)?;
-        self.rip = entry;
-        self.rsp = abi::entry_stack_pointer(at) as u64;
-        self.rdi = at as u64;
-        self.rflags = abi::architecture::INTERRUPT_FLAG;
-        Ok(())
+        }
+    }
+
+    /// What foreign code trapped here leaves its host
+    /// (`scheduler::foreign`): its registers, with its thread pointer
+    /// `tls`, and if it took an `exception`, which and where.
+    pub fn foreign_state(&self, tls: u64, exception: bool) -> abi::ForeignState {
+        let mut state = abi::ForeignState { registers: self.registers(tls), ..abi::ForeignState::default() };
+        if exception {
+            state.vector = self.vector;
+            state.error_code = self.error_code;
+            state.fault_address = self.page_fault().map_or(0, |f| f.address);
+        }
+        state
     }
 
     /// Resumes user registers `state` (`signal_return`), but its thread

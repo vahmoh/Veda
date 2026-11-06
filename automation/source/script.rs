@@ -94,6 +94,7 @@
 //! requires native-toolchain        # only with GCC in the image (the same)
 //! requires media                   # only with the media decoder (FFmpeg and dav1d, the same)
 //! requires rust-toolchain          # only with the Rust test programs (the same)
+//! requires linux-programs          # only with the Linux test programs (the driver VM's toolchain, `cargo automation linux`; AMD64)
 //! requires curl                    # only with curl (the same)
 //! requires web                     # only with the browser (`cargo automation web`); skipped otherwise
 //! requires python                  # only with Python (`cargo automation python`); skipped otherwise
@@ -220,6 +221,9 @@ pub enum Requirement {
     Web,
     /// Python.
     Python,
+    /// The Linux programs that test Linux compatibility, which Linux's
+    /// toolchains build (`automation::compatibility`).
+    LinuxPrograms,
     /// The machine's processors as fast as the build machine's, which QEMU
     /// runs them on, not emulated: the programs keep deadlines of their own
     /// (an application's start, as the agent waits for it; a call to the
@@ -236,7 +240,11 @@ impl Requirement {
             Requirement::NativeToolchain => Some("native toolchain"),
             Requirement::Media => Some("media libraries"),
             Requirement::RustToolchain => Some("rust toolchain"),
-            Requirement::Curl | Requirement::Web | Requirement::Python | Requirement::NativeSpeed => None,
+            Requirement::Curl
+            | Requirement::Web
+            | Requirement::Python
+            | Requirement::LinuxPrograms
+            | Requirement::NativeSpeed => None,
         }
     }
 }
@@ -868,6 +876,7 @@ impl Line {
                         "curl",
                         "web",
                         "python",
+                        "linux-programs",
                         "native-speed",
                     ],
                 )?;
@@ -878,6 +887,7 @@ impl Line {
                     "curl" => Requirement::Curl,
                     "web" => Requirement::Web,
                     "python" => Requirement::Python,
+                    "linux-programs" => Requirement::LinuxPrograms,
                     "native-speed" => Requirement::NativeSpeed,
                     _ => Requirement::RustToolchain,
                 });

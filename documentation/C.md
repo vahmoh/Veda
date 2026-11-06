@@ -231,10 +231,13 @@ program the Terminal runs.
   `ppoll`, `pselect` and `epoll_pwait` wait with the mask they give, as
   `sigsuspend` does. What the file system does for a program (a read or
   write of a file, an `open`, a name looked up) finishes first.
+- **A child's end** sends its parent `SIGCHLD`, as on Linux, saying which
+  child and how it ended (`si_pid`, `si_code` `CLD_EXITED` or
+  `CLD_KILLED`, `si_status`); a parent that ignores it (or asked for
+  `SA_NOCLDWAIT`) has no child to wait for once it has ended.
 - **Not Linux's**: nothing stops a process (`SIGSTOP`, `SIGTSTP`,
-  `SIGTTIN` and `SIGTTOU` do nothing, nor does `SIGCONT`); a child's end
-  sends its parent no `SIGCHLD` (`waitpid`, or a child's descriptor,
-  `pidfd_open`, says it); a pending real-time signal is pending once, as
+  `SIGTTIN` and `SIGTTOU` do nothing, nor does `SIGCONT`); a pending
+  real-time signal is pending once, as
   the others are, not queued, and the value `sigqueue` gives a signal
   reaches only the program itself; there is no signal stack (`sigaltstack`
   says none, and handlers run on the thread's stack); and a fault ends the

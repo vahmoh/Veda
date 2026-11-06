@@ -126,7 +126,7 @@ struct Timers {
 }
 
 const fn itimer(clock: Clock, signo: u32) -> Timer {
-    let info = Info { code: sig::SI_KERNEL, pid: 0, overrun: 0, value: 0 };
+    let info = Info { code: sig::SI_KERNEL, pid: 0, overrun: 0, value: 0, addr: None, status: None };
     let notify = Notify::Signal { signo, info, tid: None };
     Timer { clock, realtime: false, deadline: None, interval: 0, notify, overrun: 0 }
 }
@@ -347,7 +347,7 @@ pub unsafe fn timer_create(clk: u32, sev: usize, out: usize) -> SysResult {
     let id = (0..).find(|id| !t.posix.contains_key(id)).unwrap_or(0);
     let signal = |signo: i32, value: u64, tid: Option<i32>| {
         let signo = u32::try_from(signo).ok().filter(|&s| (1..sig::NSIG).contains(&s)).ok_or(EINVAL)?;
-        let info = Info { code: sig::SI_TIMER, pid: id, overrun: 0, value };
+        let info = Info { code: sig::SI_TIMER, pid: id, value, ..Info::default() };
         Ok::<Notify, isize>(Notify::Signal { signo, info, tid })
     };
     let notify = match ev {

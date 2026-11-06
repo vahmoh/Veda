@@ -33,6 +33,13 @@
 //! links the program with its libraries and starts it. Who starts such a
 //! program says how the dynamic linker's file is had
 //! ([`Spawn::dynamic_linker`]); no other is ever started.
+//!
+//! A Linux program (`elf::Kind::Linux`) runs on Veda's Linux
+//! compatibility ([`LINUX_COMPATIBILITY`]), a Veda program started in its
+//! place, given the program's file (`startup::role::PROGRAM`) and what
+//! starts it as bytes (`startup::linux`): it loads the program, its own
+//! dynamic linker too, into its process and runs it there. Who starts one
+//! says how that program's file is had ([`Spawn::linux_compatibility`]).
 
 use alloc::borrow::Cow;
 use alloc::string::String;
@@ -48,6 +55,10 @@ use crate::vm;
 
 /// Stack size of a Veda program's main thread.
 pub const MAIN_STACK: usize = 1 << 20;
+
+/// Veda's Linux compatibility: the program that runs a Linux program in
+/// its process (see the module's documentation).
+pub const LINUX_COMPATIBILITY: &str = "/system/bin/linux-compatibility";
 /// Stack size of a POSIX program's main thread (as Linux's default limit),
 /// unless the program asks for more.
 pub const POSIX_STACK: usize = 8 << 20;
@@ -92,6 +103,9 @@ pub enum SpawnError {
     /// A dynamically linked program whose dynamic linker could not be had
     /// ([`Spawn::dynamic_linker`]), or is not one.
     NoDynamicLinker,
+    /// A Linux program, whose Linux compatibility could not be had
+    /// ([`Spawn::linux_compatibility`]), or is not a Veda program.
+    NoLinuxCompatibility,
     Kernel(Error),
 }
 
@@ -114,6 +128,9 @@ impl core::fmt::Display for SpawnError {
             }
             SpawnError::NoDynamicLinker => {
                 write!(f, "linked dynamically, but the dynamic linker ({}) cannot be had", elf::INTERPRETER)
+            }
+            SpawnError::NoLinuxCompatibility => {
+                write!(f, "a Linux program, but Linux compatibility ({LINUX_COMPATIBILITY}) cannot be had")
             }
             SpawnError::Kernel(e) => write!(f, "{e}"),
         }
@@ -304,6 +321,16 @@ pub struct Spawn<'a> {
     /// program runs (as the system image's files cannot). `None` refuses
     /// programs linked dynamically ([`SpawnError::NoDynamicLinker`]).
     pub dynamic_linker: Option<&'a DynamicLinker<'a>>,
+    /// How Veda's Linux compatibility ([`LINUX_COMPATIBILITY`]) is had, if
+    /// the program is a Linux program, as the dynamic linker is
+    /// ([`DynamicLinker`]). `None` refuses Linux programs
+    /// ([`SpawnError::NoLinuxCompatibility`]).
+    pub linux_compatibility: Option<&'a DynamicLinker<'a>>,
+    /// The process to start the program in, made and not started, whose
+    /// id its creator has given out already (a child `vfork` made, whose
+    /// `execve` starts the program): `None` makes one ([`Spawn::accept`]
+    /// and [`Spawn::max_priority`] do not apply to one given).
+    pub process: Option<Process>,
 }
 
 impl<'a> Spawn<'a> {
@@ -321,6 +348,8 @@ impl<'a> Spawn<'a> {
             memory_class: None,
             signals_inherited: (0, 0),
             dynamic_linker: None,
+            linux_compatibility: None,
+            process: None,
         }
     }
 
@@ -379,6 +408,13 @@ impl<'a> Spawn<'a> {
         self
     }
 
+    /// How Veda's Linux compatibility is had, for a Linux program
+    /// ([`Spawn::linux_compatibility`](Self#structfield.linux_compatibility)).
+    pub fn linux_compatibility(mut self, get: &'a DynamicLinker<'a>) -> Self {
+        self.linux_compatibility = Some(get);
+        self
+    }
+
     /// Loads `image` (an ELF64 executable: a Veda program or a POSIX one)
     /// into a new process and starts it.
     pub fn start(self, image: &[u8]) -> Result<Process, SpawnError> {
@@ -412,23 +448,32 @@ impl<'a> Spawn<'a> {
             Kind::Veda => self.start_veda(&elf, file),
             Kind::OtherVeda => Err(SpawnError::Incompatible),
             Kind::Posix => self.start_posix(&elf, file),
+            Kind::Linux => self.start_linux(image, file),
         }
     }
 
-    fn create_process(&self) -> Result<(Process, Thread), SpawnError> {
+    fn create_process(&mut self) -> Result<(Process, Thread), SpawnError> {
         /// How many processes are made, at most, for one the caller accepts.
         const TRIES: usize = 4;
         let max_priority = self.max_priority.unwrap_or(0);
+        let mut given = self.process.take();
         for _ in 0..TRIES {
-            let h = call(nr::PROCESS_CREATE, [self.name.as_ptr() as usize, self.name.len(), max_priority, 0, 0, 0])?;
-            // SAFETY: fresh handle from the kernel.
-            let process = Process(unsafe { Handle::from_raw(h as u32) });
-            if let Some(accept) = self.accept
-                && !accept(process.0.koid())
-            {
-                // Never started: it goes with its handle.
-                continue;
-            }
+            let process = match given.take() {
+                Some(p) => p,
+                None => {
+                    let name = [self.name.as_ptr() as usize, self.name.len(), max_priority, 0, 0, 0];
+                    let h = call(nr::PROCESS_CREATE, name)?;
+                    // SAFETY: fresh handle from the kernel.
+                    let process = Process(unsafe { Handle::from_raw(h as u32) });
+                    if let Some(accept) = self.accept
+                        && !accept(process.0.koid())
+                    {
+                        // Never started: it goes with its handle.
+                        continue;
+                    }
+                    process
+                }
+            };
             if let Some(class) = self.memory_class {
                 set_memory_class(Some(&process), class)?;
             }
@@ -478,7 +523,7 @@ impl<'a> Spawn<'a> {
     /// Starts a Veda program: relocated where it is placed, its arguments
     /// and environment in its startup message. It is static: only POSIX
     /// programs are linked dynamically.
-    fn start_veda(self, elf: &Elf, file: Option<&Vmo>) -> Result<Process, SpawnError> {
+    fn start_veda(mut self, elf: &Elf, file: Option<&Vmo>) -> Result<Process, SpawnError> {
         if elf.interpreter().is_some() {
             return Err(SpawnError::BadElf(elf::ElfError::Dynamic));
         }
@@ -500,6 +545,55 @@ impl<'a> Spawn<'a> {
         let env: Vec<&str> = env.iter().map(|s| s.as_ref()).collect();
         let entry = elf.entry().wrapping_add(bias) as usize;
         self.launch(process, thread, entry, sp, &args, &env)
+    }
+
+    /// Starts a Linux program, `image` (the bytes of `file`, if it is
+    /// given): Veda's Linux compatibility, given the program's file and
+    /// what starts it ([`startup::linux`]), the startup message carrying
+    /// the working directory, the handles and what the program's POSIX
+    /// layer inherits, as a POSIX program's does.
+    fn start_linux(mut self, image: &[u8], file: Option<&Vmo>) -> Result<Process, SpawnError> {
+        let get = self.linux_compatibility.ok_or(SpawnError::NoLinuxCompatibility)?;
+        let (runner_file, runner_len) = get(LINUX_COMPATIBILITY).ok_or(SpawnError::NoLinuxCompatibility)?;
+        let launch = startup::linux::Launch {
+            file_len: image.len() as u64,
+            path: self.path.as_bytes(),
+            args: &self.args,
+            env: &self.env,
+        };
+        if launch.encoded_len() > startup::linux::MAX_LEN {
+            return Err(SpawnError::TooLarge);
+        }
+        let mut bytes = Vec::with_capacity(launch.encoded_len());
+        launch.encode(&mut |b| bytes.extend_from_slice(b));
+        let launch = Vmo::create(bytes.len())?;
+        launch.write(0, &bytes)?;
+        // The program's own bytes, or a copy of them.
+        let program = match file {
+            Some(file) => Vmo(file.0.duplicate(None)?),
+            None => {
+                let copy = Vmo::create(image.len().max(1))?;
+                copy.write(0, image)?;
+                copy
+            }
+        };
+        self.handles.push((startup::role::PROGRAM, program.0));
+        self.handles.push((startup::role::LAUNCH, launch.0));
+        // Its own startup message has what a POSIX program's has in place
+        // of its environment.
+        let name = self.name;
+        let inherited = core::mem::take(&mut self.inherited);
+        self.args = alloc::vec![name.as_bytes()];
+        self.env = inherited.iter().map(|s| s.as_bytes()).collect();
+        let map = vm::Mapping::new(Vmo(runner_file.0.duplicate(None)?), runner_len.max(1), map_flags::READ)?;
+        // SAFETY: a read-only mapping of the file, `runner_len` bytes, which
+        // lives until it is loaded; nothing changes the file.
+        let runner = unsafe { &map.as_slice()[..runner_len] };
+        let elf = Elf::parse(runner).map_err(|_| SpawnError::NoLinuxCompatibility)?;
+        if elf.kind() != Kind::Veda {
+            return Err(SpawnError::NoLinuxCompatibility);
+        }
+        self.start_veda(&elf, Some(&runner_file))
     }
 
     /// The system's dynamic linker, for a program that names it

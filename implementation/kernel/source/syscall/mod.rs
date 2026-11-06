@@ -30,16 +30,31 @@ fn ok(v: usize) -> SysResult {
 }
 
 /// Carries out the system call a thread made (from the architecture's
-/// entry code), returning its result in `frame`. Returns whether every
-/// register of `frame` is to be restored (`signal_return` set them), which
-/// only the return from a trap does.
+/// entry code), returning its result in `frame`; foreign code's goes back
+/// to its host instead ([`scheduler::foreign`]). Returns whether every
+/// register of `frame` is to be restored (`signal_return` set them, or
+/// the thread enters or leaves foreign code), which only the return from a
+/// trap does.
 pub fn syscall_dispatch(frame: &mut TrapFrame) -> bool {
     bkl::acquire();
     scheduler::entered_from_user();
+    // Foreign code's system calls are its host's to carry out.
+    if scheduler::foreign::active(&scheduler::current()) {
+        if !scheduler::foreign::leave(frame, scheduler::foreign::Stop::SystemCall) {
+            scheduler::exit_current();
+        }
+        scheduler::return_to_user_hook(frame);
+        bkl::release();
+        return true;
+    }
     let (n, a) = frame.syscall();
     let mut restore = false;
     let result = match n {
         nr::SIGNAL_RETURN => task::signal_return(frame, a[0], a[1]).map(|()| {
+            restore = true;
+            (0, None)
+        }),
+        nr::FOREIGN_RUN => scheduler::foreign::enter(frame, a[0], a[1]).map(|()| {
             restore = true;
             (0, None)
         }),

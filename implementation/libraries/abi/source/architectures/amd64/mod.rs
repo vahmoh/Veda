@@ -92,6 +92,26 @@ pub struct ThreadState {
     pub fs_base: u64,
 }
 
+/// A thread's foreign code (`foreign_run`, see the crate's "Foreign
+/// code"): the registers it runs from and leaves, and what made it leave.
+/// The x87, SSE and AVX registers are not in it: foreign code and its host
+/// share them, and a host that keeps the foreign code's (built without
+/// them) needs nothing done.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ForeignState {
+    /// Its registers, with its thread pointer (`fs_base`). A system call
+    /// leaves `rip` after the `syscall` instruction, and `rcx` and `r11`
+    /// as the instruction sets them (that address, and the flags).
+    pub registers: ThreadState,
+    /// The exception it took (`foreign_exit::EXCEPTION`): its vector...
+    pub vector: u64,
+    /// ... its error code (0 for those that have none) ...
+    pub error_code: u64,
+    /// ... and, for a page fault (14), the address it faulted at (`CR2`).
+    pub fault_address: u64,
+}
+
 /// Where an interrupted thread's [`ThreadState`] goes, its stack pointer
 /// being `sp` as it left user code: below the System V ABI's red zone,
 /// 64-byte aligned (see "Signal entry").
