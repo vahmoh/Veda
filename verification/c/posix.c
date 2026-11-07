@@ -1241,11 +1241,12 @@ static void *give_back(void *arg)
 /* fork (and vfork, which is fork here): a copy of this process, its memory
    its own (the heap, private and global memory: what either writes after
    the fork, the other does not see), but for shared memory, a memory
-   file's even once closed; its descriptors the same open files, pipes among
-   them (its end of one closing as it ends) and files, whose offset it
-   shares, and copies of its own of an eventfd and an epoll instance; its
-   handlers this process's, which it may signal. Copies made while another
-   thread allocates, whose heap and threads work. */
+   file's even once closed, and memory madvise wipes for it or keeps from
+   it; its descriptors the same open files, pipes among them (its end of
+   one closing as it ends) and files, whose offset it shares, and copies of
+   its own of an eventfd and an epoll instance; its handlers this
+   process's, which it may signal. Copies made while another thread
+   allocates, whose heap and threads work. */
 static void check_fork(void)
 {
 	fflush(stdout);
@@ -1375,23 +1376,49 @@ static void check_fork(void)
 		close(ep);
 
 	/* Memory wiped for the copy (MADV_WIPEONFORK, which random number
-	   generators count on to reseed there): the copy has zeros there, or
-	   the advice is refused, never the parent's bytes. */
-	char *wiped = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	   generators count on to reseed there): the copy has zeros there,
+	   never the parent's bytes, but where the advice was taken back
+	   (MADV_KEEPONFORK). Only private anonymous memory is wiped. */
+	char *wiped = mmap(0, 2 * 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (wiped != MAP_FAILED) {
 		wiped[0] = 42;
-		int advised = madvise(wiped, 4096, MADV_WIPEONFORK);
-		int why = errno;
+		wiped[4096] = 43;
+		int advised = !madvise(wiped, 2 * 4096, MADV_WIPEONFORK) && !madvise(wiped + 4096, 4096, MADV_KEEPONFORK);
 		pid = fork();
 		if (pid == 0)
-			_exit(wiped[0] == 0 ? 0 : wiped[0] == 42 ? 1 : 2);
+			_exit(wiped[0] == 42 ? 1 : wiped[0] != 0 ? 2 : wiped[4096] != 43 ? 3 : 0);
 		status = -1;
 		waited = pid > 0 ? waitpid(pid, &status, 0) : -1;
 		int code = waited == pid && WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-		CHECK("memory wiped for the copy, or the advice refused",
-		      (advised == 0 && code == 0) || (advised < 0 && why == EINVAL && code == 1),
-		      "madvise %d (errno %d), the copy's code %d", advised, why, code);
-		munmap(wiped, 4096);
+		CHECK("memory wiped for the copy", advised && code == 0 && wiped[0] == 42 && wiped[4096] == 43,
+		      "advised %d, the copy's code %d, this one's bytes %d %d", advised, code, wiped[0], wiped[4096]);
+		munmap(wiped, 2 * 4096);
+	}
+	int *common = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+	if (common != MAP_FAILED) {
+		int r = madvise(common, 4096, MADV_WIPEONFORK);
+		CHECK("shared memory is not wiped for the copy", r < 0 && errno == EINVAL, "madvise %d", r);
+		munmap(common, 4096);
+	}
+
+	/* Memory kept from the copy (MADV_DONTFORK): the copy has nothing
+	   mapped there, but where the advice was taken back (MADV_DOFORK). */
+	char *kept = mmap(0, 2 * 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (kept != MAP_FAILED) {
+		kept[0] = 44;
+		kept[4096] = 45;
+		int advised = !madvise(kept, 2 * 4096, MADV_DONTFORK) && !madvise(kept + 4096, 4096, MADV_DOFORK);
+		pid = fork();
+		if (pid == 0) {
+			int unmapped = mprotect(kept, 4096, PROT_READ) < 0 && errno == ENOMEM;
+			_exit(!unmapped ? 1 : kept[4096] != 45 ? 2 : 0);
+		}
+		status = -1;
+		waited = pid > 0 ? waitpid(pid, &status, 0) : -1;
+		int code = waited == pid && WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+		CHECK("memory kept from the copy", advised && code == 0 && kept[0] == 44,
+		      "advised %d, the copy's code %d, this one's byte %d", advised, code, kept[0]);
+		munmap(kept, 2 * 4096);
 	}
 
 	/* Handlers are the copy's too, and it may signal its parent. */

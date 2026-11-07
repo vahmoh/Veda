@@ -10,6 +10,11 @@
 //! reach nothing; it has one thread, and what this process gave up
 //! (`process_restrict`). What the call refuses changes nothing.
 //!
+//! What it has of a range is as `vm_inherit` said: nothing of a range kept
+//! from it, zeros where private memory was wiped for it, as its own copies
+//! have; it holds no frame of either, so that this process's writes there
+//! cost nothing, and what it unmaps there is free at once.
+//!
 //! The copy runs in the middle of this program: it touches neither the
 //! heap nor a lock another thread of this one may have held as it was
 //! made, and talks over a channel with system calls alone.
@@ -221,6 +226,196 @@ pub fn test_fork() -> TestResult {
     }
     result?;
     test_restrictions_inherited()
+}
+
+/// Pages of private memory that [`test_inherit`]'s copy has in each way
+/// (see [`Inherited`]), before the range wiped for it.
+const PAGES: usize = 6;
+/// The private memory wiped for [`test_inherit`]'s copy: enough to see
+/// what this process's writes there cost, and what unmapping it frees.
+const WIPED_LEN: usize = 16 << 20;
+
+/// Where [`test_inherit`]'s memory is.
+#[derive(Clone, Copy)]
+struct Inherited {
+    /// Private memory: [`PAGES`] pages, each holding its number plus one,
+    /// copied, kept from the copy, wiped for it, wiped no more, kept no
+    /// more, and kept and wiped; then [`WIPED_LEN`] bytes of 7s, wiped.
+    private: usize,
+    /// A page mapped `SHARED`, its handle closed, kept from the copy.
+    shared: usize,
+    /// A page of private memory holding 9, then a page of a VMO holding
+    /// 10, both of which a call refused to wipe.
+    mixed: usize,
+    /// Three pages of private memory, but for the second, which a call
+    /// refused to keep from the copy: the others hold 13.
+    holed: usize,
+}
+
+impl Inherited {
+    fn page(&self, n: usize) -> usize {
+        self.private + n * PAGE
+    }
+
+    fn wiped(&self) -> usize {
+        self.page(PAGES)
+    }
+}
+
+/// Whether nothing is mapped at `at`: protecting it finds nothing.
+fn absent(at: usize) -> bool {
+    call(nr::VM_PROTECT, [0, at, PAGE, map_flags::READ, 0, 0]) == Err(Error::NotFound)
+}
+
+/// What [`test_inherit`]'s copy does: says on `ch` what it found of its
+/// memory, writes where it has zeros, then makes a copy of its own, which
+/// says on `next` whether it has zeros there again; then waits on `ch` to
+/// be told to end.
+fn inheriting(ch: RawHandle, next: RawHandle, m: Inherited) -> ! {
+    let mut found = 0;
+    if peek(m.page(0)) == 1 && peek(m.page(3)) == 4 && peek(m.page(4)) == 5 && peek(m.mixed + PAGE) == 10 {
+        found |= 1;
+    }
+    if absent(m.page(1)) && absent(m.page(5)) && absent(m.shared) {
+        found |= 2;
+    }
+    if peek(m.page(2)) == 0 && holds(m.wiped(), WIPED_LEN, 0) {
+        found |= 4;
+    }
+    if peek(m.mixed) == 9 && peek(m.holed) == 13 && peek(m.holed + 2 * PAGE) == 13 {
+        found |= 8;
+    }
+    if !send(ch, found) {
+        end(1);
+    }
+    poke(m.page(2), 11);
+    poke(m.wiped(), 11);
+    match runtime::process::fork(&[next]) {
+        Ok(Some(copy)) => {
+            if copy.0.wait(signals::TERMINATED, abi::DEADLINE_INFINITE).is_err() {
+                end(2);
+            }
+        }
+        Ok(None) => {
+            let wiped = peek(m.page(2)) == 0 && peek(m.wiped()) == 0 && peek(m.page(0)) == 1 && absent(m.page(1));
+            send(next, u32::from(wiped));
+            end(0)
+        }
+        Err(_) => end(3),
+    }
+    end(if receive(ch) == Some(0) { 0 } else { 4 })
+}
+
+/// What a copy has of memory as `vm_inherit` says (see the module's
+/// documentation), and what the call refuses.
+pub fn test_inherit() -> TestResult {
+    use abi::inherit_flags::{OMIT, ZERO};
+    let rw = map_flags::READ | map_flags::WRITE;
+    let private = vm::allocate(None, PAGES * PAGE + WIPED_LEN, 0, rw).map_err(s)?;
+    let vmo = Vmo::create(PAGE).map_err(s)?;
+    let shared = vm::map(None, &vmo, 0, PAGE, 0, rw | map_flags::SHARED).map_err(s)?;
+    drop(vmo);
+    let mixed = vm::allocate(None, 2 * PAGE, 0, rw).map_err(s)?;
+    let holed = vm::allocate(None, 3 * PAGE, 0, rw).map_err(s)?;
+    let m = Inherited { private, shared, mixed, holed };
+    let result = (|| {
+        for n in 0..PAGES {
+            poke(m.page(n), n as u8 + 1);
+        }
+        fill(m.wiped(), WIPED_LEN, 7);
+        poke(shared, 8);
+        vm::unmap(None, mixed + PAGE, PAGE).map_err(s)?;
+        let vmo = Vmo::create(PAGE).map_err(s)?;
+        vm::map(None, &vmo, 0, PAGE, mixed + PAGE, rw | map_flags::FIXED).map_err(s)?;
+        drop(vmo);
+        poke(mixed, 9);
+        poke(mixed + PAGE, 10);
+        vm::unmap(None, holed + PAGE, PAGE).map_err(s)?;
+        poke(holed, 13);
+        poke(holed + 2 * PAGE, 13);
+        let refused = [
+            (vm::inherit(None, shared, PAGE, ZERO, 0), Error::NotSupported, "wiping memory that is not private"),
+            (vm::inherit(None, mixed, 2 * PAGE, ZERO, 0), Error::NotSupported, "wiping a range not all private"),
+            (vm::inherit(None, holed, 3 * PAGE, OMIT, 0), Error::NotFound, "a range not all mapped"),
+            (vm::inherit(None, private, PAGE, 1 << 7, 0), Error::InvalidArgs, "an unknown flag"),
+            (vm::inherit(None, private, PAGE, OMIT, OMIT), Error::InvalidArgs, "a flag both set and cleared"),
+            (vm::inherit(None, private + 1, PAGE, OMIT, 0), Error::InvalidArgs, "a range from within a page"),
+            (vm::inherit(None, private, 0, OMIT, 0), Error::InvalidArgs, "an empty range"),
+        ];
+        for (got, expected, what) in refused {
+            check(got == Err(expected), &format!("{what} is refused: {got:?}"))?;
+        }
+        let changes = [
+            (m.page(1), PAGE, OMIT, 0),
+            (m.page(2), PAGE, ZERO, 0),
+            (m.page(3), PAGE, ZERO, 0),
+            (m.page(3), PAGE, 0, ZERO),
+            (m.page(4), PAGE, OMIT, 0),
+            (m.page(4), PAGE, 0, OMIT),
+            (m.page(5), PAGE, OMIT | ZERO, 0),
+            (m.wiped(), WIPED_LEN, ZERO, 0),
+            (shared, PAGE, OMIT, 0),
+        ];
+        for (at, len, set, clear) in changes {
+            vm::inherit(None, at, len, set, clear)
+                .map_err(|e| format!("vm_inherit {at:#x}+{len:#x} {set}/{clear}: {e}"))?;
+        }
+        // A part protected anew is still wiped for the copy.
+        let last = m.wiped() + WIPED_LEN - PAGE;
+        vm::protect(None, last, PAGE, map_flags::READ).map_err(s)?;
+        vm::protect(None, last, PAGE, rw).map_err(s)?;
+
+        let (mine, theirs) = Channel::create().map_err(s)?;
+        let (from_next, next) = Channel::create().map_err(s)?;
+        let child = match runtime::process::fork(&[theirs.raw(), next.raw()]) {
+            Ok(Some(child)) => child,
+            Ok(None) => inheriting(theirs.raw(), next.raw(), m),
+            Err(e) => return Err(format!("process_fork: {e}")),
+        };
+        // They are the copy's now.
+        let _ = theirs.0.into_raw();
+        let _ = next.0.into_raw();
+        let outcome = (|| {
+            let found = receive(mine.raw()).ok_or("the copy said nothing")?;
+            check(found & 1 != 0, "the copy has a copy of the rest of its memory")?;
+            check(found & 2 != 0, "the copy has nothing where memory was kept from it")?;
+            check(found & 4 != 0, "the copy has zeros where memory was wiped for it")?;
+            check(found & 8 != 0, "what the call refused changed nothing")?;
+            check(receive(from_next.raw()) == Some(1), "memory wiped for the copy is wiped for its own copy too")?;
+            let mine_still = (0..PAGES).all(|n| peek(m.page(n)) == n as u8 + 1);
+            check(
+                mine_still && holds(m.wiped(), WIPED_LEN, 7) && peek(shared) == 8,
+                "this process's memory is as it was",
+            )?;
+            let before = left();
+            fill(m.wiped(), WIPED_LEN, 12);
+            let taken = before.saturating_sub(left());
+            check(
+                taken < WIPED_LEN / 2,
+                &format!("writing memory wiped for the copy costs nothing ({} KiB taken)", taken >> 10),
+            )?;
+            // The copy holds none of it: unmapped here, it is free at once.
+            let before = left();
+            vm::unmap(None, m.wiped(), WIPED_LEN).map_err(s)?;
+            let freed = left().saturating_sub(before);
+            check(
+                freed >= WIPED_LEN / 2,
+                &format!("memory wiped for the copy is this process's alone ({} KiB freed)", freed >> 10),
+            )?;
+            check(send(mine.raw(), 0), "the copy told to end")?;
+            let ended = child.0.wait(signals::TERMINATED, runtime::time::now_ns() + 20_000_000_000).map_err(s)?;
+            let code = child.info().map_err(s)?.exit_code;
+            check(ended & signals::TERMINATED != 0 && code == 0, &format!("the copy ended well (code {code})"))
+        })();
+        let _ = child.kill();
+        outcome
+    })();
+    // What is left of it.
+    vm::unmap(None, private, PAGES * PAGE + WIPED_LEN).map_err(s)?;
+    vm::unmap(None, shared, PAGE).map_err(s)?;
+    vm::unmap(None, mixed, 2 * PAGE).map_err(s)?;
+    vm::unmap(None, holed, 3 * PAGE).map_err(s)?;
+    result
 }
 
 /// What a process gave up, its copies have given up: a copy of one that

@@ -121,7 +121,7 @@ pub mod clone {
     pub const SIGNAL: u64 = 0xff;
 }
 
-/// `mmap`'s and `mprotect`'s flags.
+/// `mmap`'s and `mprotect`'s flags, and `madvise`'s advice.
 pub mod mman {
     use linux_raw_sys::general as g;
 
@@ -142,6 +142,10 @@ pub mod mman {
     pub const MREMAP_MAYMOVE: u32 = g::MREMAP_MAYMOVE;
     pub const MREMAP_FIXED: u32 = g::MREMAP_FIXED;
     pub const MREMAP_DONTUNMAP: u32 = g::MREMAP_DONTUNMAP;
+    pub const MADV_DONTFORK: u32 = g::MADV_DONTFORK;
+    pub const MADV_DOFORK: u32 = g::MADV_DOFORK;
+    pub const MADV_WIPEONFORK: u32 = g::MADV_WIPEONFORK;
+    pub const MADV_KEEPONFORK: u32 = g::MADV_KEEPONFORK;
 }
 
 /// Call numbers of Linux's system calls that Linux compatibility carries

@@ -106,7 +106,7 @@ which calls into it.
 | `epoll` | A kernel port per instance: a wait costs what changed, however many descriptors are registered. Level-triggered, edge-triggered (as on Linux; each write to an eventfd is an event) and one-shot |
 | `eventfd`, `pidfd_open` | A counter with an event (`EFD_SEMAPHORE`, `EFD_NONBLOCK`); the child's process handle, readable once it has ended (how tokio waits for children) |
 | `timerfd` | On the monotonic, real-time and boot clocks, one-shot or periodic, absolute or relative (`TFD_TIMER_ABSTIME`): a count of expirations to read, and an event that `poll` and `epoll` wait on, which a thread of the layer signals as timers expire |
-| `mmap`, `mprotect`, `munmap`, `madvise` | Private anonymous memory is the kernel's, its pages freed once unmapped (in part too) or dropped with `MADV_DONTNEED`; files are mapped as copies, read-only if shared, but a mapping of a file of `/system` that does not write it is the system image's own pages, shared with every process that maps them and never writable; any part of a mapping can be protected or unmapped |
+| `mmap`, `mprotect`, `munmap`, `madvise` | Private anonymous memory is the kernel's, its pages freed once unmapped (in part too) or dropped with `MADV_DONTNEED`; files are mapped as copies, read-only if shared, but a mapping of a file of `/system` that does not write it is the system image's own pages, shared with every process that maps them and never writable; any part of a mapping can be protected or unmapped, kept from a child `fork` makes (`MADV_DONTFORK`) or wiped for it (`MADV_WIPEONFORK`, private anonymous memory alone) |
 | Memory files (`memfd_create`) | A VMO: shared mappings are the memory itself, in every process the descriptor goes to (over Unix domain sockets, or to the programs a program starts); `ftruncate` and writes grow it; seals that fix its size (`F_SEAL_SHRINK`, `F_SEAL_GROW`, `F_SEAL_SEAL`, and `F_SEAL_EXEC` with `MFD_NOEXEC_SEAL`); `/dev/fd/N` opened read-only gives a descriptor whose handle cannot write the memory, nor can any process it goes to |
 | Shared memory (`shm_open`, `shm_unlink`) | An object of the VFS's `/dev/shm`: memory with a name, which every process opens by it (or is given its descriptor). A shared mapping is the memory itself, writable if the descriptor is; reads and writes are the memory too, and `ftruncate` and writes size it, to the byte. It lasts while it has a name or something has it open, its memory while a mapping does; it is never kept on the home disk |
 | Semaphores (`sem_init`, `sem_open`) | The C library's, on futexes: one for the program's threads, or one that processes share in memory they map (`sem_init` with `pshared`, in a memory file or a shared memory object), whose futex, the word in that memory, is theirs wherever it is mapped (as for the process-shared locks, conditions and barriers of `PTHREAD_PROCESS_SHARED`). A named one (`sem_open`, `sem_unlink`) is in a shared memory object of its own, which the C library makes, then links to its name, ready |
@@ -226,11 +226,15 @@ program the Terminal runs.
   The C library holds its own state still meanwhile (`pthread_atfork`'s
   handlers run), and the POSIX layer its own, so that the child of a
   program with threads finds them whole: it may allocate and start
-  threads of its own. A child has all the process's memory: keeping a
-  range from it (`MADV_DONTFORK`) or wiping one for it (`MADV_WIPEONFORK`,
-  which some generators of random numbers count on to reseed in the
-  child) is refused (`EINVAL`), so that a program knows to tell the child
-  otherwise.
+  threads of its own. `madvise` keeps a range from the child
+  (`MADV_DONTFORK`, until `MADV_DOFORK`): nothing is mapped there in the
+  child. It wipes one of private anonymous memory for the child
+  (`MADV_WIPEONFORK`, until `MADV_KEEPONFORK`), as generators of random
+  numbers ask so as to reseed in the child: the child has zeros there,
+  never the parent's bytes, and so do its own children. Shared memory
+  cannot be wiped (`EINVAL`, as on Linux). The kernel keeps account of
+  both (`vm_inherit`), a range at a time: what is kept or wiped stays so
+  in the parts of a mapping that `mprotect` or `munmap` leave.
 - **Signals** are Linux's. They come from the program itself (`raise`,
   `abort`, `SIGPIPE`, `kill` of its own process), from its threads
   (`pthread_kill`, `tgkill`, the C library's for `pthread_cancel`,
@@ -389,7 +393,7 @@ licences ([Licensing](LICENSING.md)), whose texts the image carries in
   (threads' CPU time too) and the time
   zone, signals, `posix_spawn`, `fork` (the child's memory its own but
   for shared memory, pipes, files' offsets, an `eventfd` and an `epoll`
-  instance in the child, memory wiped for it or the advice refused,
+  instance in the child, memory wiped for it and memory kept from it,
   handlers, children made while another thread allocates), the network
   (binding TCP ports, ports
   shared by IPv4 and IPv6-only sockets, and the host's servers through

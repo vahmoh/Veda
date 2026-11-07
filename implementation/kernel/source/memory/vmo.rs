@@ -171,11 +171,12 @@ impl Vmo {
     }
 
     /// A copy of the VMO for a process `process_fork` makes: of the same
-    /// size, its committed pages the same frames, which neither writes in
-    /// place from now on. `None` for a VMO that cannot be so copied
-    /// ([`Vmo::copyable`]), or if there is no memory for the frames'
-    /// counts (nothing is shared then).
-    pub fn fork_copy(&self) -> Option<Arc<Vmo>> {
+    /// size, its committed pages in `parts` (each from an offset to
+    /// another, which may overlap) the same frames, which neither writes in
+    /// place from now on; elsewhere it has none, and reads as zeros.
+    /// `None` for a VMO that cannot be so copied ([`Vmo::copyable`]), or if
+    /// there is no memory for the frames' counts (nothing is shared then).
+    pub fn fork_copy(&self, parts: impl Iterator<Item = (u64, u64)>) -> Option<Arc<Vmo>> {
         if !self.copyable() {
             return None;
         }
@@ -185,13 +186,19 @@ impl Vmo {
         {
             let pages = self.pages.lock();
             let mut theirs = copy.pages.lock();
-            for (&page, &frame) in pages.iter() {
-                if !cow::share(frame) {
-                    // The frames shared so far are let go with the copy.
-                    drop(theirs);
-                    return None;
+            for (from, to) in parts.filter(|(from, to)| from < to) {
+                for (&page, &frame) in pages.range(from / PAGE_SIZE..to.div_ceil(PAGE_SIZE)) {
+                    // A page of parts that overlap is shared once.
+                    if theirs.contains_key(&page) {
+                        continue;
+                    }
+                    if !cow::share(frame) {
+                        // The frames shared so far are let go with the copy.
+                        drop(theirs);
+                        return None;
+                    }
+                    theirs.insert(page, frame);
                 }
-                theirs.insert(page, frame);
             }
             copy.committed.store(theirs.len() as u64 * PAGE_SIZE, Ordering::Relaxed);
         }

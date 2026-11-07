@@ -302,8 +302,8 @@ pub fn fork(t: &mut Task, flags: u64, parent_tid: u64, child_tid: u64, pidfd: u6
 /// In the process [`fork`] made: the calling thread, `t`, is its one
 /// thread, its main one, whose id is the process's; the tasks of the
 /// threads it does not have are forgotten (their memory is the original's
-/// copy), and as on Linux its robust futex list is gone (the C libraries
-/// set it again).
+/// copy), and so are the areas it was not given (`MADV_DONTFORK`); as on
+/// Linux its robust futex list is gone (the C libraries set it again).
 fn forked(t: &mut Task) {
     LIVE.store(1, Ordering::Release);
     STOPPING.store(false, Ordering::Release);
@@ -311,6 +311,7 @@ fn forked(t: &mut Task) {
     // original's other threads are forgotten, not dropped.
     unsafe { ENDED.reset_after_fork(Vec::new()) };
     crate::exec::forked();
+    crate::memory::forked();
     t.tid = posix::host::pid();
     t.robust_list = (0, 0);
     t.restart = None;

@@ -869,7 +869,7 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 56] = [
+    let tests: [Test; 57] = [
         ("starved threads run", test_starved_threads_run),
         ("ipc primitives", test_ipc_primitives),
         ("short sleeps", test_short_sleeps),
@@ -889,6 +889,7 @@ fn main() -> i32 {
         ("memory protection", posix::test_memory_protection),
         ("private memory", posix::test_private_memory),
         ("copies of processes", fork::test_fork),
+        ("what copies have of memory", fork::test_inherit),
         ("unmapped memory on every processor", posix::test_unmapped_on_every_processor),
         ("memory barriers on every processor", posix::test_barrier_on_every_processor),
         ("clocks read in programs", posix::test_clocks),

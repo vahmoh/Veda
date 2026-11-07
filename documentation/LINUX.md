@@ -120,7 +120,7 @@ own (`crate::syscall`):
 | `fork`, `clone` and `clone3` without `CLONE_VM` | A copy of the process (below), which sends `SIGCHLD` as it ends: the ids written as asked (`CLONE_PARENT_SETTID` in the parent, `CLONE_CHILD_SETTID` in the child, `CLONE_CHILD_CLEARTID` cleared as its thread ends), and a pidfd (`CLONE_PIDFD`). Sharing what two processes cannot (`CLONE_FILES`, `CLONE_FS`, `CLONE_SIGHAND`, `CLONE_SETTLS`), another signal at its end, and `CLONE_VFORK` are refused (`EINVAL`) |
 | `execve`, `execveat` | A Linux program in place: the other threads end, the memory and the handlers go, the descriptors marked close-on-exec close. A program of Veda's runs in a process of its own, which this one waits for and ends as |
 | `rt_sigreturn`, `sigaltstack` | The registers, vector registers, mask and alternate stack a handler's frame holds |
-| `mmap`, `munmap`, `mprotect`, `mremap`, `madvise`, `brk` | The program's areas, which it alone changes: `MAP_FIXED` never replaces Linux compatibility's own memory, nor `madvise` gives it up |
+| `mmap`, `munmap`, `mprotect`, `mremap`, `madvise`, `brk` | The program's areas, which it alone changes: `MAP_FIXED` never replaces Linux compatibility's own memory, nor `madvise` gives it up or keeps it from a child |
 | `arch_prctl`, `set_robust_list` | The thread's own: its thread pointer, its robust futexes (released, `FUTEX_OWNER_DIED`, as it ends) |
 | `sendfile`, `copy_file_range` | A copy a read and a write at a time, with Linux's rules: the offsets move by what went, and `copy_file_range` is between regular files only, never onto an overlapping part of the same file |
 | `uname`, `personality`, `prctl`, `capget` | Linux's answers, those of a program without privileges |
@@ -158,15 +158,18 @@ which programs answer by mapping anew).
 its memory, the program's and Linux compatibility's alike, is the
 parent's as it was, each page one for both until either writes it, which
 then has a copy of its own (as Linux's copy-on-write has it), but for
-shared memory (`MAP_SHARED`), which both see. Its one thread is the one
-that forked, which goes on from the call there, its thread id the child's
+shared memory (`MAP_SHARED`), which both see, and for what `madvise`
+said, which an area keeps as `mremap` grows or moves it: the child has
+nothing of an area kept from it (`MADV_DONTFORK`), and zeros where one
+was wiped for it (`MADV_WIPEONFORK`). Its one thread is the one that
+forked, which goes on from the call there, its thread id the child's
 process id, its alternate signal stack its own, and its robust futex
 list none, as on Linux (the C libraries set it again). The POSIX layer
 gives the child what Linux's `fork` gives it of the rest, as for a C
 program ([C on Veda](C.md#processes-and-signals)): the same open files,
 pipes and sockets, the handlers and the mask, no pending signals, timers,
 record locks or children. The program's areas are the child's too, as
-`/proc/self/maps` lists them.
+`/proc/self/maps` lists them, but those kept from it.
 
 **Its files** are found in its tree ([A Linux root](#a-linux-root)): the
 POSIX layer resolves the program's names in it (`path::Namespace`), `..`
@@ -207,7 +210,7 @@ process's handles allow, as a program of Veda's.
 
 | Area | On Veda |
 |------|---------|
-| `fork` | The child's descriptions are its own copies, as a program's that another starts are: their status flags (`O_NONBLOCK`) change on one side only, and an `eventfd`, a `timerfd` or an `epoll` instance is the child's own copy, not one both share. The child has all the process's memory: `MADV_DONTFORK` and `MADV_WIPEONFORK` are refused (`EINVAL`), which the C libraries' and cryptography libraries' generators of random numbers take to mean they must detect the child otherwise. A child that `vfork` made cannot `fork` (`ENOSYS`) |
+| `fork` | The child's descriptions are its own copies, as a program's that another starts are: their status flags (`O_NONBLOCK`) change on one side only, and an `eventfd`, a `timerfd` or an `epoll` instance is the child's own copy, not one both share. A child that `vfork` made cannot `fork` (`ENOSYS`) |
 | Symbolic links | None in Veda's files: a Linux root has copies in their place, and `symlink` fails (`EPERM`) |
 | Processors | x86-64 programs (`x86_64`), on AMD64: not 32-bit x86 ones, nor ARM64's yet |
 | Kernel interfaces | No `io_uring`, `inotify`, `signalfd`, System V IPC (`shmget`, `semget`, `msgget`), `ptrace`, `seccomp`, namespaces, `perf_event_open` or eBPF: each fails (`ENOSYS`, or `EPERM` where Linux would refuse it), said once in the system log |
@@ -257,7 +260,8 @@ vDSO.
   futexes, starting programs (`posix_spawn` with a file action, `vfork`,
   `SIGCHLD`), `fork` (the child's memory its own but for shared memory,
   `waitpid`, pipes and a file's offset shared, the handlers, memory wiped
-  for the child or the advice refused (`MADV_WIPEONFORK`), `fork` and
+  for the child (`MADV_WIPEONFORK`) and memory kept from it
+  (`MADV_DONTFORK`), which its `/proc/self/maps` does not list, `fork` and
   `exec`, children made while another thread allocates, `clone` with
   `SIGCHLD`) and, run again with `exec`, `execve` in place; the Rust program checks the standard library (threads, files,
   time, a panic unwound, memory, TCP on the loopback interface, `Command`).

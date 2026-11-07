@@ -52,6 +52,15 @@ pub fn protect(process: Option<&Process>, addr: usize, len: usize, flags: usize)
     call(nr::VM_PROTECT, [p as usize, addr, len, flags, 0, 0]).map(|_| ())
 }
 
+/// Changes what a copy of `process` (or of the caller) that
+/// [`fork`](crate::process::fork) makes has of `[addr, addr+len)`, which
+/// must be mapped completely: the [`abi::inherit_flags`] of `set` are set,
+/// those of `clear` cleared (`abi::nr::VM_INHERIT`).
+pub fn inherit(process: Option<&Process>, addr: usize, len: usize, set: usize, clear: usize) -> Result<(), Error> {
+    let p = process.map(|p| p.raw()).unwrap_or(abi::INVALID_HANDLE);
+    call(nr::VM_INHERIT, [p as usize, addr, len, set, clear, 0]).map(|_| ())
+}
+
 /// Has every processor running a thread of this process go through a full
 /// memory barrier before it returns (`abi::nr::VM_BARRIER`).
 pub fn barrier() -> Result<(), Error> {

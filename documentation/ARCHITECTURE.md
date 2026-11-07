@@ -178,7 +178,14 @@ key, and **Install Veda** does nothing yet. A disk's system has no menu.
   it to the copy (`TRANSFER`), and is not there otherwise, so that a copy
   has no memory its parent could not have given it; POSIX's shared
   mappings, whose handles are closed, say they are shared
-  (`map_flags::SHARED`). The copy's handle table has the caller's names,
+  (`map_flags::SHARED`). A process may keep a range from its copies
+  (`vm_inherit`, for `madvise`'s `MADV_DONTFORK`), which have nothing
+  mapped there, or wipe one of private memory for them
+  (`MADV_WIPEONFORK`), which they have as new zero-filled memory, wiped
+  for their own copies too; either stays with its range as mappings are
+  split, as on Linux. A copy holds no frame of either: a VMO copied for it
+  has only the frames its mappings reach, so that the parent's stay its
+  own, written in place. The copy's handle table has the caller's names,
   none of which reaches anything but the handles the caller names, which
   move to it under the same names, so that what its memory says of them
   holds there. It has what the caller gave up (`process_restrict`), its
@@ -1162,7 +1169,7 @@ the actions every `ui` application offers over the `agentapp` protocol
   a process unmaps gone at once for its threads on every processor),
   copies of processes (copy-on-write: each side's writes its own, shared
   memory shared, a copy costing memory only as it is written, the handles
-  that move to it), the
+  that move to it, memory kept from it or wiped for it), the
   clocks programs read themselves, the file system, the launcher and what
   it lets an application do (an application spinning on every processor,
   as high as it may, while the services must go on answering), crash

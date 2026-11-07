@@ -17,12 +17,18 @@
 //! is read and written for it only where it has an area that allows the
 //! access ([`accessible`]): a bad pointer in a system call is `EFAULT`, a
 //! signal frame for a stack that has run out is a fault, as on Linux.
+//!
+//! What a child `fork` makes has of an area (`MADV_DONTFORK`,
+//! `MADV_WIPEONFORK`) is the kernel's to say (`vm_inherit`), and an area
+//! keeps account of it too: an area the child does not have is not its
+//! own there ([`forked`]), and memory that takes an area's place
+//! (`mremap`'s) is told the same.
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use abi::map_flags;
+use abi::{inherit_flags, map_flags};
 use runtime::sync::Mutex;
 use runtime::vm;
 
@@ -54,6 +60,9 @@ pub struct Area {
     /// `PROT_READ`, `PROT_WRITE` and `PROT_EXEC`.
     pub prot: u32,
     pub kind: Kind,
+    /// What a child `fork` makes has of it, the kernel's `inherit_flags`:
+    /// `OMIT` (`MADV_DONTFORK`), `ZERO` (`MADV_WIPEONFORK`).
+    pub inherit: usize,
 }
 
 /// The program's areas, by where they start, and its program break.
@@ -90,6 +99,28 @@ impl Map {
                 self.areas.insert(end, Area { end: a.end, ..a });
             }
         }
+    }
+
+    /// Changes the program's areas' pieces in `[start, end)` as `change`
+    /// says, splitting the areas at its ends.
+    fn change(&mut self, start: u64, end: u64, change: impl Fn(&mut Area)) {
+        let pieces: Vec<(u64, Area)> = self
+            .areas
+            .range(..end)
+            .filter(|(_, a)| a.end > start)
+            .map(|(s, a)| ((*s).max(start), Area { end: a.end.min(end), ..a.clone() }))
+            .collect();
+        self.cut(start, end);
+        for (s, mut a) in pieces {
+            change(&mut a);
+            self.areas.insert(s, a);
+        }
+    }
+
+    /// In a child `fork` made: the areas the kernel left out of it are
+    /// gone.
+    fn forked(&mut self) {
+        self.areas.retain(|_, a| a.inherit & inherit_flags::OMIT == 0);
     }
 
     /// The program's areas' pieces in `[start, end)`.
@@ -140,10 +171,20 @@ impl Map {
 
 /// Notes a new area `[start, start + len)`, in place of any it covers.
 pub fn record(start: u64, len: u64, prot: u32, kind: Kind) {
-    let end = start + len;
+    put(start, Area { end: start + len, prot, kind, inherit: 0 });
+}
+
+/// Notes `area`, from `start`, in place of any it covers.
+fn put(start: u64, area: Area) {
     let mut map = MAP.lock();
-    map.cut(start, end);
-    map.areas.insert(start, Area { end, prot, kind });
+    map.cut(start, area.end);
+    map.areas.insert(start, area);
+}
+
+/// In a child `fork` made, whose memory has no area the kernel left out of
+/// it (`MADV_DONTFORK`): nor has the program.
+pub fn forked() {
+    MAP.lock().forked();
 }
 
 /// Forgets every area, as `execve` leaves none: unmapping each.
@@ -217,10 +258,16 @@ pub fn brk(to: u64) -> isize {
             return now as isize;
         }
         map.cut(old_top, new_top);
-        // One area for the whole break, as Linux keeps it.
-        let begin = map.areas.range(..=old_top).next_back().filter(|(_, a)| a.kind == Kind::Heap && a.end == old_top);
+        // One area for the whole break, as Linux keeps it, but after one
+        // kept from a child or wiped for it: the new memory is neither, as
+        // on Linux.
+        let begin = map
+            .areas
+            .range(..=old_top)
+            .next_back()
+            .filter(|(_, a)| a.kind == Kind::Heap && a.end == old_top && a.inherit == 0);
         let first = begin.map_or(old_top, |(s, _)| *s);
-        map.areas.insert(first, Area { end: new_top, prot: PROT_READ | PROT_WRITE, kind: Kind::Heap });
+        map.areas.insert(first, Area { end: new_top, prot: PROT_READ | PROT_WRITE, kind: Kind::Heap, inherit: 0 });
     } else if new_top < old_top {
         // The program's areas there go: only they, as Linux
         // compatibility's own memory may be where the program unmapped
@@ -302,8 +349,9 @@ pub fn munmap(addr: u64, len: u64) -> Result<u64, isize> {
 
 /// `madvise`: the POSIX layer's, for a range the program's areas cover
 /// whole (`ENOMEM` otherwise, as Linux says of a range not mapped), so
-/// that the memory it gives up (`MADV_DONTNEED`) is only ever the
-/// program's.
+/// that the memory it gives up (`MADV_DONTNEED`), or keeps from a child
+/// (`MADV_DONTFORK`), is only ever the program's. The areas keep account
+/// of what a child has of them.
 pub fn madvise(addr: u64, len: u64, advice: u32) -> Result<usize, isize> {
     if !addr.is_multiple_of(PAGE) {
         return Err(EINVAL);
@@ -312,13 +360,22 @@ pub fn madvise(addr: u64, len: u64, advice: u32) -> Result<usize, isize> {
     if end == addr {
         return Ok(0);
     }
-    let map = MAP.lock();
+    let mut map = MAP.lock();
     if !map.covers(addr, end) {
         return Err(ENOMEM);
     }
     // SAFETY: the program's arguments, for its own areas, which stay its
     // own meanwhile.
-    unsafe { posix::host::syscall(nr::MADVISE, [addr as usize, len as usize, advice as usize, 0, 0, 0]) }
+    let done = unsafe { posix::host::syscall(nr::MADVISE, [addr as usize, len as usize, advice as usize, 0, 0, 0]) }?;
+    let (set, clear) = match advice {
+        MADV_DONTFORK => (inherit_flags::OMIT, 0),
+        MADV_DOFORK => (0, inherit_flags::OMIT),
+        MADV_WIPEONFORK => (inherit_flags::ZERO, 0),
+        MADV_KEEPONFORK => (0, inherit_flags::ZERO),
+        _ => return Ok(done),
+    };
+    map.change(addr, end, |a| a.inherit = (a.inherit & !clear) | set);
+    Ok(done)
 }
 
 /// `mprotect`: the range must be the program's areas, whole (`ENOMEM`
@@ -340,17 +397,22 @@ pub fn mprotect(addr: u64, len: u64, prot: u32) -> Result<u64, isize> {
         abi::Error::AccessDenied => EACCES,
         _ => ENOMEM,
     })?;
-    let pieces: Vec<(u64, Area)> = map
-        .areas
-        .range(..end)
-        .filter(|(_, a)| a.end > addr)
-        .map(|(s, a)| ((*s).max(addr), Area { end: a.end.min(end), prot, kind: a.kind.clone() }))
-        .collect();
-    map.cut(addr, end);
-    for (s, a) in pieces {
-        map.areas.insert(s, a);
-    }
+    map.change(addr, end, |a| a.prot = prot);
     Ok(0)
+}
+
+/// Has the kernel give a child `fork` makes what `inherit` says of memory
+/// `[at, at + len)`, new and private, which takes the place of an area's
+/// (`mremap`'s), as Linux's moves keep it. If it will not, the memory goes
+/// (`ENOMEM`).
+fn inherits(at: u64, len: u64, inherit: usize) -> Result<(), isize> {
+    if inherit == 0 {
+        return Ok(());
+    }
+    vm::inherit(None, at as usize, len as usize, inherit, 0).map_err(|_| {
+        let _ = vm::unmap(None, at as usize, len as usize);
+        ENOMEM
+    })
 }
 
 /// `mremap`: shrinks an area in place, grows one of anonymous memory in
@@ -359,7 +421,8 @@ pub fn mprotect(addr: u64, len: u64, prot: u32) -> Result<u64, isize> {
 /// kernel's own moves are not had. Only anonymous memory grows or moves:
 /// a copy of a file's pages or of shared memory would not be the file's,
 /// or the others', any more (`ENOMEM`, as when there is no room, which
-/// programs answer with a mapping of their own).
+/// programs answer with a mapping of their own). What a child has of the
+/// area (`MADV_DONTFORK`, `MADV_WIPEONFORK`) it has of the new memory too.
 pub fn mremap(old: u64, old_len: u64, new_len: u64, flags: u32, new_addr: u64) -> Result<u64, isize> {
     if !old.is_multiple_of(PAGE) || flags & !(MREMAP_MAYMOVE | MREMAP_FIXED | MREMAP_DONTUNMAP) != 0 {
         return Err(EINVAL);
@@ -394,9 +457,10 @@ pub fn mremap(old: u64, old_len: u64, new_len: u64, flags: u32, new_addr: u64) -
         }
         // Anonymous memory grows in place where the pages after it are free.
         if anonymous && area.kind != Kind::Stack {
-            let grow = (new_len - old_len) as usize;
-            if vm::allocate(None, grow, old_end as usize, flags_of(area.prot) | map_flags::FIXED).is_ok() {
-                record(old_end, grow as u64, area.prot, area.kind);
+            let grow = new_len - old_len;
+            if vm::allocate(None, grow as usize, old_end as usize, flags_of(area.prot) | map_flags::FIXED).is_ok() {
+                inherits(old_end, grow, area.inherit)?;
+                put(old_end, Area { end: old_end + grow, ..area });
                 return Ok(old);
             }
         }
@@ -425,6 +489,7 @@ pub fn mremap(old: u64, old_len: u64, new_len: u64, flags: u32, new_addr: u64) -
     let fixed = if placement != 0 { map_flags::FIXED } else { 0 };
     let rw = map_flags::READ | map_flags::WRITE;
     let at = vm::allocate(None, new_len as usize, placement, rw | fixed).map_err(|_| ENOMEM)? as u64;
+    inherits(at, new_len, area.inherit)?;
     // What the program cannot read is read all the same: it is its memory,
     // which goes with it.
     let unreadable = area.prot & PROT_READ == 0;
@@ -437,7 +502,7 @@ pub fn mremap(old: u64, old_len: u64, new_len: u64, flags: u32, new_addr: u64) -
     if area.prot != PROT_READ | PROT_WRITE {
         let _ = vm::protect(None, at as usize, new_len as usize, flags_of(area.prot));
     }
-    record(at, new_len, area.prot, area.kind);
+    put(at, Area { end: at + new_len, ..area.clone() });
     if flags & MREMAP_DONTUNMAP == 0 {
         unmap_own(old, old_end);
     } else {
@@ -457,9 +522,32 @@ mod tests {
     fn map(areas: &[(u64, u64)]) -> Map {
         let mut m = Map { areas: BTreeMap::new(), brk: (0, 0) };
         for &(s, e) in areas {
-            m.areas.insert(s, Area { end: e, prot: PROT_READ, kind: Kind::Mapped { anonymous: true, shared: false } });
+            let kind = Kind::Mapped { anonymous: true, shared: false };
+            m.areas.insert(s, Area { end: e, prot: PROT_READ, kind, inherit: 0 });
         }
         m
+    }
+
+    #[test]
+    fn changing_splits_the_areas_it_reaches() {
+        let mut m = map(&[(0x1000, 0x5000), (0x6000, 0x8000)]);
+        m.change(0x2000, 0x7000, |a| a.prot = PROT_READ | PROT_WRITE);
+        let left: Vec<(u64, u64, u32)> = m.areas.iter().map(|(s, a)| (*s, a.end, a.prot)).collect();
+        let rw = PROT_READ | PROT_WRITE;
+        assert_eq!(
+            left,
+            [(0x1000, 0x2000, PROT_READ), (0x2000, 0x5000, rw), (0x6000, 0x7000, rw), (0x7000, 0x8000, PROT_READ)]
+        );
+    }
+
+    #[test]
+    fn a_child_has_no_area_kept_from_it() {
+        let mut m = map(&[(0x1000, 0x5000), (0x6000, 0x8000)]);
+        m.change(0x2000, 0x3000, |a| a.inherit |= inherit_flags::OMIT);
+        m.change(0x6000, 0x8000, |a| a.inherit |= inherit_flags::ZERO);
+        m.forked();
+        let left: Vec<(u64, u64)> = m.areas.iter().map(|(s, a)| (*s, a.end)).collect();
+        assert_eq!(left, [(0x1000, 0x2000), (0x3000, 0x5000), (0x6000, 0x8000)]);
     }
 
     #[test]

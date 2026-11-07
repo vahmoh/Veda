@@ -15,13 +15,16 @@
 //! Either way `munmap` and `mprotect` are plain kernel calls on address
 //! ranges. A process `fork` makes has a copy of a private mapping (the
 //! kernel's, copy-on-write) and the memory of a shared one itself, which
-//! the kernel is told of each (`map_flags::SHARED`). A file mapping is a private copy of the file's bytes: changes
-//! are never written back, so shared writable file mappings are refused,
-//! and a shared one is mapped through a handle without the right to write,
-//! so that `mprotect` cannot make it writable either (`EACCES`). A mapping
-//! that does not write a file of the system image is the image's own pages
-//! instead (shared by everyone who maps them, as programs run from them),
-//! which `mprotect` cannot make writable either, private or not.
+//! the kernel is told of each (`map_flags::SHARED`), but for what `madvise`
+//! keeps from it or wipes for it, which the kernel keeps account of too
+//! (`vm_inherit`). A file mapping is a private copy of the file's bytes:
+//! changes are never written back, so shared writable file mappings are
+//! refused, and a shared one is mapped through a handle without the right
+//! to write, so that `mprotect` cannot make it writable either (`EACCES`).
+//! A mapping that does not write a file of the system image is the image's
+//! own pages instead (shared by everyone who maps them, as programs run
+//! from them), which `mprotect` cannot make writable either, private or
+//! not.
 
 use abi::{Error, Rights, map_flags};
 use runtime::object::Vmo;
@@ -237,14 +240,16 @@ pub fn membarrier(cmd: u32, flags: u32) -> SysResult {
 /// `madvise`. Dropping pages (`MADV_DONTNEED`, `MADV_FREE`) frees them at
 /// once in private anonymous memory, which reads as zeros afterwards; other
 /// memory has nowhere to take its contents back from, so the advice is
-/// refused there (`EINVAL`, as on Linux where it cannot apply). A copy
-/// `fork` makes has all the process's memory: keeping a range from it
-/// (`MADV_DONTFORK`) or wiping one for it (`MADV_WIPEONFORK`) is refused
-/// (`EINVAL`, as Linux refuses advice it has not), so that a program that
-/// counts on the copy's having zeros there (a generator of random numbers
-/// that would reseed) knows to look for the copy otherwise. Other advice is
+/// refused there (`EINVAL`, as on Linux where it cannot apply). What a copy
+/// `fork` makes has of the range is the kernel's to say (`vm_inherit`):
+/// nothing (`MADV_DONTFORK`, until `MADV_DOFORK`), or zeros
+/// (`MADV_WIPEONFORK`, until `MADV_KEEPONFORK`), which a generator of random
+/// numbers counts on to reseed in the copy, for private anonymous memory
+/// alone (`EINVAL` otherwise, as on Linux). Advice for a range that is not
+/// mapped throughout is `ENOMEM`, and changes nothing. Other advice is
 /// taken as given.
 pub fn madvise(addr: usize, len: usize, advice: u32) -> SysResult {
+    use abi::inherit_flags::{OMIT, ZERO};
     if !addr.is_multiple_of(PAGE) {
         return Err(EINVAL);
     }
@@ -252,13 +257,20 @@ pub fn madvise(addr: usize, len: usize, advice: u32) -> SysResult {
     if len == 0 {
         return Ok(0);
     }
-    match advice {
-        MADV_DONTNEED | MADV_FREE => vm::decommit(None, addr, len).map(|()| 0).map_err(|e| match e {
+    let done = |r: Result<(), Error>| {
+        r.map(|()| 0).map_err(|e| match e {
             Error::NotFound => ENOMEM,
             Error::NotSupported => EINVAL,
             e => error::kernel(e),
-        }),
-        MADV_REMOVE | MADV_DONTFORK | MADV_WIPEONFORK => Err(EINVAL),
+        })
+    };
+    match advice {
+        MADV_DONTNEED | MADV_FREE => done(vm::decommit(None, addr, len)),
+        MADV_DONTFORK => done(vm::inherit(None, addr, len, OMIT, 0)),
+        MADV_DOFORK => done(vm::inherit(None, addr, len, 0, OMIT)),
+        MADV_WIPEONFORK => done(vm::inherit(None, addr, len, ZERO, 0)),
+        MADV_KEEPONFORK => done(vm::inherit(None, addr, len, 0, ZERO)),
+        MADV_REMOVE => Err(EINVAL),
         _ => Ok(0),
     }
 }

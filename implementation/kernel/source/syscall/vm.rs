@@ -3,7 +3,7 @@
 
 //! Memory objects and address-space management.
 
-use abi::{Error, RawHandle, Rights, cache_policy, dma_flags, map_flags, resource_kind, vmo_flags};
+use abi::{Error, RawHandle, Rights, cache_policy, dma_flags, inherit_flags, map_flags, resource_kind, vmo_flags};
 
 use super::{SysResult, get_resource, get_vmo, handle, insert, ok, target_process};
 use crate::capability::KObject;
@@ -230,7 +230,7 @@ pub fn vm_map(proc: RawHandle, vmo: RawHandle, offset: usize, len: usize, addr: 
         flags & map_flags::FIXED != 0,
         perms,
         max,
-        Inherit { shared, transferable },
+        Inherit::mapped(shared, transferable),
         flags & map_flags::COMMIT != 0,
     )?;
     ok(at as usize)
@@ -273,5 +273,17 @@ pub fn vm_protect(proc: RawHandle, addr: usize, len: usize, flags: usize) -> Sys
     let p = target_process(proc)?;
     executable_allowed(Perms::from_map_flags(flags))?;
     p.aspace().ok_or(Error::BadState)?.protect(addr as u64, len as u64, Perms::from_map_flags(flags))?;
+    ok(0)
+}
+
+/// `vm_inherit(process, addr, len, set, clear)`: what a process
+/// `process_fork` makes has of a range (see `abi::nr::VM_INHERIT`).
+pub fn vm_inherit(proc: RawHandle, addr: usize, len: usize, set: usize, clear: usize) -> SysResult {
+    let known = inherit_flags::OMIT | inherit_flags::ZERO;
+    if (set | clear) & !known != 0 || set & clear != 0 {
+        return Err(Error::InvalidArgs);
+    }
+    let p = target_process(proc)?;
+    p.aspace().ok_or(Error::BadState)?.inherit(addr as u64, len as u64, set, clear)?;
     ok(0)
 }

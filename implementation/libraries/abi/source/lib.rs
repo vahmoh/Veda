@@ -259,6 +259,15 @@ pub mod nr {
     /// libraries' dynamic linkers giving every thread a library's
     /// thread-local storage, garbage collectors, read-copy-update).
     pub const VM_BARRIER: usize = 55;
+    /// `vm_inherit(process, addr, len, set, clear)`: changes what a process
+    /// `process_fork` makes has of `[addr, addr+len)`, which must be mapped
+    /// completely (`NotFound`), splitting mappings at its ends as needed:
+    /// the [`inherit_flags`](crate::inherit_flags) of `set` are set there,
+    /// and those of `clear` cleared (`InvalidArgs` for one in both, or one
+    /// unknown). Setting [`ZERO`](crate::inherit_flags::ZERO) needs private
+    /// memory (`vm_allocate`'s) throughout (`NotSupported`). A call refused
+    /// changes nothing.
+    pub const VM_INHERIT: usize = 56;
 
     // --- processes and threads ----------------------------------------
     /// `process_create(name, name_len, max_priority) -> h`: a process whose
@@ -348,7 +357,12 @@ pub mod nr {
     /// * other memory (that a handle or another process reaches, physical
     ///   memory, `SHARED` mappings) is the same VMO, shared, if the handle
     ///   it was mapped with may be transferred (`TRANSFER`), as the caller
-    ///   could have given it the VMO; it is not there otherwise.
+    ///   could have given it the VMO; it is not there otherwise;
+    /// * but for what [`VM_INHERIT`] says: a range kept from the copy
+    ///   ([`inherit_flags::OMIT`](crate::inherit_flags::OMIT)) is not
+    ///   there, and one wiped for it ([`ZERO`](crate::inherit_flags::ZERO))
+    ///   is new zero-filled memory (wiped for its own copies too): the copy
+    ///   holds nothing of what either holds here.
     ///
     /// Its handle table has the caller's names, none of which reaches
     /// anything (each is closed), but the `count` names at `handles` (at
@@ -1152,6 +1166,21 @@ pub mod map_flags {
     /// reaches the VMO (whose handle is closed): without it, such memory is
     /// copied there. Needs a handle that may be transferred (`TRANSFER`).
     pub const SHARED: usize = 1 << 5;
+}
+
+/// Flags for `vm_inherit`: what a process `process_fork` makes has of a
+/// range of memory, in place of what `process_fork` says of the mapping it
+/// is in. Each stays with its range (a part of a mapping protected or
+/// unmapped keeps them), and the copy's mappings have them too.
+pub mod inherit_flags {
+    /// Nothing: nothing is mapped there in the copy, as Linux's
+    /// `MADV_DONTFORK` has it, [`ZERO`] or not.
+    pub const OMIT: usize = 1 << 0;
+    /// New zero-filled memory, as Linux's `MADV_WIPEONFORK` has it: never
+    /// what the range holds, such as a generator of random numbers' state,
+    /// which would otherwise repeat in the copy. For private memory
+    /// (`vm_allocate`'s) alone.
+    pub const ZERO: usize = 1 << 1;
 }
 
 /// Cache policies for physical VMOs.

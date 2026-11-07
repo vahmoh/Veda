@@ -8,8 +8,10 @@
 //! ([`AddressSpace::fork`]): memory that is its own is copied on write, a
 //! page at a time as either side first writes it (`super::cow`), and other
 //! memory is shared, as `fork` has a Unix process's private and shared
-//! mappings.
+//! mappings; a range may be kept from the copy, or wiped for it
+//! ([`AddressSpace::inherit`]), as Linux's `madvise` has it.
 
+use alloc::collections::btree_map::Entry;
 use alloc::collections::{BTreeMap, BTreeSet, LinkedList};
 use alloc::sync::Arc;
 
@@ -84,7 +86,8 @@ fn range_end(addr: u64, len: u64) -> Result<u64, Error> {
 }
 
 /// What a process `process_fork` makes has of a mapping
-/// ([`AddressSpace::fork`]), as it was mapped.
+/// ([`AddressSpace::fork`]): as it was mapped, and as `vm_inherit` has
+/// changed it since ([`AddressSpace::inherit`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Inherit {
     /// Mapped with `map_flags::SHARED`: the VMO itself, even where nothing
@@ -93,11 +96,45 @@ pub struct Inherit {
     /// The handle it was mapped with may be transferred (`TRANSFER`): the
     /// VMO may reach another process.
     pub transferable: bool,
+    /// Nothing at all (`inherit_flags::OMIT`), whatever else this says.
+    pub omit: bool,
+    /// New zero-filled memory (`inherit_flags::ZERO`), which only private
+    /// memory ([`Mapping::private`]) has.
+    pub zero: bool,
 }
 
 impl Inherit {
     /// Memory that is the address space's own: a fork's copy has a copy.
-    pub const OWN: Inherit = Inherit { shared: false, transferable: true };
+    pub const OWN: Inherit = Inherit::mapped(false, true);
+
+    /// What a mapping made with `map_flags::SHARED` or not, through a
+    /// handle that may be transferred or not, has until `vm_inherit`
+    /// changes it.
+    pub const fn mapped(shared: bool, transferable: bool) -> Inherit {
+        Inherit { shared, transferable, omit: false, zero: false }
+    }
+
+    /// This, with the `inherit_flags` of `set` set and those of `clear`
+    /// cleared.
+    fn changed(self, set: usize, clear: usize) -> Inherit {
+        use abi::inherit_flags::{OMIT, ZERO};
+        let flag = |now: bool, bit: usize| set & bit != 0 || (now && clear & bit == 0);
+        Inherit { omit: flag(self.omit, OMIT), zero: flag(self.zero, ZERO), ..self }
+    }
+}
+
+/// What a fork's copy has of a mapping ([`AddressSpace::fork`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Fate {
+    /// Nothing.
+    Absent,
+    /// The same VMO.
+    Shared,
+    /// A copy of the VMO, which has the same frames until either writes
+    /// them ([`Vmo::fork_copy`]).
+    Copied,
+    /// New zero-filled memory.
+    Zeroed,
 }
 
 #[derive(Clone)]
@@ -113,6 +150,8 @@ pub struct Mapping {
     /// The VMO was made for this mapping ([`AddressSpace::allocate`]) and
     /// no handle reaches it: each of its pages is mapped here and nowhere
     /// else, so a page is freed as soon as it is unmapped or decommitted.
+    /// The mappings that are its parts (split by [`AddressSpace::protect`],
+    /// say) map parts of the VMO apart.
     pub private: bool,
     /// What a fork's copy has of it.
     pub inherit: Inherit,
@@ -435,6 +474,28 @@ impl AddressSpace {
         Ok(())
     }
 
+    /// Changes what a process `process_fork` makes has of `[addr,
+    /// addr+len)` ([`Inherit`]), which must be mapped completely, splitting
+    /// mappings at its ends as needed: the `inherit_flags` of `set` are set
+    /// there, and those of `clear` cleared. Only private memory may be
+    /// zeroed for the copy (`NotSupported`). The pages stay as they are.
+    pub fn inherit(&self, addr: u64, len: u64, set: usize, clear: usize) -> Result<(), Error> {
+        if !addr.is_multiple_of(PAGE_SIZE) || len == 0 {
+            return Err(Error::InvalidArgs);
+        }
+        let end = range_end(addr, len)?;
+        let zero = set & abi::inherit_flags::ZERO != 0;
+        let mut map = self.mappings.lock();
+        // Check everything before changing anything.
+        Self::covering(&map, addr, end, |m| if !zero || m.private { Ok(()) } else { Err(Error::NotSupported) })?;
+        Self::split_at(&mut map, addr);
+        Self::split_at(&mut map, end);
+        for (_, m) in map.range_mut(addr..end) {
+            m.inherit = m.inherit.changed(set, clear);
+        }
+        Ok(())
+    }
+
     /// Where `addr` is in the VMO mapped there, if anything is: for a
     /// program's code, the offset into its image, which is the address in
     /// its executable for one linked at 0, as Veda's programs are (for the
@@ -543,15 +604,18 @@ impl AddressSpace {
 
     /// A copy of this address space, for a process `process_fork` makes:
     /// the same mappings at the same places, with the same permissions,
-    /// each of what its [`Inherit`] says:
+    /// each of what its [`Inherit`] says ([`Fate`]):
     ///
+    /// * none of a range kept from the copy (`omit`), and new zero-filled
+    ///   memory for one wiped for it (`zero`): the copy holds nothing of
+    ///   what either holds here, not even in a VMO it has of other parts;
     /// * memory that is the address space's own is copied: anonymous
     ///   memory that nothing reaches but its mappings here (its private
     ///   memory, and VMOs mapped through handles that have since closed),
-    ///   not mapped `shared`. The copy and the original share its frames
-    ///   until either writes a page, which then gets one of its own
-    ///   ([`Vmo::fork_copy`]): its writable pages here are made read-only
-    ///   until then;
+    ///   not mapped `shared`. The copy and the original share the frames
+    ///   the copy's mappings reach until either writes a page, which then
+    ///   gets one of its own ([`Vmo::fork_copy`]): the writable pages here
+    ///   that lead to them are made read-only until then;
     /// * other memory is the same VMO, if the handle it was mapped with may
     ///   be transferred, as the process could have given it the VMO;
     /// * the rest is not there.
@@ -570,21 +634,43 @@ impl AddressSpace {
         }
         // Memory nothing reaches but these mappings: no handle, no other
         // address space, no guest holds its VMO, which counts a reference
-        // for each.
-        let copied = |m: &Mapping| {
+        // for each. It is the same for every mapping of a VMO, and each
+        // mapping's fate stays as it is while the copy is made: the BKL is
+        // held throughout, and a VMO is referenced again (`Fate::Shared`)
+        // only if it is not the address space's own.
+        let own = |m: &Mapping| {
             let (count, shared) = vmos[&m.vmo.koid];
             m.vmo.copyable() && (m.private || (!shared && Arc::strong_count(&m.vmo) == count))
         };
-        // The copies' tables of frames and counts are kernel memory, taken
-        // on user space's behalf as the frames are.
+        let fate = |m: &Mapping| match m.inherit {
+            Inherit { omit: true, .. } => Fate::Absent,
+            Inherit { zero: true, .. } => Fate::Zeroed,
+            _ if own(m) => Fate::Copied,
+            Inherit { transferable: true, .. } => Fate::Shared,
+            _ => Fate::Absent,
+        };
+        // The parts of each VMO copied that the copy's mappings reach (the
+        // VMO's id and an offset into it where a part starts, and where the
+        // part ends), the frames the copy shares; mappings of other VMOs
+        // with no part there need not be protected below.
+        let mut reached: BTreeMap<(u64, u64), u64> = BTreeMap::new();
+        for m in map.values().filter(|m| fate(m) == Fate::Copied) {
+            let end = reached.entry((m.vmo.koid, m.vmo_offset)).or_insert(0);
+            *end = (*end).max(m.vmo_offset + m.len);
+        }
+        let parts = |koid: u64| reached.range((koid, 0)..=(koid, u64::MAX)).map(|(&(_, from), &to)| (from, to));
+        // The copies' tables of frames and counts, its mappings and what
+        // they reach are kernel memory, taken on user space's behalf as
+        // the frames are.
         let pages: u64 = map
             .values()
-            .filter(|m| copied(m))
+            .filter(|m| fate(m) == Fate::Copied)
             .map(|m| (m.vmo.koid, m.vmo.committed_pages()))
             .collect::<BTreeMap<u64, u64>>()
             .values()
             .sum();
-        if !super::phys::user_may_use(pages.saturating_mul(32).saturating_add(64 * 1024)) {
+        let tables = (map.len() as u64).saturating_mul(256);
+        if !super::phys::user_may_use(pages.saturating_mul(32).saturating_add(tables).saturating_add(64 * 1024)) {
             return Err(Error::NoMemory);
         }
         let child = Arc::new(AddressSpace {
@@ -594,31 +680,42 @@ impl AddressSpace {
         });
         // No writable page here may lead to a frame that is shared, so
         // they go read-only before any is, everywhere this address space
-        // is loaded; a write faults then, and copies.
+        // is loaded; a write faults then, and copies. Every mapping of a
+        // VMO copied may reach a frame shared, but a part of private memory
+        // that is not copied: no other mapping reaches its pages.
         let mut protected = false;
-        for m in map.values().filter(|m| m.perms.write && copied(m)) {
+        for m in map.values().filter(|m| m.perms.write && parts(m.vmo.koid).next().is_some()) {
+            if m.private && fate(m) != Fate::Copied {
+                continue;
+            }
             paging::protect_range(self.root, m.start, m.end(), Flags { writable: false, ..m.pte_flags() });
             protected = true;
         }
         if protected {
             crate::architecture::tlb::shootdown_space(self.root, USER_START, USER_END - USER_START);
         }
+        // The VMOs made for the copy, by the VMO each stands for: copies,
+        // and zero-filled memory of the same size, which its parts of the
+        // VMO are at the same offsets in.
         let mut copies: BTreeMap<u64, Arc<Vmo>> = BTreeMap::new();
+        let mut zeroed: BTreeMap<u64, Arc<Vmo>> = BTreeMap::new();
         let mut theirs = child.mappings.lock();
         for m in map.values() {
-            let vmo = if copied(m) {
-                match copies.get(&m.vmo.koid) {
-                    Some(copy) => copy.clone(),
-                    None => {
-                        let copy = m.vmo.fork_copy().ok_or(Error::NoMemory)?;
-                        copies.insert(m.vmo.koid, copy.clone());
-                        copy
+            let vmo = match fate(m) {
+                Fate::Absent => continue,
+                Fate::Shared => m.vmo.clone(),
+                Fate::Copied => match copies.entry(m.vmo.koid) {
+                    Entry::Occupied(copy) => copy.get().clone(),
+                    Entry::Vacant(place) => {
+                        place.insert(m.vmo.fork_copy(parts(m.vmo.koid)).ok_or(Error::NoMemory)?).clone()
                     }
-                }
-            } else if m.inherit.transferable {
-                m.vmo.clone()
-            } else {
-                continue;
+                },
+                Fate::Zeroed => match zeroed.entry(m.vmo.koid) {
+                    Entry::Occupied(zero) => zero.get().clone(),
+                    Entry::Vacant(place) => {
+                        place.insert(Vmo::new_anonymous(m.vmo.size(), m.vmo.cache()).ok_or(Error::NoMemory)?).clone()
+                    }
+                },
             };
             theirs.insert(m.start, Mapping { vmo, ..m.clone() });
         }
