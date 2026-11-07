@@ -730,13 +730,13 @@ static void *nothing(void *arg)
 
 /* fork: a copy of this process, its memory its own (the heap, private and
    global memory: what either writes after the fork, the other does not
-   see), but for shared memory, and memory madvise wipes for it or keeps
-   from it; its descriptors the same open files, pipes among them (its end
-   of one closing as it ends) and files, whose offset it shares; its signal
-   handlers this process's. A copy that runs another program (fork and
-   exec), whose output and exit status come back; one made while another
-   thread allocates, whose heap and threads work; and one made by clone
-   with SIGCHLD, as C libraries make it. */
+   see), but for shared memory, which its mremap leaves shared, and memory
+   madvise wipes for it or keeps from it; its descriptors the same open
+   files, pipes among them (its end of one closing as it ends) and files,
+   whose offset it shares; its signal handlers this process's. A copy that
+   runs another program (fork and exec), whose output and exit status come
+   back; one made while another thread allocates, whose heap and threads
+   work; and one made by clone with SIGCHLD, as C libraries make it. */
 static void check_fork(const char *self)
 {
 	fflush(stdout);
@@ -867,6 +867,37 @@ static void check_fork(const char *self)
 		      "advised %d, listed %d, the copy's code %d, this one's byte %d", advised, listed_here, code, kept[0]);
 		munmap(kept, 2 * 4096);
 	}
+
+	/* Shared memory the copy grows stays shared. Where it cannot grow in
+	   place (private memory follows it), mremap moves it, and this process
+	   sees what the copy writes there; or mremap fails (ENOMEM) and leaves
+	   it where it was, shared. Only its first page is written: Linux's
+	   shared memory keeps the size it was mapped with (SIGBUS past it). */
+	char *room = mmap(0, 2 * 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	char *both = MAP_FAILED;
+	if (room != MAP_FAILED)
+		both = mmap(room, 4096, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+	if (both != MAP_FAILED) {
+		both[0] = 46;
+		pid = fork();
+		if (pid == 0) {
+			errno = 0;
+			char *moved = mremap(both, 4096, 2 * 4096, MREMAP_MAYMOVE);
+			int refused = moved == MAP_FAILED && errno == ENOMEM;
+			if (refused)
+				both[0] = 47;
+			else if (moved != MAP_FAILED)
+				moved[0] = 47;
+			_exit(refused ? 3 : moved == MAP_FAILED ? 1 : moved == both ? 2 : 0);
+		}
+		status = -1;
+		waited = pid > 0 ? waitpid(pid, &status, 0) : -1;
+		int code = waited == pid && WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+		CHECK("shared memory the copy grows stays shared", (code == 0 || code == 3) && both[0] == 47,
+		      "the copy's code %d, this one's byte %d", code, both[0]);
+	}
+	if (room != MAP_FAILED)
+		munmap(room, 2 * 4096);
 
 	/* Handlers are the copy's too. */
 	signal(SIGUSR2, on_usr2);

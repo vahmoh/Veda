@@ -150,9 +150,9 @@ and `madvise` need them whole (`ENOMEM`), shrinking the program break
 unmaps only its own, and memory Linux compatibility reads or writes for
 the program (a signal frame, `execve`'s arguments) must be in one that
 allows the access while it does, or it is a fault. `mremap` grows and
-moves only anonymous memory, by copying it: a file's mapping or shared
-memory would be neither any more (`ENOMEM`, as when there is no room,
-which programs answer by mapping anew).
+moves only private anonymous memory, by copying it: a file's mapping or
+shared memory would be neither any more (`ENOMEM`, as when there is no
+room, which programs answer by mapping anew).
 
 **Copies.** `fork` has the kernel copy the process (`process_fork`):
 its memory, the program's and Linux compatibility's alike, is the
@@ -214,7 +214,7 @@ process's handles allow, as a program of Veda's.
 | Symbolic links | None in Veda's files: a Linux root has copies in their place, and `symlink` fails (`EPERM`) |
 | Processors | x86-64 programs (`x86_64`), on AMD64: not 32-bit x86 ones, nor ARM64's yet |
 | Kernel interfaces | No `io_uring`, `inotify`, `signalfd`, System V IPC (`shmget`, `semget`, `msgget`), `ptrace`, `seccomp`, namespaces, `perf_event_open` or eBPF: each fails (`ENOSYS`, or `EPERM` where Linux would refuse it), said once in the system log |
-| Files and memory | What [C on Veda](C.md#limits) lists: no owners or permission bits, shared writable mappings of files refused (`ENODEV`), sockets TCP, UDP and Unix only. `mremap` of a file's mapping or of shared memory only shrinks it (`ENOMEM` otherwise), and one of anonymous memory that moves is copied, which costs for a large one |
+| Files and memory | What [C on Veda](C.md#limits) lists: no owners or permission bits, shared writable mappings of files refused (`ENODEV`), sockets TCP, UDP and Unix only. `mremap` of a file's mapping or of shared memory only shrinks it (`ENOMEM` otherwise), and one of private anonymous memory that moves is copied, which costs for a large one |
 | `/proc` and `/sys` | The process's own, the processors, memory and uptime: no other process's, no directory listings (`/proc/self/fd` cannot be listed, though each `/proc/self/fd/N` is there), no devices |
 | `arch_prctl` | The FS base only: a GS base of a thread's own is refused (`EINVAL`) |
 | A bad pointer in a system call | Where Linux compatibility reads it, `EFAULT`; where the POSIX layer reads it, the process ends with a fault, as a C program's does ([C on Veda](C.md)) |
@@ -259,11 +259,11 @@ vDSO.
   owner ended, time, sockets, `epoll`,
   futexes, starting programs (`posix_spawn` with a file action, `vfork`,
   `SIGCHLD`), `fork` (the child's memory its own but for shared memory,
-  `waitpid`, pipes and a file's offset shared, the handlers, memory wiped
-  for the child (`MADV_WIPEONFORK`) and memory kept from it
-  (`MADV_DONTFORK`), which its `/proc/self/maps` does not list, `fork` and
-  `exec`, children made while another thread allocates, `clone` with
-  `SIGCHLD`) and, run again with `exec`, `execve` in place; the Rust program checks the standard library (threads, files,
+  which its `mremap` leaves shared, `waitpid`, pipes and a file's offset
+  shared, the handlers, memory wiped for the child (`MADV_WIPEONFORK`) and
+  memory kept from it (`MADV_DONTFORK`), which its `/proc/self/maps` does
+  not list, `fork` and `exec`, children made while another thread
+  allocates, `clone` with `SIGCHLD`) and, run again with `exec`, `execve` in place; the Rust program checks the standard library (threads, files,
   time, a panic unwound, memory, TCP on the loopback interface, `Command`).
   Each passes on Linux too, as it does on Veda.
 - **`verification/ui/linux-programs.vts`** runs them in the Terminal.

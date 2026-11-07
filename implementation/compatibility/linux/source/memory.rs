@@ -123,6 +123,23 @@ impl Map {
         self.areas.retain(|_, a| a.inherit & inherit_flags::OMIT == 0);
     }
 
+    /// Notes the program break's new memory, `[old_top, new_top)`: one
+    /// area for the whole break, as Linux keeps it, but after one the
+    /// program protected otherwise, or kept from a child or wiped for it.
+    /// The new memory is read-write, and neither kept nor wiped, as on
+    /// Linux.
+    fn break_grown(&mut self, old_top: u64, new_top: u64) {
+        let rw = PROT_READ | PROT_WRITE;
+        self.cut(old_top, new_top);
+        let begin = self
+            .areas
+            .range(..=old_top)
+            .next_back()
+            .filter(|(_, a)| a.kind == Kind::Heap && a.end == old_top && a.prot == rw && a.inherit == 0);
+        let first = begin.map_or(old_top, |(s, _)| *s);
+        self.areas.insert(first, Area { end: new_top, prot: rw, kind: Kind::Heap, inherit: 0 });
+    }
+
     /// The program's areas' pieces in `[start, end)`.
     fn pieces(&self, start: u64, end: u64) -> Vec<(u64, u64)> {
         self.areas.range(..end).filter(|(_, a)| a.end > start).map(|(s, a)| ((*s).max(start), a.end.min(end))).collect()
@@ -257,17 +274,7 @@ pub fn brk(to: u64) -> isize {
         if vm::allocate(None, len, old_top as usize, rw).is_err() {
             return now as isize;
         }
-        map.cut(old_top, new_top);
-        // One area for the whole break, as Linux keeps it, but after one
-        // kept from a child or wiped for it: the new memory is neither, as
-        // on Linux.
-        let begin = map
-            .areas
-            .range(..=old_top)
-            .next_back()
-            .filter(|(_, a)| a.kind == Kind::Heap && a.end == old_top && a.inherit == 0);
-        let first = begin.map_or(old_top, |(s, _)| *s);
-        map.areas.insert(first, Area { end: new_top, prot: PROT_READ | PROT_WRITE, kind: Kind::Heap, inherit: 0 });
+        map.break_grown(old_top, new_top);
     } else if new_top < old_top {
         // The program's areas there go: only they, as Linux
         // compatibility's own memory may be where the program unmapped
@@ -415,14 +422,15 @@ fn inherits(at: u64, len: u64, inherit: usize) -> Result<(), isize> {
     })
 }
 
-/// `mremap`: shrinks an area in place, grows one of anonymous memory in
-/// place where the pages after it are free, or else, with
+/// `mremap`: shrinks an area in place, grows one of private anonymous
+/// memory in place where the pages after it are free, or else, with
 /// `MREMAP_MAYMOVE`, moves it: its contents copied to new memory, as the
-/// kernel's own moves are not had. Only anonymous memory grows or moves:
-/// a copy of a file's pages or of shared memory would not be the file's,
-/// or the others', any more (`ENOMEM`, as when there is no room, which
-/// programs answer with a mapping of their own). What a child has of the
-/// area (`MADV_DONTFORK`, `MADV_WIPEONFORK`) it has of the new memory too.
+/// kernel's own moves are not had. Only private anonymous memory grows or
+/// moves: what is added to a file's pages or to shared memory, or a copy
+/// of them, would be the program's alone, not the file's or the others'
+/// (`ENOMEM`, as when there is no room, which programs answer with a
+/// mapping of their own). What a child has of the area (`MADV_DONTFORK`,
+/// `MADV_WIPEONFORK`) it has of the new memory too.
 pub fn mremap(old: u64, old_len: u64, new_len: u64, flags: u32, new_addr: u64) -> Result<u64, isize> {
     if !old.is_multiple_of(PAGE) || flags & !(MREMAP_MAYMOVE | MREMAP_FIXED | MREMAP_DONTUNMAP) != 0 {
         return Err(EINVAL);
@@ -449,14 +457,15 @@ pub fn mremap(old: u64, old_len: u64, new_len: u64, flags: u32, new_addr: u64) -
         }
         a.clone()
     };
-    let anonymous = matches!(area.kind, Kind::Mapped { anonymous: true, .. } | Kind::Heap | Kind::Stack);
+    let private = matches!(area.kind, Kind::Mapped { anonymous: true, shared: false } | Kind::Heap | Kind::Stack);
     if flags & MREMAP_FIXED == 0 {
         if new_len <= old_len {
             unmap_own(old + new_len, old_end);
             return Ok(old);
         }
-        // Anonymous memory grows in place where the pages after it are free.
-        if anonymous && area.kind != Kind::Stack {
+        // Private anonymous memory grows in place where the pages after it
+        // are free.
+        if private && area.kind != Kind::Stack {
             let grow = new_len - old_len;
             if vm::allocate(None, grow as usize, old_end as usize, flags_of(area.prot) | map_flags::FIXED).is_ok() {
                 inherits(old_end, grow, area.inherit)?;
@@ -468,7 +477,7 @@ pub fn mremap(old: u64, old_len: u64, new_len: u64, flags: u32, new_addr: u64) -
             return Err(ENOMEM);
         }
     }
-    if !anonymous {
+    if !private {
         return Err(ENOMEM);
     }
     // Moved: new memory, the old contents copied in.
@@ -548,6 +557,34 @@ mod tests {
         m.forked();
         let left: Vec<(u64, u64)> = m.areas.iter().map(|(s, a)| (*s, a.end)).collect();
         assert_eq!(left, [(0x1000, 0x2000), (0x3000, 0x5000), (0x6000, 0x8000)]);
+    }
+
+    #[test]
+    fn the_break_grows_only_an_area_like_its_new_memory() {
+        let rw = PROT_READ | PROT_WRITE;
+        let mut m = map(&[]);
+        m.break_grown(0x1000, 0x2000);
+        m.break_grown(0x2000, 0x3000);
+        // Not after memory the program protected otherwise, or wiped for a
+        // child.
+        m.change(0x2000, 0x3000, |a| a.prot = PROT_READ);
+        m.break_grown(0x3000, 0x4000);
+        m.change(0x3000, 0x4000, |a| a.prot = rw | PROT_EXEC);
+        m.break_grown(0x4000, 0x5000);
+        m.change(0x4000, 0x5000, |a| a.inherit = inherit_flags::ZERO);
+        m.break_grown(0x5000, 0x6000);
+        m.break_grown(0x6000, 0x7000);
+        let left: Vec<(u64, u64, u32, usize)> = m.areas.iter().map(|(s, a)| (*s, a.end, a.prot, a.inherit)).collect();
+        assert_eq!(
+            left,
+            [
+                (0x1000, 0x2000, rw, 0),
+                (0x2000, 0x3000, PROT_READ, 0),
+                (0x3000, 0x4000, rw | PROT_EXEC, 0),
+                (0x4000, 0x5000, rw, inherit_flags::ZERO),
+                (0x5000, 0x7000, rw, 0),
+            ]
+        );
     }
 
     #[test]
