@@ -86,6 +86,21 @@ static void check_startup(int argc, char **argv)
 	CHECK("main thread", getpid() == (pid_t)syscall(SYS_gettid), "pid %d tid %ld", getpid(), syscall(SYS_gettid));
 }
 
+/* Whether /proc/self/maps lists one area that holds the `len` bytes at
+   `at`. */
+static int listed(const void *at, size_t len)
+{
+	FILE *f = fopen("/proc/self/maps", "r");
+	char line[4096];
+	unsigned long start, end, from = (unsigned long)at;
+	int found = 0;
+	while (f && fgets(line, sizeof line, f))
+		found |= sscanf(line, "%lx-%lx", &start, &end) == 2 && start <= from && from + len <= end;
+	if (f)
+		fclose(f);
+	return found;
+}
+
 static void check_memory(void)
 {
 	/* Small blocks (the program break, for glibc) and large ones (mmap),
@@ -165,6 +180,41 @@ static void check_memory(void)
 	CHECK("mremap onto itself", here != MAP_FAILED && onto == MAP_FAILED && errno == EINVAL, "got %p", onto);
 	if (here != MAP_FAILED)
 		munmap(here, 8192);
+	/* A mapping grown in place, twice, is one mapping, as it was: mremap
+	   takes the whole of it, to grow it the second time and then to move
+	   it, its bytes with it, and /proc/self/maps lists it whole. It grows
+	   into pages freed for it. */
+	char *grows = mmap(0, 4 * 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	char *there = mmap(0, 3 * 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	int growths = 0, whole = 0;
+	void *went = MAP_FAILED;
+	if (grows != MAP_FAILED && there != MAP_FAILED && munmap(grows + 4096, 3 * 4096) == 0) {
+		grows[0] = 1;
+		growths = mremap(grows, 4096, 2 * 4096, 0) == grows;
+		if (growths) {
+			grows[4096] = 2;
+			growths += mremap(grows, 2 * 4096, 3 * 4096, 0) == grows;
+		}
+		if (growths == 2) {
+			grows[2 * 4096] = 3;
+			whole = listed(grows, 3 * 4096);
+			went = mremap(grows, 3 * 4096, 3 * 4096, MREMAP_MAYMOVE | MREMAP_FIXED, there);
+		}
+	}
+	CHECK("mremap of a mapping grown in place",
+	      growths == 2 && whole && went == there && there[0] == 1 && there[4096] == 2 && there[2 * 4096] == 3,
+	      "grown %d times, listed whole %d, moved to %p", growths, whole, went);
+	if (grows != MAP_FAILED && went == MAP_FAILED)
+		munmap(grows, 4 * 4096);
+	if (there != MAP_FAILED)
+		munmap(there, 3 * 4096);
+	/* mremap to the same length leaves a mapping as it was: whole. */
+	char *same = mmap(0, 2 * 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (same != MAP_FAILED) {
+		void *again = mremap(same, 4096, 4096, 0);
+		CHECK("mremap to the same length", again == same && listed(same, 2 * 4096), "got %p, of %p", again, same);
+		munmap(same, 2 * 4096);
+	}
 }
 
 /* sendfile and copy_file_range, which cp and servers use: more than one
@@ -695,20 +745,6 @@ static void on_usr2(int s)
 	forked_handled = 1;
 }
 
-/* Whether /proc/self/maps lists an area that holds the byte at `at`. */
-static int listed(const void *at)
-{
-	FILE *f = fopen("/proc/self/maps", "r");
-	char line[4096];
-	unsigned long start, end;
-	int found = 0;
-	while (f && fgets(line, sizeof line, f))
-		found |= sscanf(line, "%lx-%lx", &start, &end) == 2 && start <= (unsigned long)at && (unsigned long)at < end;
-	if (f)
-		fclose(f);
-	return found;
-}
-
 /* A thread that allocates and frees for as long as `churning` says, so that
    fork copies a process whose heap another thread is changing. */
 static atomic_int churning;
@@ -854,11 +890,11 @@ static void check_fork(const char *self)
 		kept[0] = 44;
 		kept[4096] = 45;
 		int advised = !madvise(kept, 2 * 4096, MADV_DONTFORK) && !madvise(kept + 4096, 4096, MADV_DOFORK);
-		int listed_here = listed(kept);
+		int listed_here = listed(kept, 1);
 		pid = fork();
 		if (pid == 0) {
 			int unmapped = mprotect(kept, 4096, PROT_READ) < 0 && errno == ENOMEM;
-			_exit(!unmapped ? 1 : listed(kept) ? 2 : kept[4096] != 45 ? 3 : 0);
+			_exit(!unmapped ? 1 : listed(kept, 1) ? 2 : kept[4096] != 45 ? 3 : 0);
 		}
 		status = -1;
 		waited = pid > 0 ? waitpid(pid, &status, 0) : -1;

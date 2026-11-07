@@ -86,10 +86,15 @@ pub fn hold() -> Held {
 }
 
 impl Map {
+    /// The areas that reach into `[start, end)`, and where each starts:
+    /// none, if the range is empty.
+    fn reaching(&self, start: u64, end: u64) -> impl Iterator<Item = (u64, &Area)> {
+        self.areas.range(..end).filter(move |(_, a)| start < end && a.end > start).map(|(s, a)| (*s, a))
+    }
+
     /// Takes `[start, end)` out of every area, splitting those it cuts.
     fn cut(&mut self, start: u64, end: u64) {
-        let touched: Vec<u64> =
-            self.areas.range(..end).filter(|(s, a)| **s < end && a.end > start).map(|(s, _)| *s).collect();
+        let touched: Vec<u64> = self.reaching(start, end).map(|(s, _)| s).collect();
         for s in touched {
             let a = self.areas.remove(&s).unwrap();
             if s < start {
@@ -101,15 +106,17 @@ impl Map {
         }
     }
 
+    /// Notes `area`, from `start`, in place of any it covers.
+    fn put(&mut self, start: u64, area: Area) {
+        self.cut(start, area.end);
+        self.areas.insert(start, area);
+    }
+
     /// Changes the program's areas' pieces in `[start, end)` as `change`
     /// says, splitting the areas at its ends.
     fn change(&mut self, start: u64, end: u64, change: impl Fn(&mut Area)) {
-        let pieces: Vec<(u64, Area)> = self
-            .areas
-            .range(..end)
-            .filter(|(_, a)| a.end > start)
-            .map(|(s, a)| ((*s).max(start), Area { end: a.end.min(end), ..a.clone() }))
-            .collect();
+        let pieces: Vec<(u64, Area)> =
+            self.reaching(start, end).map(|(s, a)| (s.max(start), Area { end: a.end.min(end), ..a.clone() })).collect();
         self.cut(start, end);
         for (s, mut a) in pieces {
             change(&mut a);
@@ -140,9 +147,23 @@ impl Map {
         self.areas.insert(first, Area { end: new_top, prot: rw, kind: Kind::Heap, inherit: 0 });
     }
 
+    /// The area that holds `[start, end)` whole, and where it starts.
+    fn holding(&self, start: u64, end: u64) -> Option<(u64, &Area)> {
+        self.areas.range(..=start).next_back().filter(|(_, a)| a.end >= end).map(|(s, a)| (*s, a))
+    }
+
+    /// Notes that the area at `start` grew in place to `end` (`mremap`'s):
+    /// one area still, as Linux keeps it, its new memory like the rest of
+    /// it.
+    fn grown(&mut self, start: u64, end: u64) {
+        if let Some(a) = self.areas.get(&start).cloned() {
+            self.put(start, Area { end, ..a });
+        }
+    }
+
     /// The program's areas' pieces in `[start, end)`.
     fn pieces(&self, start: u64, end: u64) -> Vec<(u64, u64)> {
-        self.areas.range(..end).filter(|(_, a)| a.end > start).map(|(s, a)| ((*s).max(start), a.end.min(end))).collect()
+        self.reaching(start, end).map(|(s, a)| (s.max(start), a.end.min(end))).collect()
     }
 
     /// Whether the program may read (or with `write`, write) `len` bytes
@@ -188,14 +209,7 @@ impl Map {
 
 /// Notes a new area `[start, start + len)`, in place of any it covers.
 pub fn record(start: u64, len: u64, prot: u32, kind: Kind) {
-    put(start, Area { end: start + len, prot, kind, inherit: 0 });
-}
-
-/// Notes `area`, from `start`, in place of any it covers.
-fn put(start: u64, area: Area) {
-    let mut map = MAP.lock();
-    map.cut(start, area.end);
-    map.areas.insert(start, area);
+    MAP.lock().put(start, Area { end: start + len, prot, kind, inherit: 0 });
 }
 
 /// In a child `fork` made, whose memory has no area the kernel left out of
@@ -309,7 +323,7 @@ pub unsafe fn mmap(addr: u64, len: u64, prot: u32, flags: u32, fd: usize, offset
             return Err(EINVAL);
         }
         let end = addr.checked_add(len).ok_or(ENOMEM)?;
-        unmap_own(addr, end);
+        unmap_own(&mut MAP.lock(), addr, end);
         given = (flags & !MAP_FIXED) | MAP_FIXED_NOREPLACE;
     }
     // Below 2 GiB where asked (`MAP_32BIT`), as Linux places it.
@@ -335,8 +349,7 @@ pub unsafe fn mmap(addr: u64, len: u64, prot: u32, flags: u32, fd: usize, offset
 }
 
 /// Unmaps the program's areas in `[start, end)`, and forgets them.
-fn unmap_own(start: u64, end: u64) {
-    let mut map = MAP.lock();
+fn unmap_own(map: &mut Map, start: u64, end: u64) {
     for (s, e) in map.pieces(start, end) {
         let _ = vm::unmap(None, s as usize, (e - s) as usize);
     }
@@ -350,7 +363,7 @@ pub fn munmap(addr: u64, len: u64) -> Result<u64, isize> {
         return Err(EINVAL);
     }
     let end = page_up(len).and_then(|l| addr.checked_add(l)).ok_or(EINVAL)?;
-    unmap_own(addr, end);
+    unmap_own(&mut MAP.lock(), addr, end);
     Ok(0)
 }
 
@@ -423,14 +436,17 @@ fn inherits(at: u64, len: u64, inherit: usize) -> Result<(), isize> {
 }
 
 /// `mremap`: shrinks an area in place, grows one of private anonymous
-/// memory in place where the pages after it are free, or else, with
+/// memory in place where the range runs to the area's end and the pages
+/// after it are free (one area still, as Linux keeps it), or else, with
 /// `MREMAP_MAYMOVE`, moves it: its contents copied to new memory, as the
 /// kernel's own moves are not had. Only private anonymous memory grows or
 /// moves: what is added to a file's pages or to shared memory, or a copy
 /// of them, would be the program's alone, not the file's or the others'
 /// (`ENOMEM`, as when there is no room, which programs answer with a
 /// mapping of their own). What a child has of the area (`MADV_DONTFORK`,
-/// `MADV_WIPEONFORK`) it has of the new memory too.
+/// `MADV_WIPEONFORK`) it has of the new memory too. The areas are held
+/// throughout, as Linux holds a process's: no other thread's call changes
+/// the area, or takes away the memory copied, meanwhile.
 pub fn mremap(old: u64, old_len: u64, new_len: u64, flags: u32, new_addr: u64) -> Result<u64, isize> {
     if !old.is_multiple_of(PAGE) || flags & !(MREMAP_MAYMOVE | MREMAP_FIXED | MREMAP_DONTUNMAP) != 0 {
         return Err(EINVAL);
@@ -448,28 +464,22 @@ pub fn mremap(old: u64, old_len: u64, new_len: u64, flags: u32, new_addr: u64) -
         return Err(EINVAL);
     }
     let old_end = old.checked_add(old_len).ok_or(EINVAL)?;
+    let mut map = MAP.lock();
     // The range must be one area of the program's.
-    let area = {
-        let map = MAP.lock();
-        let (s, a) = map.areas.range(..=old).next_back().ok_or(EFAULT)?;
-        if a.end < old_end || *s > old {
-            return Err(EFAULT);
-        }
-        a.clone()
-    };
+    let (start, area) = map.holding(old, old_end).map(|(s, a)| (s, a.clone())).ok_or(EFAULT)?;
     let private = matches!(area.kind, Kind::Mapped { anonymous: true, shared: false } | Kind::Heap | Kind::Stack);
     if flags & MREMAP_FIXED == 0 {
         if new_len <= old_len {
-            unmap_own(old + new_len, old_end);
+            unmap_own(&mut map, old + new_len, old_end);
             return Ok(old);
         }
-        // Private anonymous memory grows in place where the pages after it
-        // are free.
-        if private && area.kind != Kind::Stack {
+        // Private anonymous memory grows in place where the range runs to
+        // the area's end and the pages after it are free.
+        if private && area.kind != Kind::Stack && area.end == old_end {
             let grow = new_len - old_len;
             if vm::allocate(None, grow as usize, old_end as usize, flags_of(area.prot) | map_flags::FIXED).is_ok() {
                 inherits(old_end, grow, area.inherit)?;
-                put(old_end, Area { end: old_end + grow, ..area });
+                map.grown(start, old_end + grow);
                 return Ok(old);
             }
         }
@@ -490,7 +500,7 @@ pub fn mremap(old: u64, old_len: u64, new_len: u64, flags: u32, new_addr: u64) -
         if new_addr < old_end && old < new_end {
             return Err(EINVAL);
         }
-        unmap_own(new_addr, new_end);
+        unmap_own(&mut map, new_addr, new_end);
         new_addr as usize
     } else {
         0
@@ -505,15 +515,15 @@ pub fn mremap(old: u64, old_len: u64, new_len: u64, flags: u32, new_addr: u64) -
     if unreadable {
         let _ = vm::protect(None, old as usize, old_len as usize, map_flags::READ);
     }
-    // SAFETY: the old area is the program's and readable now, the new one
-    // fresh; they do not overlap (the new one was free memory).
+    // SAFETY: the old area is the program's, held, and readable now, the
+    // new one fresh; they do not overlap (the new one was free memory).
     unsafe { core::ptr::copy_nonoverlapping(old as *const u8, at as *mut u8, old_len.min(new_len) as usize) };
     if area.prot != PROT_READ | PROT_WRITE {
         let _ = vm::protect(None, at as usize, new_len as usize, flags_of(area.prot));
     }
-    put(at, Area { end: at + new_len, ..area.clone() });
+    map.put(at, Area { end: at + new_len, ..area.clone() });
     if flags & MREMAP_DONTUNMAP == 0 {
-        unmap_own(old, old_end);
+        unmap_own(&mut map, old, old_end);
     } else {
         // The old place stays, its pages gone with what moved.
         let _ = vm::decommit(None, old as usize, old_len as usize);
@@ -585,6 +595,34 @@ mod tests {
                 (0x5000, 0x7000, rw, 0),
             ]
         );
+    }
+
+    #[test]
+    fn an_area_grown_in_place_is_one_area() {
+        // Grown in place twice, as `mremap` grows it: one area, like the
+        // one it grew from, which holds the whole, as `mremap` needs of a
+        // range.
+        let mut m = map(&[(0x1000, 0x2000), (0x5000, 0x6000)]);
+        m.change(0x1000, 0x2000, |a| a.inherit = inherit_flags::ZERO);
+        m.grown(0x1000, 0x3000);
+        m.grown(0x1000, 0x4000);
+        let whole = m.holding(0x1000, 0x4000).map(|(s, a)| (s, a.end, a.prot, a.inherit));
+        assert_eq!(whole, Some((0x1000, 0x4000, PROT_READ, inherit_flags::ZERO)));
+        let left: Vec<(u64, u64)> = m.areas.iter().map(|(s, a)| (*s, a.end)).collect();
+        assert_eq!(left, [(0x1000, 0x4000), (0x5000, 0x6000)]);
+        // Areas side by side do not hold a range together.
+        assert!(map(&[(0x1000, 0x2000), (0x2000, 0x3000)]).holding(0x1000, 0x3000).is_none());
+    }
+
+    #[test]
+    fn an_empty_range_reaches_no_area() {
+        // What `mremap` to the same length unmaps after the range: nothing.
+        let mut m = map(&[(0x1000, 0x5000)]);
+        m.cut(0x2000, 0x2000);
+        m.change(0x3000, 0x3000, |a| a.prot = PROT_READ | PROT_WRITE);
+        assert!(m.pieces(0x2000, 0x2000).is_empty());
+        let left: Vec<(u64, u64, u32)> = m.areas.iter().map(|(s, a)| (*s, a.end, a.prot)).collect();
+        assert_eq!(left, [(0x1000, 0x5000, PROT_READ)]);
     }
 
     #[test]

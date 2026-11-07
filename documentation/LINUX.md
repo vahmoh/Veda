@@ -150,9 +150,10 @@ and `madvise` need them whole (`ENOMEM`), shrinking the program break
 unmaps only its own, and memory Linux compatibility reads or writes for
 the program (a signal frame, `execve`'s arguments) must be in one that
 allows the access while it does, or it is a fault. `mremap` grows and
-moves only private anonymous memory, by copying it: a file's mapping or
-shared memory would be neither any more (`ENOMEM`, as when there is no
-room, which programs answer by mapping anew).
+moves only private anonymous memory, in place where the pages after the
+area are free (one area still, as on Linux), or else by copying it: a
+file's mapping or shared memory would be neither any more (`ENOMEM`, as
+when there is no room, which programs answer by mapping anew).
 
 **Copies.** `fork` has the kernel copy the process (`process_fork`):
 its memory, the program's and Linux compatibility's alike, is the
