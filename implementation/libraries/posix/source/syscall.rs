@@ -273,9 +273,9 @@ unsafe fn generic(n: usize, a: [usize; 6]) -> SysResult {
                 Ok(1)
             }
             nr::SETGROUPS => Err(EPERM),
-            // Processes are made from program images (posix_spawn), not
-            // by copying this one.
-            nr::CLONE | nr::EXECVE => Err(ENOSYS),
+            // A copy of this process (threads are made by `__clone`).
+            nr::CLONE => crate::fork::clone(a[0]),
+            nr::EXECVE => Err(ENOSYS),
             nr::EXIT => thread::exit_thread(),
             nr::EXIT_GROUP => process::exit(a[0] as i32),
             nr::WAIT4 => process::wait4(fd0, a[1], a[2] as u32, a[3]),

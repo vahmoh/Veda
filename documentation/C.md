@@ -118,6 +118,7 @@ which calls into it.
 | `membarrier` | `MEMBARRIER_CMD_PRIVATE_EXPEDITED` (which needs no registration) and the query of what is had: the kernel's barrier on the processors running the process's threads (`vm_barrier`), as the dynamic linker has it give every thread a library's thread-local storage |
 | Local time | Without `TZ`, the system's offset from UTC (the `tz=` boot option, or the firmware's), as a POSIX `TZ` string (`<+0530>-5:30`): `localtime`, `mktime` and `tzname` follow it; `TZ` overrides it with a POSIX string (there is no tz database yet) |
 | `posix_spawn`, `waitpid` | Processes started from the program image. A process id is the kernel object id cut to 30 bits, never that of another child not yet waited for (`EAGAIN` in the rare case none can be had) |
+| `fork`, `vfork` | A copy of the process, which the kernel makes (`process_fork`): its memory copied as either writes it, shared memory shared; its one thread the caller; the same open files, pipes and sockets ([Processes and signals](#processes-and-signals)). `vfork` is `fork`: the parent need not wait |
 | Signals | The layer keeps what Linux's kernel keeps of them (dispositions, masks, pending signals and what each says, `siginfo_t`). Another process's come by way of the kernel, which interrupts the thread that takes them: its wait ends, or it is sent to run the handler, wherever it is in the program's code |
 | `alarm`, `setitimer`, `timer_create` | Timers of the layer's, which a thread of its expires: on the monotonic clock, or on the processor time used (`ITIMER_VIRTUAL`, `ITIMER_PROF`, timers on a CPU-time clock), user and system time as one |
 
@@ -175,7 +176,7 @@ program the Terminal runs.
 
 | Area | On Veda |
 |------|---------|
-| `fork`, `exec` | None (`ENOSYS`). Processes start with `posix_spawn`, which most build tools and browsers already use, or `vfork` and `exec`, which port to it directly |
+| `exec` | None (`ENOSYS`): a process runs the program it was started with. Programs start with `posix_spawn`, which most build tools and browsers already use, and to which `fork` and `exec` port directly. `fork` makes a copy of the process ([Processes and signals](#processes-and-signals)) |
 | `/bin/sh` | None yet (the Terminal's shell is part of the Terminal): `system` and `popen` fail with `ENOENT` |
 | Links | No symbolic links, and no hard links but between the shared memory objects of `/dev/shm`, as `sem_open` makes them: elsewhere `link` fails with `EPERM` (`EXDEV` from `/dev/shm` to elsewhere), as `symlink` does, and `readlink` finds none (`EINVAL`) |
 | Permissions | No owners or permission bits: a program file (ELF or `#!`) is executable, nothing else is; `chmod` changes nothing, and `chown` to another user or group is refused (`EPERM`, as for Linux's unprivileged users). Programs run as user 1000 |
@@ -206,6 +207,30 @@ program the Terminal runs.
   ignored, and the mask), as `POSIX_SPAWN_SETSIGDEF` and
   `POSIX_SPAWN_SETSIGMASK` change them; the other attributes (process
   groups, sessions, ids, scheduling) change nothing.
+- **`fork`** makes a child that is a copy of the process, as on Linux.
+  Its memory is the parent's as it was: what either writes afterwards is
+  its own (the kernel copies a page as it is first written), but for
+  shared memory (`MAP_SHARED`, memory files' and shared memory objects'
+  mappings), which both see. Its one thread is the one that forked, its
+  thread id the child's process id. Its descriptors are the parent's
+  open file descriptions, as a program `posix_spawn` starts has them:
+  files share their offset and `flock` locks, pipes, the terminal and
+  sockets are the same; an `eventfd`, a `timerfd` or an `epoll` instance
+  is a copy of its own (the count, the timer, the interest list as they
+  were). It has the parent's signal handlers, ignored signals and mask,
+  working directory and limits, and none of its pending signals, timers
+  (`alarm`, `setitimer`, `timer_create`), record locks or children, as
+  on Linux; it may signal its parent, which waits for it and hears of
+  its end (`SIGCHLD`). Its descriptions' status flags (`O_NONBLOCK`,
+  `O_APPEND`) are its own: changing one changes it in one process only.
+  The C library holds its own state still meanwhile (`pthread_atfork`'s
+  handlers run), and the POSIX layer its own, so that the child of a
+  program with threads finds them whole: it may allocate and start
+  threads of its own. A child has all the process's memory: keeping a
+  range from it (`MADV_DONTFORK`) or wiping one for it (`MADV_WIPEONFORK`,
+  which some generators of random numbers count on to reseed in the
+  child) is refused (`EINVAL`), so that a program knows to tell the child
+  otherwise.
 - **Signals** are Linux's. They come from the program itself (`raise`,
   `abort`, `SIGPIPE`, `kill` of its own process), from its threads
   (`pthread_kill`, `tgkill`, the C library's for `pthread_cancel`,
@@ -362,7 +387,11 @@ licences ([Licensing](LICENSING.md)), whose texts the image carries in
   between processes (named, and in memory they share, with a lock there),
   suspending threads, files (their owner too), pipes, threads, clocks
   (threads' CPU time too) and the time
-  zone, signals, `posix_spawn`, the network (binding TCP ports, ports
+  zone, signals, `posix_spawn`, `fork` (the child's memory its own but
+  for shared memory, pipes, files' offsets, an `eventfd` and an `epoll`
+  instance in the child, memory wiped for it or the advice refused,
+  handlers, children made while another thread allocates), the network
+  (binding TCP ports, ports
   shared by IPv4 and IPv6-only sockets, and the host's servers through
   QEMU), nice values and processors, `timerfd`, `epoll`, `eventfd`, Unix
   domain sockets, and sockets shared with child processes.
@@ -376,8 +405,10 @@ licences ([Licensing](LICENSING.md)), whose texts the image carries in
 - **`systest`** runs them inside Veda with `verification/c/hello.c`, each
   linked statically, at a fixed address and position-independent, and
   dynamically (`<name>-dynamic`), and tests the kernel's sockets, memory
-  protection, private memory, memory barriers, exit futexes and futexes in
-  shared memory, and the VFS's open files and shared memory objects.
+  protection, private memory, copies of processes (copy-on-write, shared
+  memory, the handles that move to the copy), memory barriers, exit
+  futexes and futexes in shared memory, and the VFS's open files and
+  shared memory objects.
 - **`verification/ui/c-programs.vts`** runs programs in the Terminal
   (exit statuses, an interactive program, Ctrl+C and Ctrl+D, pipes and
   files), and **`c-compile.vts`** compiles one with GCC inside Veda.

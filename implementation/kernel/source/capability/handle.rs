@@ -96,6 +96,39 @@ impl HandleTable {
         Ok(h)
     }
 
+    /// The table of a process `process_fork` makes from the one with this
+    /// table: its names are this table's, and none of them reaches
+    /// anything there (each closed, as [`remove`](Self::remove) closes a
+    /// handle, so that no handle made there takes it), but the names of
+    /// `moved`, each its handle's here, under which it goes there: what the
+    /// new process's memory, a copy of this one's, says of them holds
+    /// there. `BadHandle` for a name that is not this table's, or that
+    /// comes twice.
+    pub fn forked(&self, moved: impl IntoIterator<Item = (RawHandle, Handle)>) -> Result<HandleTable, Error> {
+        let mut slots: Vec<Slot> = self
+            .slots
+            .iter()
+            .map(|s| {
+                let closed = if s.entry.is_some() { s.generation.wrapping_add(1) } else { s.generation };
+                Slot { generation: closed, entry: None }
+            })
+            .collect();
+        let mut count = 0;
+        for (raw, h) in moved {
+            self.slot(raw)?;
+            let (index, generation) = decode(raw).ok_or(Error::BadHandle)?;
+            let slot = &mut slots[index as usize];
+            if slot.entry.is_some() {
+                return Err(Error::BadHandle);
+            }
+            *slot = Slot { generation, entry: Some(h) };
+            count += 1;
+        }
+        // The lowest slots are handed out first.
+        let free: Vec<u32> = (0..slots.len() as u32).rev().filter(|&i| slots[i as usize].entry.is_none()).collect();
+        Ok(HandleTable { slots, free, count })
+    }
+
     /// Removes every handle (process teardown). The caller drops the result
     /// after releasing its locks, because dropping objects can have effects
     /// (e.g. waking channel peers).

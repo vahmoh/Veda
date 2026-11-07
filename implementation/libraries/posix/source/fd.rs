@@ -198,6 +198,28 @@ fn with<R>(f: impl FnOnce(&mut Table) -> R) -> R {
     }
 }
 
+/// In a process `fork` made: its descriptors are `entries` (each number,
+/// its description and its close-on-exec flag), made again from what the
+/// original's were (`crate::fork`). The table its memory has is forgotten,
+/// its descriptions with it: another thread may have been inside one, or
+/// the table, as it was copied.
+///
+/// # Safety
+/// As `runtime::sync::Mutex::reset_after_fork`: in the copy, before it has
+/// another thread.
+pub unsafe fn forked(entries: Vec<(i32, Arc<Description>, bool)>) {
+    let mut t = Table { slots: Vec::new() };
+    for (n, desc, cloexec) in entries {
+        let Some(i) = usize::try_from(n).ok().filter(|&i| i < MAX_FDS) else { continue };
+        if t.slots.len() <= i {
+            t.slots.resize(i + 1, None);
+        }
+        t.slots[i] = Some(Slot { desc, cloexec });
+    }
+    // SAFETY: per the caller.
+    unsafe { TABLE.reset_after_fork(t) };
+}
+
 /// A copy of the calling thread's table: the same descriptions, as `fork`
 /// copies a process's.
 pub fn copy() -> Table {

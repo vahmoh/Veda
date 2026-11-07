@@ -230,6 +230,8 @@ pub mod mman {
     pub const MADV_DONTNEED: u32 = linux_raw_sys::general::MADV_DONTNEED;
     pub const MADV_FREE: u32 = linux_raw_sys::general::MADV_FREE;
     pub const MADV_REMOVE: u32 = linux_raw_sys::general::MADV_REMOVE;
+    pub const MADV_DONTFORK: u32 = linux_raw_sys::general::MADV_DONTFORK;
+    pub const MADV_WIPEONFORK: u32 = linux_raw_sys::general::MADV_WIPEONFORK;
 }
 
 /// `membarrier`'s commands.

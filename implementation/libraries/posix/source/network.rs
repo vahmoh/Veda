@@ -18,6 +18,17 @@ static CLIENT: Mutex<Option<net::Client>> = Mutex::new(None);
 /// The program gave the network service up (`veda_confine_services`).
 static REFUSED: AtomicBool = AtomicBool::new(false);
 
+/// In a process `fork` made: it connects to the network service as it
+/// first needs to (the original's connection is not its).
+///
+/// # Safety
+/// As `runtime::sync::Mutex::reset_after_fork`: in the copy, before it has
+/// another thread.
+pub unsafe fn forked() {
+    // SAFETY: per the caller.
+    unsafe { CLIENT.reset_after_fork(None) };
+}
+
 /// The program reaches the network service no more, for good: the
 /// connection made goes, and what would need it is refused
 /// (`PermissionDenied`). Sockets connected already keep their own.

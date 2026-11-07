@@ -238,6 +238,23 @@ pub fn alloc_user_zeroed() -> Option<u64> {
     Some(frame)
 }
 
+/// Allocates one frame for user space's memory that its caller fills whole
+/// (a copy of another frame), outside the kernel's reserve.
+pub fn alloc_user() -> Option<u64> {
+    let mut guard = ALLOCATOR.lock();
+    let bm = guard.as_mut()?;
+    if !bm.user_may_take(1) {
+        return None;
+    }
+    Some(bm.alloc_one()? * PAGE_SIZE)
+}
+
+/// How many frames the allocator covers: every frame of RAM is below
+/// `frame_count() * PAGE_SIZE`.
+pub fn frame_count() -> u64 {
+    ALLOCATOR.lock().as_ref().map_or(0, |bm| bm.frames)
+}
+
 /// Allocates one zero-filled frame.
 pub fn alloc_zeroed() -> Option<u64> {
     let p = alloc()?;

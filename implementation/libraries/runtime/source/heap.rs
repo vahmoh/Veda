@@ -200,6 +200,23 @@ impl Heap {
     }
 }
 
+/// The heap held still ([`Heap::hold`]): no thread allocates or frees while
+/// it lives.
+pub struct Held<'a> {
+    _state: crate::sync::MutexGuard<'a, HeapState>,
+}
+
+impl Heap {
+    /// Holds the heap still while a copy of the process is made
+    /// (`process_fork`): no other thread allocates or frees in the meantime,
+    /// so that the copy's heap is whole, as no thread is in the middle of
+    /// changing it. The copy has the hold too, and lets it go as the
+    /// original does. Nothing may allocate meanwhile.
+    pub fn hold(&self) -> Held<'_> {
+        Held { _state: self.state.lock() }
+    }
+}
+
 /// Whether an allocation of `layout` gets a mapping of its own.
 fn is_large(layout: Layout) -> bool {
     layout.size() >= LARGE_THRESHOLD && layout.align() <= abi::PAGE_SIZE

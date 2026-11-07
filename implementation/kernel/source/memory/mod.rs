@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Memory management: physical frames, page tables, the kernel heap, kernel
-//! virtual allocations, memory objects (VMOs), user address spaces, and
-//! what the system ends when memory runs out.
+//! virtual allocations, memory objects (VMOs), user address spaces and
+//! their copies (copy-on-write), and what the system ends when memory runs
+//! out.
 
 pub mod aspace;
+pub mod cow;
 pub mod heap;
 pub mod kvirt;
 pub mod oom;

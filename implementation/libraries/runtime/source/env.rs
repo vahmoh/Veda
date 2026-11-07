@@ -41,6 +41,37 @@ pub(crate) struct Startup {
 #[cfg(not(target_os = "veda"))]
 pub(crate) static STARTUP: Mutex<Option<Startup>> = Mutex::new(None);
 
+/// What a process `process_fork` makes keeps of the startup message
+/// ([`before_fork`], [`forked`]): its arguments, environment and working
+/// directory, and none of its handles.
+#[cfg(not(target_os = "veda"))]
+pub struct StartupCopy(Option<Startup>);
+
+/// A copy of what the startup message said, but its handles, for a process
+/// `process_fork` is about to make.
+#[cfg(not(target_os = "veda"))]
+pub fn before_fork() -> StartupCopy {
+    StartupCopy(STARTUP.lock().as_ref().map(|s| Startup {
+        args: s.args.clone(),
+        env: s.env.clone(),
+        cwd: s.cwd.clone(),
+        handles: Vec::new(),
+    }))
+}
+
+/// In a process `process_fork` made: what the startup message said is
+/// `copy` ([`before_fork`]), without the handles not taken yet, whose names
+/// are the original's, which reach nothing here (nor ever will: no handle
+/// made here takes them).
+///
+/// # Safety
+/// As `Mutex::reset_after_fork`: in the copy, before it has another thread.
+#[cfg(not(target_os = "veda"))]
+pub unsafe fn forked(copy: StartupCopy) {
+    // SAFETY: per the caller.
+    unsafe { STARTUP.reset_after_fork(copy.0) };
+}
+
 /// Command-line arguments; `args()[0]` is the program name.
 #[cfg(not(any(veda_guest, target_os = "veda")))]
 pub fn args() -> Vec<String> {

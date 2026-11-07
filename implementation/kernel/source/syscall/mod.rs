@@ -58,6 +58,7 @@ pub fn syscall_dispatch(frame: &mut TrapFrame) -> bool {
             restore = true;
             (0, None)
         }),
+        nr::PROCESS_FORK => task::process_fork(frame, a[0], a[1]),
         _ => dispatch(n, a),
     };
     match result {

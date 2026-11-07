@@ -82,6 +82,19 @@ pub fn set_memory_class(process: Option<&Process>, class: usize) -> Result<(), E
     call(nr::PROCESS_SET_MEMORY_CLASS, [h as usize, class, 0, 0, 0, 0]).map(|_| ())
 }
 
+/// Makes a process that is a copy of this one (`process_fork`): its memory
+/// is this one's as it is now, its one thread goes on from this call as the
+/// calling thread does, and the handles `moved` (each with `TRANSFER`)
+/// become its own, under the same names, no longer this process's. Returns
+/// the copy here, and `None` in the copy. A program that calls it holds
+/// still what the copy must find whole (its heap: [`crate::heap::Heap::hold`]).
+pub fn fork(moved: &[abi::RawHandle]) -> Result<Option<Process>, Error> {
+    let h = call(nr::PROCESS_FORK, [moved.as_ptr() as usize, moved.len(), 0, 0, 0, 0])?;
+    // SAFETY: a fresh handle from the kernel, in the original (the copy's
+    // call returns 0, which is never one).
+    Ok((h != 0).then(|| Process(unsafe { Handle::from_raw(h as u32) })))
+}
+
 /// The user and group POSIX programs run as.
 pub const UID: u32 = 1000;
 

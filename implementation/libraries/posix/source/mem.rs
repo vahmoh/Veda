@@ -13,7 +13,9 @@
 //! included, or dropped with `MADV_DONTNEED`. Other mappings get a VMO of
 //! their own, which the mapping keeps alive (the handle is closed at once).
 //! Either way `munmap` and `mprotect` are plain kernel calls on address
-//! ranges. A file mapping is a private copy of the file's bytes: changes
+//! ranges. A process `fork` makes has a copy of a private mapping (the
+//! kernel's, copy-on-write) and the memory of a shared one itself, which
+//! the kernel is told of each (`map_flags::SHARED`). A file mapping is a private copy of the file's bytes: changes
 //! are never written back, so shared writable file mappings are refused,
 //! and a shared one is mapped through a handle without the right to write,
 //! so that `mprotect` cannot make it writable either (`EACCES`). A mapping
@@ -111,7 +113,8 @@ pub unsafe fn mmap(addr: usize, len: usize, prot: u32, flags: u32, fd: i32, offs
     }
     let hint = addr & !(PAGE - 1);
     if let Some(vmo) = memory {
-        return vm::map(None, &vmo, offset as usize, len, hint, map_prot(prot) | place).map_err(map_error);
+        let shared = map_prot(prot) | place | map_flags::SHARED;
+        return vm::map(None, &vmo, offset as usize, len, hint, shared).map_err(map_error);
     }
     if let Some(d) = desc.as_deref()
         && let Object::Memfd(m) = &d.object
@@ -126,7 +129,7 @@ pub unsafe fn mmap(addr: usize, len: usize, prot: u32, flags: u32, fd: i32, offs
         (Some(f), private) => map_file(f, offset as u64, len, hint, place, prot, private),
         (None, true) => vm::allocate(None, len, hint, map_prot(prot) | place).map_err(map_error),
         (None, false) => Vmo::create(len)
-            .and_then(|vmo| vm::map(None, &vmo, 0, len, hint, map_prot(prot) | place))
+            .and_then(|vmo| vm::map(None, &vmo, 0, len, hint, map_prot(prot) | place | map_flags::SHARED))
             .map_err(map_error),
     }
 }
@@ -185,7 +188,7 @@ fn map_file(file: &VfsFile, offset: u64, len: usize, hint: usize, place: usize, 
     filled?;
     let rights = vmo.0.basic_info().map_err(error::kernel)?.rights & !Rights::WRITE.0;
     let read_only = Vmo::from_handle(vmo.0.duplicate(Some(Rights(rights))).map_err(error::kernel)?);
-    vm::map(None, &read_only, 0, len, hint, map_prot(prot) | place).map_err(map_error)
+    vm::map(None, &read_only, 0, len, hint, map_prot(prot) | place | map_flags::SHARED).map_err(map_error)
 }
 
 pub fn munmap(addr: usize, len: usize) -> SysResult {
@@ -234,8 +237,13 @@ pub fn membarrier(cmd: u32, flags: u32) -> SysResult {
 /// `madvise`. Dropping pages (`MADV_DONTNEED`, `MADV_FREE`) frees them at
 /// once in private anonymous memory, which reads as zeros afterwards; other
 /// memory has nowhere to take its contents back from, so the advice is
-/// refused there (`EINVAL`, as on Linux where it cannot apply). Other
-/// advice is taken as given.
+/// refused there (`EINVAL`, as on Linux where it cannot apply). A copy
+/// `fork` makes has all the process's memory: keeping a range from it
+/// (`MADV_DONTFORK`) or wiping one for it (`MADV_WIPEONFORK`) is refused
+/// (`EINVAL`, as Linux refuses advice it has not), so that a program that
+/// counts on the copy's having zeros there (a generator of random numbers
+/// that would reseed) knows to look for the copy otherwise. Other advice is
+/// taken as given.
 pub fn madvise(addr: usize, len: usize, advice: u32) -> SysResult {
     if !addr.is_multiple_of(PAGE) {
         return Err(EINVAL);
@@ -250,7 +258,7 @@ pub fn madvise(addr: usize, len: usize, advice: u32) -> SysResult {
             Error::NotSupported => EINVAL,
             e => error::kernel(e),
         }),
-        MADV_REMOVE => Err(EINVAL),
+        MADV_REMOVE | MADV_DONTFORK | MADV_WIPEONFORK => Err(EINVAL),
         _ => Ok(0),
     }
 }

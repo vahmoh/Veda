@@ -37,6 +37,21 @@ impl EventFd {
         Ok(e)
     }
 
+    /// What a copy of it in a process `fork` makes has (`crate::fork`):
+    /// its count, and whether a read takes 1.
+    pub fn fork_copy(&self) -> (u64, bool) {
+        (*self.count.lock(), self.semaphore)
+    }
+
+    /// A copy of one in the process `fork` copied ([`Self::fork_copy`]): its
+    /// own count, from the same value, and an event of its own.
+    pub fn restored((count, semaphore): (u64, bool)) -> Result<EventFd, isize> {
+        let event = Event::create().map_err(error::kernel)?;
+        let e = EventFd { count: Mutex::new(count.min(MAX)), semaphore, event };
+        e.signal(count.min(MAX));
+        Ok(e)
+    }
+
     fn signal(&self, count: u64) {
         let readable = if count > 0 { READABLE } else { 0 };
         let writable = if count < MAX { WRITABLE } else { 0 };

@@ -20,7 +20,7 @@ use crate::capability::KObject;
 use crate::capability::handle::Handle;
 use crate::hardware::resource::Resource;
 use crate::ipc::channel::{self, Message};
-use crate::memory::aspace::Perms;
+use crate::memory::aspace::{Inherit, Perms};
 use crate::memory::paging::Cache;
 use crate::memory::phys_to_virt;
 use crate::memory::vmo::Vmo;
@@ -71,12 +71,15 @@ pub fn spawn_init(boot: &BootInfo) {
     for run in elf::page_runs(&elf, elf::Relro::ReadOnly) {
         let perms = Perms { read: true, write: run.perms.write, exec: run.perms.exec };
         let at = run.start.wrapping_add(bias);
-        aspace.map(vmo.clone(), run.start - lo, run.len, at, true, perms, Perms::ALL, false).expect("mapping init");
+        aspace
+            .map(vmo.clone(), run.start - lo, run.len, at, true, perms, Perms::ALL, Inherit::OWN, false)
+            .expect("mapping init");
     }
 
     let stack = Vmo::new_anonymous(STACK_SIZE, Cache::WriteBack).unwrap();
     let rw = Perms { read: true, write: true, exec: false };
-    let stack_base = aspace.map(stack, 0, STACK_SIZE, 0, false, rw, Perms::ALL, false).expect("mapping init's stack");
+    let stack_base =
+        aspace.map(stack, 0, STACK_SIZE, 0, false, rw, Perms::ALL, Inherit::OWN, false).expect("mapping init's stack");
 
     // Boot modules handed to init.
     let fb = &boot.framebuffer;

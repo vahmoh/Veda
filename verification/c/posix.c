@@ -1200,6 +1200,256 @@ static void check_processes(void)
 	CHECK("environment", e && *e == '/', "HOME is '%s'", e ? e : "(unset)");
 }
 
+/* Reads `len` bytes from `fd`, as many reads as it takes: how many came. */
+static size_t read_exactly(int fd, void *buf, size_t len)
+{
+	size_t got = 0;
+	ssize_t n;
+	while (got < len && (n = read(fd, (char *)buf + got, len - got)) > 0)
+		got += n;
+	return got;
+}
+
+static int forked_global = 1;
+static volatile sig_atomic_t forked_handled;
+
+static void on_forked_usr2(int s)
+{
+	(void)s;
+	forked_handled = 1;
+}
+
+/* A thread that allocates and frees for as long as `churning` says, so that
+   fork copies a process whose heap another thread is changing. */
+static atomic_int churning;
+
+static void *churn(void *arg)
+{
+	(void)arg;
+	while (atomic_load(&churning)) {
+		void *p = malloc(1 + (rand() % 70000));
+		free(p);
+	}
+	return 0;
+}
+
+static void *give_back(void *arg)
+{
+	return arg;
+}
+
+/* fork (and vfork, which is fork here): a copy of this process, its memory
+   its own (the heap, private and global memory: what either writes after
+   the fork, the other does not see), but for shared memory, a memory
+   file's even once closed; its descriptors the same open files, pipes among
+   them (its end of one closing as it ends) and files, whose offset it
+   shares, and copies of its own of an eventfd and an epoll instance; its
+   handlers this process's, which it may signal. Copies made while another
+   thread allocates, whose heap and threads work. */
+static void check_fork(void)
+{
+	fflush(stdout);
+	int *heap = malloc(4 * sizeof(int));
+	char *private = mmap(0, 1 << 16, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	int *shared = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+	int memfd = memfd_create("fork", MFD_CLOEXEC);
+	int *file = memfd >= 0 && ftruncate(memfd, 4096) == 0 ?
+			    mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, memfd, 0) :
+			    MAP_FAILED;
+	if (memfd >= 0)
+		close(memfd);
+	int to_parent[2], to_child[2];
+	if (!heap || private == MAP_FAILED || shared == MAP_FAILED || file == MAP_FAILED || pipe(to_parent) ||
+	    pipe(to_child)) {
+		CHECK("fork", 0, "no memory or pipes to fork with");
+		return;
+	}
+	heap[0] = 11;
+	private[0] = 12;
+	private[(1 << 16) - 1] = 15;
+	shared[0] = 13;
+	file[0] = 16;
+	forked_global = 14;
+	pid_t me = getpid();
+	pid_t pid = fork();
+	if (pid == 0) {
+		close(to_parent[0]);
+		close(to_child[1]);
+		int saw[8] = { getppid() == me, getpid() != me && getpid() > 0, heap[0], private[0], shared[0],
+			       forked_global, private[(1 << 16) - 1], file[0] };
+		/* Its writes are its own, but for the shared memory's. */
+		heap[0] = 21;
+		private[0] = 22;
+		shared[0] = 23;
+		forked_global = 24;
+		file[0] = 26;
+		char go;
+		if (write(to_parent[1], saw, sizeof saw) != sizeof saw || read(to_child[0], &go, 1) != 1)
+			_exit(1);
+		/* What the parent wrote since is the parent's. */
+		int after[4] = { heap[0], private[0], shared[0], forked_global };
+		_exit(write(to_parent[1], after, sizeof after) == sizeof after ? 5 : 1);
+	}
+	close(to_parent[1]);
+	close(to_child[0]);
+	int saw[8] = { 0 };
+	size_t got = pid > 0 ? read_exactly(to_parent[0], saw, sizeof saw) : 0;
+	CHECK("fork", got == sizeof saw && saw[0] && saw[1], "pid %d, %zu bytes, parent %d, own id %d", pid, got,
+	      saw[0], saw[1]);
+	CHECK("the copy has the memory as it was", saw[2] == 11 && saw[3] == 12 && saw[4] == 13 && saw[5] == 14 &&
+	      saw[6] == 15 && saw[7] == 16, "%d %d %d %d %d %d", saw[2], saw[3], saw[4], saw[5], saw[6], saw[7]);
+	CHECK("the copy's writes are its own", heap[0] == 11 && private[0] == 12 && forked_global == 14, "%d %d %d",
+	      heap[0], private[0], forked_global);
+	CHECK("shared memory is the copy's too", shared[0] == 23 && file[0] == 26, "%d %d", shared[0], file[0]);
+	heap[0] = 31;
+	private[0] = 32;
+	shared[0] = 33;
+	forked_global = 34;
+	int after[4] = { 0 };
+	got = write(to_child[1], "g", 1) == 1 ? read_exactly(to_parent[0], after, sizeof after) : 0;
+	CHECK("the parent's writes are its own", got == sizeof after && after[0] == 21 && after[1] == 22 &&
+	      after[2] == 33 && after[3] == 24, "%d %d %d %d", after[0], after[1], after[2], after[3]);
+	int status = -1;
+	pid_t waited = pid > 0 ? waitpid(pid, &status, 0) : -1;
+	CHECK("waitpid for a copy", waited == pid && WIFEXITED(status) && WEXITSTATUS(status) == 5, "status %#x", status);
+	char end;
+	CHECK("the copy's end of a pipe goes with it", read(to_parent[0], &end, 1) == 0, "the pipe did not end");
+	close(to_parent[0]);
+	close(to_child[1]);
+	munmap(private, 1 << 16);
+	munmap(shared, 4096);
+	munmap(file, 4096);
+	free(heap);
+
+	/* A file's offset is shared: what the copy wrote, this process writes
+	   after. */
+	char path[] = "fork-offset-XXXXXX";
+	int fd = mkstemp(path);
+	pid = fd >= 0 ? fork() : -1;
+	if (pid == 0)
+		_exit(write(fd, "abc", 3) == 3 ? 0 : 1);
+	status = -1;
+	waited = pid > 0 ? waitpid(pid, &status, 0) : -1;
+	char text[8] = { 0 };
+	int wrote = waited == pid && write(fd, "def", 3) == 3 && pread(fd, text, 6, 0) == 6;
+	CHECK("a file's offset is shared with the copy", wrote && WIFEXITED(status) && WEXITSTATUS(status) == 0 &&
+	      !strcmp(text, "abcdef"), "status %#x, '%s'", status, text);
+	if (fd >= 0) {
+		close(fd);
+		unlink(path);
+	}
+
+	/* An eventfd and an epoll instance, which are the copy's own: the
+	   eventfd's count as it was, an epoll instance that watches what this
+	   one does. */
+	int ev = eventfd(5, 0);
+	int ep = epoll_create1(0);
+	int ready[2];
+	struct epoll_event watch = { .events = EPOLLIN, .data.u64 = 77 };
+	if (ev < 0 || ep < 0 || pipe(ready) || epoll_ctl(ep, EPOLL_CTL_ADD, ready[0], &watch)) {
+		CHECK("an eventfd and an epoll instance in the copy", 0, "could not make them");
+	} else {
+		pid = fork();
+		if (pid == 0) {
+			uint64_t count = 0;
+			struct epoll_event e = { 0 };
+			int counted = read(ev, &count, sizeof count) == sizeof count && count == 5;
+			int watched = epoll_wait(ep, &e, 1, 10000) == 1 && e.data.u64 == 77;
+			_exit(counted && watched ? 0 : counted ? 2 : 3);
+		}
+		/* What the copy waits for. */
+		int sent = write(ready[1], "x", 1) == 1;
+		status = -1;
+		waited = pid > 0 ? waitpid(pid, &status, 0) : -1;
+		uint64_t count = 0;
+		int mine = read(ev, &count, sizeof count) == sizeof count && count == 5;
+		CHECK("an eventfd and an epoll instance in the copy", sent && waited == pid && WIFEXITED(status) &&
+		      WEXITSTATUS(status) == 0 && mine, "status %#x, this one's count %llu", status,
+		      (unsigned long long)count);
+		close(ready[0]);
+		close(ready[1]);
+	}
+	if (ev >= 0)
+		close(ev);
+	if (ep >= 0)
+		close(ep);
+
+	/* Memory wiped for the copy (MADV_WIPEONFORK, which random number
+	   generators count on to reseed there): the copy has zeros there, or
+	   the advice is refused, never the parent's bytes. */
+	char *wiped = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (wiped != MAP_FAILED) {
+		wiped[0] = 42;
+		int advised = madvise(wiped, 4096, MADV_WIPEONFORK);
+		int why = errno;
+		pid = fork();
+		if (pid == 0)
+			_exit(wiped[0] == 0 ? 0 : wiped[0] == 42 ? 1 : 2);
+		status = -1;
+		waited = pid > 0 ? waitpid(pid, &status, 0) : -1;
+		int code = waited == pid && WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+		CHECK("memory wiped for the copy, or the advice refused",
+		      (advised == 0 && code == 0) || (advised < 0 && why == EINVAL && code == 1),
+		      "madvise %d (errno %d), the copy's code %d", advised, why, code);
+		munmap(wiped, 4096);
+	}
+
+	/* Handlers are the copy's too, and it may signal its parent. */
+	signal(SIGUSR2, on_forked_usr2);
+	forked_handled = 0;
+	sigset_t usr1, old;
+	sigemptyset(&usr1);
+	sigaddset(&usr1, SIGUSR1);
+	sigprocmask(SIG_BLOCK, &usr1, &old);
+	pid = fork();
+	if (pid == 0) {
+		raise(SIGUSR2);
+		_exit(!forked_handled ? 9 : kill(getppid(), SIGUSR1) == 0 ? 8 : 10);
+	}
+	struct timespec ten = { 10, 0 };
+	int signalled = pid > 0 && sigtimedwait(&usr1, 0, &ten) == SIGUSR1;
+	status = -1;
+	waited = pid > 0 ? waitpid(pid, &status, 0) : -1;
+	sigprocmask(SIG_SETMASK, &old, 0);
+	signal(SIGUSR2, SIG_DFL);
+	CHECK("the copy has the handlers, and signals its parent", signalled && waited == pid && WIFEXITED(status) &&
+	      WEXITSTATUS(status) == 8, "signalled %d, status %#x", signalled, status);
+
+	/* vfork: a copy too, which may only _exit. */
+	pid = vfork();
+	if (pid == 0)
+		_exit(getppid() == me ? 3 : 4);
+	status = -1;
+	waited = pid > 0 ? waitpid(pid, &status, 0) : -1;
+	CHECK("vfork", waited == pid && WIFEXITED(status) && WEXITSTATUS(status) == 3, "pid %d status %#x", pid,
+	      status);
+
+	/* Copies made while another thread changes the heap: theirs is whole,
+	   and they make threads of their own. */
+	pthread_t churner;
+	atomic_store(&churning, 1);
+	int churns = !pthread_create(&churner, 0, churn, 0);
+	int copies = 0;
+	for (int i = 0; churns && i < 20; i++) {
+		fflush(stdout);
+		pid = fork();
+		if (pid == 0) {
+			void *p = malloc(100000);
+			pthread_t t;
+			int ok = p && !pthread_create(&t, 0, give_back, p) && !pthread_join(t, 0);
+			free(p);
+			_exit(ok ? 0 : 1);
+		}
+		status = -1;
+		if (pid > 0 && waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0)
+			copies++;
+	}
+	atomic_store(&churning, 0);
+	if (churns)
+		pthread_join(churner, 0);
+	CHECK("fork while another thread allocates", churns && copies == 20, "%d of 20 copies worked", copies);
+}
+
 /* Memory classes (<veda/memory.h>): what the system ends first when
  * memory runs out. A process moves only towards the most expendable, as
  * a child of its moves itself; a child that ended by itself was not ended
@@ -3522,6 +3772,7 @@ int main(int argc, char **argv)
 	check_time();
 	check_signals();
 	check_processes();
+	check_fork();
 	check_asynchronous_signals();
 	check_signals_in_the_c_library();
 	check_file_locks();

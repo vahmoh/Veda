@@ -134,12 +134,41 @@ impl Process {
     }
 
     pub fn new(name: &str, parent_koid: u64, max_priority: u8, memory_class: u8) -> Option<Arc<Process>> {
+        Some(Process::build(name, parent_koid, max_priority, memory_class, AddressSpace::new()?, HandleTable::new()))
+    }
+
+    /// The process `process_fork` makes of this one: its address space
+    /// `aspace` and its handles `handles` (copied and moved by the caller),
+    /// and of this one's, its name, the highest priority its threads may
+    /// run at, its memory class, what it gave up and the signals it
+    /// inherited as ignored and blocked; no signal sent it yet. This
+    /// process is its parent. Its thread takes the signals other processes
+    /// send it ([`Process::set_signal_entry`], this one's entry) once
+    /// added.
+    pub fn forked(&self, aspace: Arc<AddressSpace>, handles: HandleTable) -> Arc<Process> {
+        let p = Process::build(self.name.as_str(), self.koid, self.max_priority, self.memory_class(), aspace, handles);
+        p.restrict(self.restrictions.load(Ordering::Acquire));
+        p.set_inherited_signals(
+            self.inherited_ignored.load(Ordering::Acquire),
+            self.inherited_blocked.load(Ordering::Acquire),
+        );
+        p
+    }
+
+    fn build(
+        name: &str,
+        parent_koid: u64,
+        max_priority: u8,
+        memory_class: u8,
+        aspace: Arc<AddressSpace>,
+        handles: HandleTable,
+    ) -> Arc<Process> {
         let p = Arc::new(Process {
             koid: crate::capability::new_koid(),
             parent_koid,
             name: Name::new(name),
-            aspace: SpinLock::new(Some(AddressSpace::new()?)),
-            handles: SpinLock::new(HandleTable::new()),
+            aspace: SpinLock::new(Some(aspace)),
+            handles: SpinLock::new(handles),
             threads: SpinLock::new(Vec::new()),
             state: SpinLock::new(ProcessState::Created),
             pending_code: SpinLock::new(None),
@@ -158,7 +187,7 @@ impl Process {
         let mut list = PROCESSES.lock();
         list.retain(|w| w.strong_count() > 0);
         list.push(Arc::downgrade(&p));
-        Some(p)
+        p
     }
 
     /// The address space, unless the process has terminated.

@@ -169,12 +169,17 @@ Rust programs share the limits of C programs
   development machine: the toolchain builds neither for Veda (the
   compiler stands on LLVM's libraries and its own, and loads procedural
   macros as shared libraries).
-- **No `fork` or `exec`.** `Command` starts every program with
-  `posix_spawn`. What only a child between `fork` and `exec` could do
-  fails with `Unsupported` (`CommandExt::pre_exec`, `uid`, `gid`), as do
+- **No `exec`.** `Command` starts every program with `posix_spawn`.
+  What only a child between `fork` and `exec` could do fails with
+  `Unsupported` (`CommandExt::pre_exec`, `uid`, `gid`), as do
   `CommandExt::exec` and a `Command` that changes `PATH` for a program
   named without a directory. `process_group` changes nothing, as Veda's
-  processes have no groups.
+  processes have no groups. `fork` (the C library's, through `libc`)
+  copies the process, as for a C program ([C on
+  Veda](C.md#processes-and-signals)); the standard library's heap and
+  locks are the program's, which `fork` does not hold still, so the child
+  of a program with threads does only what POSIX lets such a child do
+  (async-signal-safe calls), as on Linux.
 - **A fault ends the program** (status 139 in the Terminal): the
   standard library has no stack-overflow handler, and a thread that
   overflows its stack ends the program without a message. `Child::kill`

@@ -23,6 +23,7 @@
 //! | threads, TLS, futexes | kernel threads, the thread pointer, kernel futexes ([`thread`]) |
 //! | nice values, affinity | the kernel's thread priorities; every processor ([`sched`]) |
 //! | `fork` + `exec` | `posix_spawn`, which loads the program directly ([`process`]) |
+//! | `fork` alone | the kernel's copy of the process (`process_fork`), with handles of its own and the layer's state made its own ([`fork`]) |
 //! | signals | the layer's own state, handlers run as a call returns or where the kernel interrupts a thread ([`signal`], [`interrupt`]); another process's by way of the kernel |
 //! | `alarm`, `setitimer`, `timer_create` | timers of the layer's, which a thread of its signals ([`timer`]) |
 //! | a sandbox (Landlock, seccomp, namespaces) | the VFS connection and the registry channel confined, the kernel's `process_restrict` (`<veda/sandbox.h>`, [`sandbox`]) |
@@ -82,6 +83,7 @@ mod error;
 mod eventfd;
 mod fd;
 mod file;
+mod fork;
 mod fs;
 pub mod host;
 mod inet;

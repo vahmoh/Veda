@@ -25,6 +25,23 @@ static CWD: Mutex<String> = Mutex::new(String::new());
 /// drawn it for the connection (`vfs::lock_owner`).
 static LOCK_OWNER: Mutex<Option<Vec<u8>>> = Mutex::new(None);
 
+/// In a process `fork` made: its working directory is `cwd`, the
+/// original's, and it connects to the VFS as it first needs to, as its
+/// own process (the original's connection is not its; nor are its record
+/// locks, which its own secret owns, as on Linux).
+///
+/// # Safety
+/// As `runtime::sync::Mutex::reset_after_fork`: in the copy, before it has
+/// another thread.
+pub unsafe fn forked(cwd: String) {
+    // SAFETY: per the caller.
+    unsafe {
+        VFS.reset_after_fork(None);
+        CWD.reset_after_fork(cwd);
+        LOCK_OWNER.reset_after_fork(None);
+    }
+}
+
 /// Runs `f` with the VFS connection. Calls from several threads take turns.
 pub fn with<R>(f: impl FnOnce(&vfs::Client) -> R) -> Result<R, isize> {
     let mut slot = VFS.lock();

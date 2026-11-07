@@ -95,7 +95,7 @@ key, and **Install Veda** does nothing yet. A disk's system has no menu.
 | Module | Responsibility |
 |--------|----------------|
 | `architecture` | the processor architecture and its platform, behind one interface (`source/architectures/mod.rs`, each architecture in a directory beside it); on AMD64 the GDT, TSS, IDT and entry paths, APICs, timers, SMP bring-up, TLB shootdowns, page tables, the context switch, VMX and EPT, and the IOMMU (VT-d) |
-| `memory` | frame allocator, page tables, kernel heap, kernel stacks and MMIO windows, VMOs, address spaces, user copies |
+| `memory` | frame allocator, page tables, kernel heap, kernel stacks and MMIO windows, VMOs, address spaces and their copies (copy-on-write, `cow`), user copies |
 | `scheduler` | processes and threads, priority round-robin scheduling, blocking with timeouts, idle loop, what the kernel keeps for each CPU (`percpu`), and foreign code (`foreign`) |
 | `capability` | handles, through which user space reaches kernel objects, and the objects' signals |
 | `ipc` | channels, sockets, events, ports |
@@ -161,6 +161,30 @@ key, and **Install Veda** does nothing yet. A disk's system has no menu.
   sees of a library's thread-local storage. The
   kernel keeps a reserve of memory (1/64 of it, 8 to 64 MiB) for itself;
   `system_info` counts as free only what programs may still take.
+- **Copies of processes.** A process can make a copy of itself
+  (`process_fork`), as Unix's `fork` does, for POSIX programs' `fork`
+  ([C on Veda](C.md#processes-and-signals), [Linux programs on
+  Veda](LINUX.md#how-it-works)): one thread, which goes on from the call
+  with the caller's registers (vector registers and thread pointer too),
+  in memory that is the caller's as it was. Memory that is the process's
+  own (private memory, and VMOs that nothing reaches but its mappings: no
+  handle, no other address space, no guest, no device given its pages) is
+  copied on write: each page is one frame for both until either writes
+  it, which then has a copy, the others keeping the frame. `memory::cow`
+  counts, for each frame, the VMOs beyond the first that hold it (a frame
+  of counts for each 1024 frames of memory, made as the first of them is
+  shared), and frees a frame as the last lets it go. Other memory is the
+  same VMO in the copy, if the handle it was mapped with could have given
+  it to the copy (`TRANSFER`), and is not there otherwise, so that a copy
+  has no memory its parent could not have given it; POSIX's shared
+  mappings, whose handles are closed, say they are shared
+  (`map_flags::SHARED`). The copy's handle table has the caller's names,
+  none of which reaches anything but the handles the caller names, which
+  move to it under the same names, so that what its memory says of them
+  holds there. It has what the caller gave up (`process_restrict`), its
+  memory class and its maximum priority. A page so shared counts in the
+  memory of each process that has it, as Linux's resident sizes count
+  it.
 - **When memory runs out.** Memory is committed as it is touched, so it
   runs out at a page fault, which no call can return an error from. The
   kernel then ends a process to make room (`memory::oom`), by its *memory
@@ -316,7 +340,8 @@ each is:
   named by the VFS, `epoll` a kernel port, memory files VMOs, `timerfd`
   and `alarm`'s timers the layer's own, which a thread of its expires, and
   threads kernel threads, which the kernel interrupts for the signals the
-  layer keeps; `posix_spawn` starts processes (see [C on Veda](C.md)).
+  layer keeps; `posix_spawn` starts processes, and `fork` copies one
+  (see [C on Veda](C.md)).
   Python is such a program too, CPython with its modules built in
   ([Python on Veda](PYTHON.md)).
 - **Linux programs** run as they were built for Linux: any executable
@@ -1134,7 +1159,10 @@ the actions every `ui` application offers over the `agentapp` protocol
   an access point, two TCP/IP stacks over a simulated cable, and TLS
   against a rustls server and real certificate chains.
 - **`systest`** runs inside Veda: kernel objects, threads, memory (pages
-  a process unmaps gone at once for its threads on every processor), the
+  a process unmaps gone at once for its threads on every processor),
+  copies of processes (copy-on-write: each side's writes its own, shared
+  memory shared, a copy costing memory only as it is written, the handles
+  that move to it), the
   clocks programs read themselves, the file system, the launcher and what
   it lets an application do (an application spinning on every processor,
   as high as it may, while the services must go on answering), crash

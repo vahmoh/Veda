@@ -65,6 +65,17 @@ struct Map {
 
 static MAP: Mutex<Map> = Mutex::new(Map { areas: BTreeMap::new(), brk: (0, 0) });
 
+/// The program's areas held still ([`hold`]).
+pub struct Held {
+    _map: runtime::sync::MutexGuard<'static, Map>,
+}
+
+/// Holds the program's areas still while a copy of the process is made
+/// (`fork`), which has them as they are: none is being changed.
+pub fn hold() -> Held {
+    Held { _map: MAP.lock() }
+}
+
 impl Map {
     /// Takes `[start, end)` out of every area, splitting those it cuts.
     fn cut(&mut self, start: u64, end: u64) {

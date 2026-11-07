@@ -4,7 +4,9 @@
 //! Processes: ids, starting programs (`posix_spawn`), waiting for them,
 //! `kill` and exit.
 //!
-//! There is no `fork`: Veda creates a process from a program image, and
+//! A program starts in a process of its own: Veda creates a process from a
+//! program image (there is no `exec`; `fork` copies a process, `crate::fork`,
+//! whose child is one of this process's as a program it starts is), and
 //! gives it what `exec` keeps on Linux: the descriptors not marked
 //! close-on-exec, as the file actions leave them, the working directory,
 //! the signals ignored and the signal mask, as the attributes change them
@@ -174,6 +176,41 @@ static PARENT: Mutex<Option<Process>> = Mutex::new(None);
 /// Keeps the handle to the process that started this one (`role::PARENT`).
 pub fn adopt_parent(parent: Process) {
     *PARENT.lock() = Some(parent);
+}
+
+/// The process `fork` made of this one, `child`, is one of its children
+/// from now on, which it may wait for and signal, and whose end sends it
+/// `SIGCHLD`: its process id. `EAGAIN` (and the copy ended) for one whose
+/// id another child not waited for has, which ids repeating after 2^30
+/// kernel objects could give it.
+pub fn adopt_child(child: Process) -> Result<i32, isize> {
+    let pid = pid_of(child.0.koid());
+    if CHILDREN.lock().contains_key(&pid) || ENDED.lock().contains_key(&pid) {
+        let _ = child.kill();
+        return Err(EAGAIN);
+    }
+    let raw = child.raw();
+    CHILDREN.lock().insert(pid, child);
+    watch(pid, raw);
+    Ok(pid)
+}
+
+/// In a process `fork` made: it is no longer the process its memory says
+/// it is (its id is its own), it has no children yet, and its parent is
+/// the original, `parent`, which it may signal.
+///
+/// # Safety
+/// As `runtime::sync::Mutex::reset_after_fork`: in the copy, before it has
+/// another thread.
+pub unsafe fn forked(parent: Process) {
+    KOID.store(0, Ordering::Relaxed);
+    // SAFETY: per the caller.
+    unsafe {
+        CHILDREN.reset_after_fork(BTreeMap::new());
+        ENDED.reset_after_fork(BTreeMap::new());
+        WATCH.reset_after_fork(None);
+        PARENT.reset_after_fork(Some(parent));
+    }
 }
 
 /// Whether `pid` is a child of this process not waited for yet.

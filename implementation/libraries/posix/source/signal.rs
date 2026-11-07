@@ -441,6 +441,50 @@ pub fn thread_exited() {
     }
 }
 
+/// What a process `fork` makes has of the signals' state (`crate::fork`):
+/// the dispositions, and the calling thread's mask and name.
+pub struct Copy {
+    actions: [Sigaction; sig::NSIG as usize],
+    thread: ThreadState,
+}
+
+/// The signals' state, as a process `fork` is about to make has it.
+pub fn fork_copy() -> Copy {
+    let tp = current();
+    let st = STATE.lock();
+    Copy { actions: st.actions, thread: st.get(tp) }
+}
+
+/// In a process `fork` made, whose one thread is the calling one, now its
+/// main thread, of id `pid`: the dispositions and that thread's mask and
+/// name are the original's ([`fork_copy`]), no signal is pending (as on
+/// Linux), and no other thread is known. Nothing is ready for the thread,
+/// nor was an interruption of it put off: the kernel interrupted no thread
+/// of this process yet.
+///
+/// # Safety
+/// As `runtime::sync::Mutex::reset_after_fork`: in the copy, before it has
+/// another thread.
+pub unsafe fn forked(copy: Copy, pid: i32) {
+    let tp = current();
+    let thread = ThreadState { tid: pid, name: copy.thread.name, mask: copy.thread.mask, ..ThreadState::default() };
+    let state = State {
+        actions: copy.actions,
+        apart: BTreeMap::new(),
+        threads: BTreeMap::from([(tp, thread)]),
+        tids: BTreeMap::from([(pid, tp)]),
+        next_tid: if pid + 1 >= TID_LIMIT { 1 } else { pid + 1 },
+        main: tp,
+        pending: 0,
+        infos: BTreeMap::new(),
+        mark: interrupt::mark_ready,
+    };
+    // SAFETY: per the caller.
+    unsafe { STATE.reset_after_fork(state) };
+    STOPPING.store(false, Ordering::Release);
+    arch::clear_word(interrupt::READY | interrupt::DEFERRED);
+}
+
 /// The calling thread's id.
 pub fn current_tid() -> i32 {
     let tid = STATE.lock().get(current()).tid;

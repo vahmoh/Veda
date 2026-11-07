@@ -144,6 +144,20 @@ pub fn thread_ending() {
     crate::signal::thread_exited();
 }
 
+/// Makes a process that is a copy of this one, as Linux's `fork` does (the
+/// layer's part of it: its descriptors, signals, threads and services, as
+/// for a C program): `Some` of its process id here, `None` in the copy,
+/// whose one thread is the calling one. `hold` is called just before the
+/// copy is made, and what it returns dropped just after, in both: it holds
+/// still what the host keeps that the copy must find whole (its heap, last;
+/// nothing may allocate meanwhile).
+pub fn fork<H>(hold: impl FnOnce() -> H) -> Result<Option<i32>, isize> {
+    match crate::fork::fork(hold)? {
+        crate::fork::Forked::Parent(pid) => Ok(Some(pid)),
+        crate::fork::Forked::Child => Ok(None),
+    }
+}
+
 /// A process for a child `vfork` makes (`clone` with `CLONE_VM`), made and
 /// not started: its id, which the child has from now on, and the process,
 /// which the child's `execve` starts its program in ([`start_as_exec`]).

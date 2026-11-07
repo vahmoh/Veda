@@ -80,6 +80,20 @@ pub use object::{
 #[global_allocator]
 static HEAP: heap::Heap = heap::Heap::new();
 
+/// The program's heap, if it is `runtime`'s (its global allocator), which
+/// `fork` holds still ([`heap::Heap::hold`]); `None` in a program whose
+/// heap is another's.
+#[cfg(all(feature = "runtime", not(test)))]
+pub fn heap() -> Option<&'static heap::Heap> {
+    Some(&HEAP)
+}
+
+/// The program's heap, if it is `runtime`'s: not in this one.
+#[cfg(not(all(feature = "runtime", not(test))))]
+pub fn heap() -> Option<&'static heap::Heap> {
+    None
+}
+
 #[cfg(all(feature = "runtime", not(test), not(target_os = "veda")))]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {

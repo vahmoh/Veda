@@ -120,6 +120,22 @@ fn limit(resource: u32) -> Result<Rlimit, isize> {
 /// read back, as none is enforced.
 static SET: Mutex<[Option<Rlimit>; 16]> = Mutex::new([None; 16]);
 
+/// The limits the program set, as a process `fork` is about to make has
+/// them.
+pub fn limits() -> [Option<Rlimit>; 16] {
+    *SET.lock()
+}
+
+/// In a process `fork` made: the limits set are `set`, the original's.
+///
+/// # Safety
+/// As `runtime::sync::Mutex::reset_after_fork`: in the copy, before it has
+/// another thread.
+pub unsafe fn forked(set: [Option<Rlimit>; 16]) {
+    // SAFETY: per the caller.
+    unsafe { SET.reset_after_fork(set) };
+}
+
 /// `prlimit64` (and `getrlimit`, `setrlimit`) on this process. Limits are
 /// kept as set, lowered (or a soft one raised to its hard one), but they are
 /// not enforced; another process's are not this one's (`EPERM` for a child,

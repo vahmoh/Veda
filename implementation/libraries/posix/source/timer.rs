@@ -131,17 +131,37 @@ const fn itimer(clock: Clock, signo: u32) -> Timer {
     Timer { clock, realtime: false, deadline: None, interval: 0, notify, overrun: 0 }
 }
 
-static TIMERS: Mutex<Timers> = Mutex::new(Timers {
-    itimers: [
-        itimer(Clock::Monotonic, sig::ALRM),
-        itimer(Clock::Process, sig::VTALRM),
-        itimer(Clock::Process, sig::PROF),
-    ],
-    posix: BTreeMap::new(),
-});
+/// The timers before any is set: none armed.
+const fn unset() -> Timers {
+    Timers {
+        itimers: [
+            itimer(Clock::Monotonic, sig::ALRM),
+            itimer(Clock::Process, sig::VTALRM),
+            itimer(Clock::Process, sig::PROF),
+        ],
+        posix: BTreeMap::new(),
+    }
+}
+
+static TIMERS: Mutex<Timers> = Mutex::new(unset());
 
 /// The event that wakes the timers' thread, once it has started.
 static WAKE: Mutex<Option<Event>> = Mutex::new(None);
+
+/// In a process `fork` made: no timer is armed, as on Linux, whose `fork`
+/// copies no timer (`alarm`, `setitimer`, `timer_create`), and no thread
+/// expires them, which the original's was.
+///
+/// # Safety
+/// As `runtime::sync::Mutex::reset_after_fork`: in the copy, before it has
+/// another thread.
+pub unsafe fn forked() {
+    // SAFETY: per the caller.
+    unsafe {
+        TIMERS.reset_after_fork(unset());
+        WAKE.reset_after_fork(None);
+    }
+}
 
 /// Has the timers' thread look at the timers again (one was set), starting
 /// it if it has not started.

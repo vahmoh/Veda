@@ -104,6 +104,9 @@ pub const CHANNEL_MAX_BYTES: usize = 64 * 1024;
 pub const CHANNEL_MAX_HANDLES: usize = 64;
 /// Maximum number of items in one `object_wait_many` call.
 pub const WAIT_MANY_MAX: usize = 1024;
+/// Maximum number of handles one `process_fork` moves to the process it
+/// makes.
+pub const FORK_MAX_HANDLES: usize = 4096;
 /// Maximum number of registrations a port holds: those waiting, and those
 /// done whose packets are not yet taken (`object_wait_async`).
 pub const PORT_MAX_REGISTRATIONS: usize = 1 << 16;
@@ -328,6 +331,36 @@ pub mod nr {
     /// (a thread library keeps its threads' handles; this gives one to the
     /// thread the process started with).
     pub const THREAD_SELF: usize = 78;
+    /// `process_fork(handles: *const RawHandle, count) -> h`: a process
+    /// that is a copy of the calling one, as Unix's `fork` makes, and a
+    /// handle to it (with the rights of one to a process it started); in
+    /// the copy, the call returns 0. The copy has one thread, which goes on
+    /// from the call as the calling thread does, with its registers, its
+    /// vector registers and its thread pointer. Its memory is the caller's
+    /// as it is at the call, each mapping in its place:
+    ///
+    /// * memory that is the caller's own is copied: anonymous memory that
+    ///   nothing reaches but the caller's mappings (its private memory, and
+    ///   VMOs mapped through handles closed since), unless mapped with
+    ///   [`map_flags::SHARED`](crate::map_flags::SHARED). Each page is one
+    ///   for both until either writes it, which then has a copy of its own
+    ///   (copy-on-write);
+    /// * other memory (that a handle or another process reaches, physical
+    ///   memory, `SHARED` mappings) is the same VMO, shared, if the handle
+    ///   it was mapped with may be transferred (`TRANSFER`), as the caller
+    ///   could have given it the VMO; it is not there otherwise.
+    ///
+    /// Its handle table has the caller's names, none of which reaches
+    /// anything (each is closed), but the `count` names at `handles` (at
+    /// most [`FORK_MAX_HANDLES`](crate::FORK_MAX_HANDLES)), each the
+    /// caller's, with `TRANSFER`, and once: those handles move to it, under
+    /// the same names, so that what its memory says of them holds there.
+    /// Nothing moves if the call fails. It has the caller's name, maximum
+    /// priority, memory class, restrictions and signal entry (its thread
+    /// taking the signals other processes send it), no signal sent it yet,
+    /// and the caller for its parent. Needs what `process_create` needs;
+    /// `BadState` from a process that is ending.
+    pub const PROCESS_FORK: usize = 111;
     /// `process_set_memory_class(h, class)`: what the system ends first
     /// when memory runs out ([`memory_class`](crate::memory_class)); `h` 0
     /// is the calling process, another needs `MANAGE`. A process starts in
@@ -1114,6 +1147,11 @@ pub mod map_flags {
     pub const FIXED: usize = 1 << 3;
     /// Fault in all pages immediately.
     pub const COMMIT: usize = 1 << 4;
+    /// The mapping is the VMO's memory in a process `process_fork` makes
+    /// too, as POSIX's `MAP_SHARED` memory is, even where nothing else
+    /// reaches the VMO (whose handle is closed): without it, such memory is
+    /// copied there. Needs a handle that may be transferred (`TRANSFER`).
+    pub const SHARED: usize = 1 << 5;
 }
 
 /// Cache policies for physical VMOs.

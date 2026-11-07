@@ -112,6 +112,52 @@ pub fn for_child(desc: &Description) -> Result<Option<ToChild>, isize> {
     Ok(Some(ToChild { entry: encoded(c), handles }))
 }
 
+/// A descriptor on its way to a process `fork` makes (`crate::fork`): what
+/// carries it, its handles by their names, which move to the copy under the
+/// same names (`process_fork`), so that they are its there.
+pub struct ToFork {
+    carried: Carried,
+    names: Vec<abi::RawHandle>,
+}
+
+impl ToFork {
+    /// The names of the handles that carry it.
+    pub fn names(&self) -> &[abi::RawHandle] {
+        &self.names
+    }
+
+    /// In the copy, which has the handles: the description, made again
+    /// there; `None` if it is not what it says.
+    pub fn adopt(mut self) -> Option<Arc<Description>> {
+        // SAFETY: the handles moved to this process under these names.
+        self.carried.handles = self.names.iter().map(|&n| unsafe { Handle::from_raw(n) }).collect();
+        adopt(self.carried)
+    }
+
+    /// In the original, if no copy was made: its handles are closed.
+    pub fn close(self) {
+        for n in self.names {
+            // SAFETY: the handles are still this process's, and nothing
+            // else names them.
+            drop(unsafe { Handle::from_raw(n) });
+        }
+    }
+}
+
+/// What carries descriptor `desc` to a process `fork` makes; `None` for
+/// one that cannot go (a socket still connecting), or that no handle
+/// carries (an eventfd, a timerfd, an epoll instance: the copy makes its
+/// own).
+pub fn for_fork(desc: &Description) -> Result<Option<ToFork>, isize> {
+    let mut carried = match carry(desc) {
+        Ok(c) => c,
+        Err(EOPNOTSUPP) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let names = core::mem::take(&mut carried.handles).into_iter().map(Handle::into_raw).collect();
+    Ok(Some(ToFork { carried, names }))
+}
+
 /// The socket a process was started with, from what [`for_child`] made of
 /// it in the process that started it, and the handles of its descriptor's
 /// roles; `None` if it is not what it says.

@@ -123,6 +123,31 @@ impl Context {
         self.rsp = rsp;
     }
 
+    /// Prepares the kernel stack below `stack_top` of a new thread so that
+    /// the first switch to it returns to user mode with the registers of
+    /// `frame`, a system call's (`process_fork`'s), whose result it holds,
+    /// and with the running thread's thread pointer and x87, SSE and AVX
+    /// registers as they are: the new thread goes on from the call as the
+    /// running one does.
+    pub fn prepare_fork(&mut self, stack_top: u64, frame: &TrapFrame) {
+        let tf_addr = stack_top - core::mem::size_of::<TrapFrame>() as u64;
+        let rsp = tf_addr - 7 * 8;
+        let regs = [0u64, 0, 0, 0, 0, 0, vk_thread_trampoline as *const () as u64];
+        // SAFETY: the thread has not run yet; its stack is ours.
+        unsafe {
+            (tf_addr as *mut TrapFrame).write(*frame);
+            core::ptr::copy_nonoverlapping(regs.as_ptr(), rsp as *mut u64, 7);
+        }
+        self.rsp = rsp;
+        // As the processor has them: user code may have changed its thread
+        // pointer itself (`wrfsbase`), and its vector registers are in the
+        // processor's while it is in the kernel.
+        self.fs_base = rdmsr(MSR_FS_BASE);
+        if let Some(f) = &self.fpu {
+            f.save();
+        }
+    }
+
     /// Saves the running thread's x87, SSE and AVX registers (this is its
     /// context) for something else to use the processor's: a virtual
     /// processor's.

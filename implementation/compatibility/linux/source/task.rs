@@ -14,6 +14,12 @@
 //! one ([`clone`]), on a stack of its own for Linux compatibility's code,
 //! which goes once the thread has ended ([`reap`]); the program's own
 //! stack is the program's, as on Linux.
+//!
+//! `fork`, and `clone` without `CLONE_VM`, make a process that is a copy of
+//! this one ([`fork`]): the kernel copies its memory, the program's and
+//! Linux compatibility's alike, the POSIX layer what it keeps
+//! (`posix::host::fork`), and the copy's one thread is the calling one,
+//! whose task goes on there as its main thread.
 
 use alloc::boxed::Box;
 use alloc::sync::Arc;
@@ -174,10 +180,20 @@ pub fn run(t: &mut Task) -> ! {
 /// the working directory shared too, as every thread library asks), or a
 /// child that shares its memory (`CLONE_VM` alone, `vfork`'s), each
 /// returning 0 from the call on `stack`, its thread pointer `tls` with
-/// `CLONE_SETTLS`. A process of memory of its own (`fork`) is not had
-/// (`ENOSYS`); sharing the program cannot have (a thread with descriptors
-/// of its own) is refused (`EINVAL`).
-pub fn clone(t: &mut Task, flags: u64, stack: u64, parent_tid: u64, child_tid: u64, tls: u64) -> Result<usize, isize> {
+/// `CLONE_SETTLS`; or, without `CLONE_VM`, a process of memory of its own
+/// ([`fork`]). Sharing the program cannot have (a thread with descriptors
+/// of its own) is refused (`EINVAL`). A pidfd asked for (`CLONE_PIDFD`)
+/// goes to `pidfd`: `clone`'s `parent_tid`, `clone3`'s own field.
+#[allow(clippy::too_many_arguments)] // the call's own
+pub fn clone(
+    t: &mut Task,
+    flags: u64,
+    stack: u64,
+    parent_tid: u64,
+    child_tid: u64,
+    tls: u64,
+    pidfd: u64,
+) -> Result<usize, isize> {
     let known = VM
         | FS
         | FILES
@@ -196,7 +212,7 @@ pub fn clone(t: &mut Task, flags: u64, stack: u64, parent_tid: u64, child_tid: u
         return Err(EINVAL);
     }
     if flags & VM == 0 {
-        return Err(ENOSYS);
+        return fork(t, flags, parent_tid, child_tid, pidfd);
     }
     let thread = flags & THREAD != 0;
     if thread && (flags & (SIGHAND | FS | FILES) != (SIGHAND | FS | FILES) || flags & (VFORK | PIDFD) != 0) {
@@ -221,14 +237,85 @@ pub fn clone(t: &mut Task, flags: u64, stack: u64, parent_tid: u64, child_tid: u
             let _ = call(nr::FUTEX_WAIT, [done.as_ptr() as usize, 0, abi::DEADLINE_INFINITE as usize, 0, 0, 0]);
         }
         if flags & PIDFD != 0 {
-            let pidfd = linux_raw_sys::general::__NR_pidfd_open as usize;
-            // SAFETY: a call of our own.
-            let fd = unsafe { posix::host::syscall(pidfd, [id.0 as usize, 0, 0, 0, 0, 0]) }.map_or(-1, |fd| fd as i32);
-            // SAFETY: the program's memory, which a fault writing it ends.
-            unsafe { crate::user::write(parent_tid as usize, fd) };
+            write_pidfd(pidfd, id.0);
         }
     }
     Ok(id.0 as usize)
+}
+
+/// Writes a descriptor of child `pid` (`pidfd_open`'s; -1 if it cannot be
+/// had) to the program's `at`, for `CLONE_PIDFD`.
+fn write_pidfd(at: u64, pid: i32) {
+    let pidfd_open = linux_raw_sys::general::__NR_pidfd_open as usize;
+    // SAFETY: a call of our own.
+    let fd = unsafe { posix::host::syscall(pidfd_open, [pid as usize, 0, 0, 0, 0, 0]) }.map_or(-1, |fd| fd as i32);
+    // SAFETY: the program's memory, which a fault writing it ends.
+    unsafe { crate::user::write(at as usize, fd) };
+}
+
+/// `fork`, and `clone` without `CLONE_VM` (`flags`, which name `SIGCHLD`
+/// as what the child's end sends): a process that is a copy of this one,
+/// whose one thread is the calling one, going on from the call there with
+/// 0 (`posix::host::fork`, which says what it has). Returns its process
+/// id. The ids asked for are written as Linux writes them: the child's id
+/// to `parent_tid` here (`CLONE_PARENT_SETTID`), and there to `child_tid`
+/// (`CLONE_CHILD_SETTID`), which its thread's end clears and wakes
+/// (`CLONE_CHILD_CLEARTID`); its pidfd to `pidfd` (`CLONE_PIDFD`). What
+/// two processes of memory of their own cannot share (descriptors, a
+/// working directory, handlers, a thread pointer), another signal at its
+/// end, and waiting for it as `vfork` does, are refused (`EINVAL`).
+pub fn fork(t: &mut Task, flags: u64, parent_tid: u64, child_tid: u64, pidfd: u64) -> Result<usize, isize> {
+    let allowed = PARENT_SETTID | CHILD_SETTID | CHILD_CLEARTID | PIDFD | DETACHED | SYSVSEM | SIGNAL;
+    if flags & !allowed != 0 || flags & SIGNAL != u64::from(crate::linux::sig::CHLD) {
+        return Err(EINVAL);
+    }
+    // `clone` has one word for both.
+    if flags & PIDFD != 0 && flags & PARENT_SETTID != 0 && pidfd == parent_tid {
+        return Err(EINVAL);
+    }
+    reap();
+    let heap = runtime::heap();
+    // What the program was started with, its areas (in the order `/proc`
+    // takes them), and the heap (last), as the copy is to have them: whole.
+    let hold = || (crate::proc::hold(), crate::memory::hold(), heap.map(|h| h.hold()));
+    let Some(pid) = posix::host::fork(hold)? else {
+        forked(t);
+        if flags & CHILD_SETTID != 0 {
+            // SAFETY: the program's memory, which a fault writing it ends.
+            unsafe { crate::user::write(child_tid as usize, t.tid) };
+        }
+        if flags & CHILD_CLEARTID != 0 {
+            let _ = call(nr::THREAD_SET_EXIT_FUTEX, [child_tid as usize, 0, 0, 0, 0, 0]);
+        }
+        return Ok(0);
+    };
+    if flags & PARENT_SETTID != 0 {
+        // SAFETY: as above.
+        unsafe { crate::user::write(parent_tid as usize, pid) };
+    }
+    if flags & PIDFD != 0 {
+        write_pidfd(pidfd, pid);
+    }
+    Ok(pid as usize)
+}
+
+/// In the process [`fork`] made: the calling thread, `t`, is its one
+/// thread, its main one, whose id is the process's; the tasks of the
+/// threads it does not have are forgotten (their memory is the original's
+/// copy), and as on Linux its robust futex list is gone (the C libraries
+/// set it again).
+fn forked(t: &mut Task) {
+    LIVE.store(1, Ordering::Release);
+    STOPPING.store(false, Ordering::Release);
+    // SAFETY: the copy, before it has another thread; the tasks of the
+    // original's other threads are forgotten, not dropped.
+    unsafe { ENDED.reset_after_fork(Vec::new()) };
+    crate::exec::forked();
+    t.tid = posix::host::pid();
+    t.robust_list = (0, 0);
+    t.restart = None;
+    t.fault = None;
+    t.handle = None;
 }
 
 /// Starts thread `child` of [`clone`] (a child `vfork` made, if `apart`):

@@ -137,6 +137,7 @@ fn kernel_main(boot: &'static BootInfo) -> ! {
     memory::phys::init(memmap);
     memory::paging::init_kernel_space(boot);
     let reclaimed = memory::phys::reclaim(memmap, MemoryKind::LoaderReclaimable);
+    memory::cow::init();
     let (total, free) = memory::phys::stats();
     kinfo!(
         "memory: {} MiB usable, {} MiB free ({} KiB reclaimed from the loader)",

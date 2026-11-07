@@ -154,9 +154,10 @@ fn architecture_call(t: &mut Task, n: usize, a: [usize; 6]) -> Option<Outcome> {
         nr::VFORK => {
             use crate::linux::clone::{VFORK, VM};
             let sigchld = u64::from(crate::linux::sig::CHLD);
-            ret(task::clone(t, VM | VFORK | sigchld, 0, 0, 0, 0))
+            ret(task::clone(t, VM | VFORK | sigchld, 0, 0, 0, 0, 0))
         }
-        nr::FORK => Outcome::Return(-ENOSYS),
+        // A copy of this process, of memory of its own.
+        nr::FORK => ret(task::fork(t, u64::from(crate::linux::sig::CHLD), 0, 0, 0)),
         _ => return None,
     })
 }
@@ -167,13 +168,14 @@ fn architecture_call(_t: &mut Task, _n: usize, _a: [usize; 6]) -> Option<Outcome
 }
 
 /// `clone`, in the architecture's argument order (x86-64: flags, stack,
-/// parent's id word, child's id word, thread pointer).
+/// parent's id word, child's id word, thread pointer); a pidfd goes where
+/// the parent's id would.
 fn clone(t: &mut Task, a: [u64; 6]) -> Result<usize, isize> {
     #[cfg(target_arch = "x86_64")]
     let (flags, stack, ptid, ctid, tls) = (a[0], a[1], a[2], a[3], a[4]);
     #[cfg(target_arch = "aarch64")]
     let (flags, stack, ptid, tls, ctid) = (a[0], a[1], a[2], a[3], a[4]);
-    task::clone(t, flags, stack, ptid, ctid, tls)
+    task::clone(t, flags, stack, ptid, ctid, tls, ptid)
 }
 
 /// `clone3(args, size)`: `struct clone_args`, whose fields after the first
@@ -190,7 +192,7 @@ fn clone3(t: &mut Task, args: usize, size: usize) -> Result<usize, isize> {
         return Err(EINVAL);
     }
     let w = |i: usize| u64::from_le_bytes(bytes[8 * i..8 * i + 8].try_into().unwrap());
-    let (flags, _pidfd, child_tid, parent_tid, exit_signal, stack, stack_size, tls) =
+    let (flags, pidfd, child_tid, parent_tid, exit_signal, stack, stack_size, tls) =
         (w(0), w(1), w(2), w(3), w(4), w(5), w(6), w(7));
     // The signal a child's end sends (`SIGCHLD`, for a process) is in its
     // own field here, not in the flags' low byte, as `clone` has it.
@@ -198,7 +200,7 @@ fn clone3(t: &mut Task, args: usize, size: usize) -> Result<usize, isize> {
         return Err(EINVAL);
     }
     let top = if stack == 0 { 0 } else { stack.checked_add(stack_size).ok_or(EINVAL)? };
-    task::clone(t, flags | exit_signal, top, parent_tid, child_tid, tls)
+    task::clone(t, flags | exit_signal, top, parent_tid, child_tid, tls, pidfd)
 }
 
 /// `uname`: Linux, of a release recent enough for what programs check

@@ -304,6 +304,9 @@ impl Memfd {
                 return Err(EPERM);
             }
             self.reserve(end.next_multiple_of(PAGE))?;
+            // A process `fork` makes shares it too, even once the file is
+            // closed.
+            let flags = flags | abi::map_flags::SHARED;
             return vm::map(None, &self.vmo, offset as usize, len, hint, flags).map_err(map_error);
         }
         // A private copy of what the file holds there; past its end, zeros.

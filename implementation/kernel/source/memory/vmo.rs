@@ -3,16 +3,23 @@
 
 //! Virtual memory objects (VMOs): the unit of memory that can be mapped into
 //! address spaces and shared between processes through handles.
+//!
+//! An anonymous VMO's pages may be frames that other VMOs hold too: the
+//! copies of a process's memory that `process_fork` makes
+//! ([`Vmo::fork_copy`], [`super::cow`]). Such a frame is never written in
+//! place: a page about to be written is made the VMO's own first
+//! ([`Vmo::page_for_write`]), and a page that goes lets its frame go
+//! ([`super::cow::release`]), which frees it once no VMO holds it.
 
 use alloc::collections::{BTreeMap, LinkedList};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use abi::Error;
 
 use super::paging::Cache;
-use super::{PAGE_SIZE, phys, phys_to_virt};
+use super::{PAGE_SIZE, cow, phys, phys_to_virt};
 use crate::synchronization::SpinLock;
 
 /// Upper bound on a single VMO: 1 TiB, which keeps page indices and
@@ -42,6 +49,13 @@ pub struct Vmo {
     /// Committed pages of an anonymous VMO: page index -> frame.
     pages: SpinLock<BTreeMap<u64, u64>>,
     committed: AtomicU64,
+    /// Its frames may be other VMOs' too ([`Vmo::fork_copy`] made it, or a
+    /// copy of it): each is looked up before it is written in place.
+    shares: AtomicBool,
+    /// Its pages were given to a device (`vmo_pages`), which reaches them
+    /// by their addresses: they never move, so they are never copied on
+    /// write either.
+    pinned: AtomicBool,
 }
 
 impl Vmo {
@@ -53,6 +67,8 @@ impl Vmo {
             cache,
             pages: SpinLock::new(BTreeMap::new()),
             committed: AtomicU64::new(0),
+            shares: AtomicBool::new(false),
+            pinned: AtomicBool::new(false),
         })
     }
 
@@ -127,6 +143,66 @@ impl Vmo {
         self.committed.load(Ordering::Relaxed)
     }
 
+    /// Its pages are given to a device (`vmo_pages`): from now on they
+    /// never move ([`Vmo::copyable`]).
+    pub fn pin(&self) {
+        self.pinned.store(true, Ordering::Release);
+    }
+
+    /// Whether a process `process_fork` makes may have a copy of it that
+    /// shares its frames until either writes them ([`Vmo::fork_copy`]):
+    /// anonymous memory, cached as RAM is (a copy is made through the
+    /// caches), whose pages no device was given.
+    pub fn copyable(&self) -> bool {
+        self.kind == VmoKind::Anonymous && self.cache == Cache::WriteBack && !self.pinned.load(Ordering::Acquire)
+    }
+
+    /// Whether its frames may be other VMOs' too: then a mapping of it is
+    /// never made writable but a page at a time, as each is written
+    /// ([`Vmo::page_for_write`]).
+    pub fn shares(&self) -> bool {
+        self.shares.load(Ordering::Acquire)
+    }
+
+    /// Whether `frame`, one of its pages, is another VMO's too, which
+    /// neither may write in place.
+    pub fn is_shared(&self, frame: u64) -> bool {
+        self.shares() && cow::is_shared(frame)
+    }
+
+    /// A copy of the VMO for a process `process_fork` makes: of the same
+    /// size, its committed pages the same frames, which neither writes in
+    /// place from now on. `None` for a VMO that cannot be so copied
+    /// ([`Vmo::copyable`]), or if there is no memory for the frames'
+    /// counts (nothing is shared then).
+    pub fn fork_copy(&self) -> Option<Arc<Vmo>> {
+        if !self.copyable() {
+            return None;
+        }
+        let copy = Vmo::new(self.size(), self.kind, self.cache);
+        copy.shares.store(true, Ordering::Release);
+        self.shares.store(true, Ordering::Release);
+        {
+            let pages = self.pages.lock();
+            let mut theirs = copy.pages.lock();
+            for (&page, &frame) in pages.iter() {
+                if !cow::share(frame) {
+                    // The frames shared so far are let go with the copy.
+                    drop(theirs);
+                    return None;
+                }
+                theirs.insert(page, frame);
+            }
+            copy.committed.store(theirs.len() as u64 * PAGE_SIZE, Ordering::Relaxed);
+        }
+        Some(copy)
+    }
+
+    /// How many pages the VMO has committed.
+    pub fn committed_pages(&self) -> u64 {
+        self.committed_bytes() / PAGE_SIZE
+    }
+
     /// Whether the kernel reaches `phys` of the VMO through the direct map,
     /// which need not have a device's memory.
     fn reachable(&self, phys: u64) -> bool {
@@ -170,6 +246,46 @@ impl Vmo {
                 Some(f)
             }
         }
+    }
+
+    /// The physical address of the page containing `offset`, which is about
+    /// to be written: for anonymous memory, a page of its own, committed
+    /// (zeroed) if it had none, or a copy of the frame it shares with
+    /// other VMOs ([`Vmo::fork_copy`]), which they keep; the last to hold
+    /// a frame takes it as it is. `None` past the end, or for no memory.
+    pub fn page_for_write(&self, offset: u64) -> Option<u64> {
+        if self.kind != VmoKind::Anonymous || !self.shares() {
+            return self.page(offset, true);
+        }
+        if offset >= self.size() {
+            return None;
+        }
+        let page = offset / PAGE_SIZE;
+        let mut pages = self.pages.lock();
+        let Some(&frame) = pages.get(&page) else {
+            drop(pages);
+            return self.page(offset, true);
+        };
+        if !cow::is_shared(frame) {
+            return Some(frame);
+        }
+        // Copy-on-write VMOs are cached as RAM is: a copy through the
+        // direct map is what each mapping reads.
+        let copy = phys::alloc_user()?;
+        // SAFETY: both frames are direct-mapped RAM; the copy is fresh, and
+        // the shared one is written by no one (each holder copies it first).
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                phys_to_virt(frame) as *const u8,
+                phys_to_virt(copy) as *mut u8,
+                PAGE_SIZE as usize,
+            )
+        };
+        pages.insert(page, copy);
+        drop(pages);
+        // Others hold it still: this only counts one fewer.
+        cow::release(frame);
+        Some(copy)
     }
 
     /// Detaches the committed pages of `[offset, offset+len)` of an
@@ -245,7 +361,13 @@ impl Vmo {
             let in_page = (pos % PAGE_SIZE) as usize;
             let n = (PAGE_SIZE as usize - in_page).min(data.len() - done);
             let zeros = self.kind == VmoKind::Anonymous && data[done..done + n].iter().all(|&b| b == 0);
-            let Some(f) = self.page(pos, !zeros) else {
+            // Zeros where nothing is committed leave it so; otherwise the
+            // page is made the VMO's own to write.
+            let found = match self.page(pos, false) {
+                None if zeros => None,
+                _ => self.page_for_write(pos),
+            };
+            let Some(f) = found else {
                 if zeros {
                     done += n;
                     continue;
@@ -265,7 +387,8 @@ impl Vmo {
     }
 }
 
-/// Frames detached from a VMO ([`Vmo::decommit`]), freed on drop. They are
+/// Frames detached from a VMO ([`Vmo::decommit`]), let go on drop (freed,
+/// unless other VMOs hold them: [`cow::release`]). They are
 /// kept a page of them at a time ([`CHUNK`]): in one array they would need
 /// an allocation growing with what was detached (2 MiB for 1 GiB of
 /// memory), which the kernel's heap takes as physically contiguous memory,
@@ -297,7 +420,7 @@ impl Frames {
 impl Drop for Frames {
     fn drop(&mut self) {
         for &f in self.0.iter().flatten() {
-            phys::free(f);
+            cow::release(f);
         }
     }
 }
@@ -307,7 +430,7 @@ impl Drop for Vmo {
         match self.kind {
             VmoKind::Anonymous => {
                 for (_, f) in core::mem::take(&mut *self.pages.lock()) {
-                    phys::free(f);
+                    cow::release(f);
                 }
             }
             VmoKind::Contiguous { base } => phys::free_contiguous(base, self.size() / PAGE_SIZE),

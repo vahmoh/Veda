@@ -53,6 +53,17 @@ struct Records {
     waiting: u32,
 }
 
+/// In a process `fork` made: it holds no record locks, as on Linux (they
+/// are the original's, which its own secret owns: `vfs::lock_owner`).
+///
+/// # Safety
+/// As `runtime::sync::Mutex::reset_after_fork`: in the copy, before it has
+/// another thread.
+pub unsafe fn forked() {
+    // SAFETY: per the caller.
+    unsafe { RECORDS.reset_after_fork(BTreeMap::new()) };
+}
+
 /// Notes whether this process holds record locks on file `identity` now.
 fn note(records: &mut BTreeMap<(u64, u64), Records>, identity: (u64, u64), held: bool) {
     let r = records.entry(identity).or_default();

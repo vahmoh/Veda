@@ -59,6 +59,94 @@ pub fn process_create(name: usize, len: usize, max_priority: usize) -> SysResult
     ok(insert(KObject::Process(p), PROCESS_RIGHTS)? as usize)
 }
 
+/// Names of handles to move read from user memory at a time.
+const FORK_NAMES_STEP: usize = 256;
+
+/// Makes a process that is a copy of the calling one (`nr::PROCESS_FORK`):
+/// its memory copied on write or shared ([`crate::memory::aspace::AddressSpace::fork`]),
+/// the handles named at `handles` moved to it under their names, the rest
+/// of its names closed, and one thread that goes on from the call as the
+/// calling thread does, returning 0 there. Returns a handle to it. Nothing
+/// is moved or shared if it fails.
+pub fn process_fork(frame: &TrapFrame, handles: usize, count: usize) -> SysResult {
+    allowed(restrict::NO_PROCESSES)?;
+    if count > abi::FORK_MAX_HANDLES {
+        return Err(Error::InvalidArgs);
+    }
+    let parent = current_process()?;
+    // One that is being ended (with its job, say) starts none that would
+    // outlive it.
+    if parent.ending_with().is_some() {
+        return Err(Error::BadState);
+    }
+    process::may_create(parent.koid)?;
+    // A handle table and a thread's kernel stack, from the kernel's memory
+    // (the address space's copy is counted as it is made).
+    if !crate::memory::phys::user_may_use(64 * 1024) {
+        return Err(Error::NoMemory);
+    }
+    // The names to move, each once, read a step at a time; then each must
+    // be a handle of the caller's that may go to another process.
+    let mut names = alloc::collections::BTreeSet::new();
+    let mut step = [0 as RawHandle; FORK_NAMES_STEP];
+    for at in (0..count).step_by(FORK_NAMES_STEP) {
+        let n = (count - at).min(FORK_NAMES_STEP);
+        let bytes = n * size_of::<RawHandle>();
+        // SAFETY: `step` is plain integers, `bytes` long at most.
+        let into = unsafe { core::slice::from_raw_parts_mut(step.as_mut_ptr() as *mut u8, bytes) };
+        user::copy_from_user(into, (handles + at * size_of::<RawHandle>()) as u64)?;
+        for &raw in &step[..n] {
+            if !names.insert(raw) {
+                return Err(Error::InvalidArgs);
+            }
+        }
+    }
+    let moved: alloc::vec::Vec<(RawHandle, Handle)> = {
+        let table = parent.handles.lock();
+        names
+            .iter()
+            .map(|&raw| {
+                let h = table.get(raw)?;
+                if !h.rights.contains(Rights::TRANSFER) {
+                    return Err(Error::AccessDenied);
+                }
+                Ok((raw, h.clone()))
+            })
+            .collect::<Result<_, Error>>()?
+    };
+    let aspace = parent.aspace().ok_or(Error::BadState)?.fork()?;
+    let table = parent.handles.lock().forked(moved)?;
+    let child = parent.forked(aspace, table);
+    let me = scheduler::current();
+    let thread = Thread::new_user(&child, me.name.as_str()).ok_or(Error::NoMemory)?;
+    thread.sched.lock().priority = me.priority().min(child.max_priority);
+    child.add_thread(thread.clone())?;
+    let mut registers = *frame;
+    registers.set_syscall_result(0, None);
+    thread.prepare_fork(&registers);
+    if let Some(entry) = parent.signal_entry() {
+        child.set_signal_entry(entry, &thread);
+    }
+    // The caller's handle to it first: one it had not would run unseen.
+    let h = match insert(KObject::Process(child.clone()), PROCESS_RIGHTS) {
+        Ok(h) => h,
+        Err(e) => {
+            // Never started: it ends at once, its handles and memory with it.
+            child.kill(abi::EXIT_CODE_KILLED);
+            return Err(e);
+        }
+    };
+    {
+        let mut table = parent.handles.lock();
+        for raw in names {
+            let _ = table.remove(raw);
+        }
+    }
+    child.mark_started();
+    scheduler::make_ready(&thread);
+    ok(h as usize)
+}
+
 /// Moves a process (0: the caller) to a memory class
 /// ([`abi::memory_class`]), only ever towards the most expendable: what is
 /// ended first when memory runs out ([`crate::memory::oom`]).

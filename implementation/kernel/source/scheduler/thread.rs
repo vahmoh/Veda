@@ -8,6 +8,7 @@ use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::architecture::thread::Context;
+use crate::architecture::trap::TrapFrame;
 use crate::capability::Signals;
 use crate::memory::aspace::AddressSpace;
 use crate::memory::kvirt::KernelStack;
@@ -204,6 +205,15 @@ impl Thread {
     pub fn prepare_user_entry(&self, entry: u64, user_stack: u64, arg0: u64, arg1: u64) {
         // SAFETY: the thread has not run yet; its context is ours.
         unsafe { (*self.ctx.get()).prepare_user(self.kernel_stack_top, entry, user_stack, arg0, arg1) };
+    }
+
+    /// Prepares the kernel stack so that the first switch to this thread
+    /// returns to user mode with the registers of `frame`, a system call's
+    /// (`process_fork`'s) whose result it holds, and with the running
+    /// thread's thread pointer and vector registers as they are.
+    pub fn prepare_fork(&self, frame: &TrapFrame) {
+        // SAFETY: the thread has not run yet; its context is ours.
+        unsafe { (*self.ctx.get()).prepare_fork(self.kernel_stack_top, frame) };
     }
 
     pub fn state(&self) -> State {

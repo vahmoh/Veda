@@ -44,9 +44,8 @@ pub unsafe fn dispatch(n: usize, a: [usize; 6]) -> Option<SysResult> {
             nr::PAUSE => signal::pause(),
             nr::ALARM => crate::timer::alarm(a[0] as u32),
             nr::GETPGRP => Ok(process::pid() as usize),
-            // Processes are made from program images (posix_spawn), not
-            // by copying this one.
-            nr::FORK | nr::VFORK => Err(ENOSYS),
+            // A copy of this process; `vfork`'s, which needs not wait.
+            nr::FORK | nr::VFORK => crate::fork::program(),
             nr::RENAME => fs::renameat(at::FDCWD, a[0], at::FDCWD, a[1], 0),
             nr::MKDIR => fs::mkdirat(at::FDCWD, a[0]),
             nr::RMDIR => fs::unlinkat(at::FDCWD, a[0], at::REMOVEDIR),

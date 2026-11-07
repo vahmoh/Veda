@@ -7,7 +7,7 @@ use abi::{Error, RawHandle, Rights, cache_policy, dma_flags, map_flags, resource
 
 use super::{SysResult, get_resource, get_vmo, handle, insert, ok, target_process};
 use crate::capability::KObject;
-use crate::memory::aspace::Perms;
+use crate::memory::aspace::{Inherit, Perms};
 use crate::memory::paging::Cache;
 use crate::memory::user;
 use crate::memory::vmo::Vmo;
@@ -160,6 +160,9 @@ pub fn vmo_pages(res: RawHandle, raw: RawHandle, offset: usize, count: usize, ou
     if !offset.is_multiple_of(4096) || count > MAX_PAGES {
         return Err(Error::InvalidArgs);
     }
+    // A device will reach these pages by their addresses: they must never
+    // move, nor be copied on write.
+    vmo.pin();
     let mut chunk = alloc::vec::Vec::with_capacity(count.min(512));
     let mut done = 0;
     while done < count {
@@ -169,7 +172,7 @@ pub fn vmo_pages(res: RawHandle, raw: RawHandle, offset: usize, count: usize, ou
             if at >= vmo.size() {
                 return Err(Error::OutOfRange);
             }
-            chunk.push(vmo.page(at, true).ok_or(Error::NoMemory)?);
+            chunk.push(vmo.page_for_write(at).ok_or(Error::NoMemory)?);
         }
         let bytes: alloc::vec::Vec<u8> = chunk.iter().flat_map(|a| a.to_le_bytes()).collect();
         user::copy_to_user((out + done * 8) as u64, &bytes)?;
@@ -211,6 +214,13 @@ pub fn vm_map(proc: RawHandle, vmo: RawHandle, offset: usize, len: usize, addr: 
         write: readable && h.rights.contains(Rights::WRITE),
         exec: readable && h.rights.contains(Rights::EXECUTE),
     };
+    // A fork's copy has the VMO itself only if the handle could have given
+    // it to another process.
+    let transferable = h.rights.contains(Rights::TRANSFER);
+    let shared = flags & map_flags::SHARED != 0;
+    if shared && !transferable {
+        return Err(Error::AccessDenied);
+    }
     let aspace = p.aspace().ok_or(Error::BadState)?;
     let at = aspace.map(
         vmo,
@@ -220,6 +230,7 @@ pub fn vm_map(proc: RawHandle, vmo: RawHandle, offset: usize, len: usize, addr: 
         flags & map_flags::FIXED != 0,
         perms,
         max,
+        Inherit { shared, transferable },
         flags & map_flags::COMMIT != 0,
     )?;
     ok(at as usize)

@@ -54,6 +54,17 @@ pub struct Started {
 
 static STARTED: runtime::sync::Mutex<Option<Started>> = runtime::sync::Mutex::new(None);
 
+/// What the process was started with, held still ([`hold`]).
+pub struct Held {
+    _started: runtime::sync::MutexGuard<'static, Option<Started>>,
+}
+
+/// Holds what the process was started with still while a copy of it is
+/// made (`fork`), which has it as it is.
+pub fn hold() -> Held {
+    Held { _started: STARTED.lock() }
+}
+
 /// Notes what the program was started with (at the start, and as
 /// `execve` replaces it).
 pub fn started(s: Started) {

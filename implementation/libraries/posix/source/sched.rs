@@ -46,6 +46,17 @@ pub fn nice() -> i32 {
     *NICE.lock()
 }
 
+/// In a process `fork` made: its nice value is `nice`, the original's (its
+/// threads run at the priority of it already).
+///
+/// # Safety
+/// As `runtime::sync::Mutex::reset_after_fork`: in the copy, before it has
+/// another thread.
+pub unsafe fn forked(nice: i32) {
+    // SAFETY: per the caller.
+    unsafe { NICE.reset_after_fork(nice) };
+}
+
 /// Takes up the nice value the process inherited, at startup: one that
 /// would favour it more than it may be keeps it at 0.
 pub fn inherit(nice: i32) {

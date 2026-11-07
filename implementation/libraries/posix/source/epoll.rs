@@ -63,6 +63,18 @@ pub fn watching() -> bool {
     REGISTRATIONS.load(Ordering::Relaxed) > 0
 }
 
+/// In a process `fork` made: no registration yet (each epoll instance's
+/// copy makes its own again: [`Epoll::restored`]).
+pub fn forked() {
+    REGISTRATIONS.store(0, Ordering::Relaxed);
+}
+
+/// An interest list as a copy of its epoll instance in a process `fork`
+/// makes has it ([`Epoll::fork_copy`]): each registration's descriptor and
+/// description (by its address in the original), what it asks for, and
+/// whether a one-shot one was reported.
+pub struct Copy(Vec<(i32, usize, EpollEvent, bool)>);
+
 /// A registration: a descriptor and its description, and what it is
 /// waited for.
 struct Registration {
@@ -151,6 +163,41 @@ impl Epoll {
         let kick = Event::create().map_err(error::kernel)?;
         object::wait_async(kick.raw(), &port, KICK, SIGNALED).map_err(error::kernel)?;
         Ok(Epoll { watcher: Arc::new(Watcher { port, kick, state: Mutex::new(State::default()) }) })
+    }
+
+    /// What a copy of it in a process `fork` makes has (`crate::fork`):
+    /// its interest list.
+    pub fn fork_copy(&self) -> Copy {
+        let st = self.watcher.state.lock();
+        Copy(
+            st.registrations
+                .values()
+                .map(|r| (r.id.0, r.id.1, EpollEvent { events: r.events, data: r.data }, r.disabled))
+                .collect(),
+        )
+    }
+
+    /// A copy of one in the process `fork` copied ([`Self::fork_copy`]): an
+    /// instance of its own, its port its own, with the same interest list,
+    /// of the descriptions that are this process's copies of the original's
+    /// (`copy_of`, by their addresses there; a registration of one that is
+    /// gone is left out).
+    pub fn restored(copy: Copy, copy_of: impl Fn(usize) -> Option<Arc<Description>>) -> Result<Epoll, isize> {
+        let e = Epoll::new()?;
+        for (fd, desc, event, disabled) in copy.0 {
+            let Some(target) = copy_of(desc) else { continue };
+            e.ctl(epoll::CTL_ADD, fd, &target, event)?;
+            if disabled {
+                let id = (fd, Arc::as_ptr(&target) as usize);
+                let mut st = e.watcher.state.lock();
+                if let Some(key) = st.keys.get(&id).copied()
+                    && let Some(r) = st.registrations.get_mut(&key)
+                {
+                    r.disabled = true;
+                }
+            }
+        }
+        Ok(e)
     }
 
     /// `epoll_ctl`'s operation `op` on descriptor `fd`, of description

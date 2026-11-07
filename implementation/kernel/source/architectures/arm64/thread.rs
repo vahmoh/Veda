@@ -167,6 +167,32 @@ impl Context {
         self.sp = sp;
     }
 
+    /// Prepares the kernel stack below `stack_top` of a new thread so that
+    /// the first switch to it returns to user mode with the registers of
+    /// `frame`, a system call's (`process_fork`'s), whose result it holds,
+    /// and with the running thread's thread pointer and floating-point and
+    /// vector registers as they are: the new thread goes on from the call
+    /// as the running one does.
+    pub fn prepare_fork(&mut self, stack_top: u64, frame: &TrapFrame) {
+        let tf_addr = stack_top - core::mem::size_of::<TrapFrame>() as u64;
+        let mut regs = [0u64; 12];
+        regs[11] = vk_thread_trampoline as *const () as u64;
+        let sp = tf_addr - size_of_val(&regs) as u64;
+        // SAFETY: the thread has not run yet; its stack is ours.
+        unsafe {
+            (tf_addr as *mut TrapFrame).write(*frame);
+            (sp as *mut [u64; 12]).write(regs);
+        }
+        self.sp = sp;
+        // As the processor has them: user code sets its thread pointer
+        // itself, and its vector registers are in the processor's while it
+        // is in the kernel.
+        self.tls = read_register!("tpidr_el0");
+        if let Some(f) = &mut self.fpu {
+            f.save();
+        }
+    }
+
     /// Saves the running thread's floating-point and SIMD registers (this
     /// is its context) for something else to use the processor's: a
     /// virtual processor's.

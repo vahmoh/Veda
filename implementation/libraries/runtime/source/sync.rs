@@ -99,6 +99,23 @@ impl<T: ?Sized> Mutex<T> {
     }
 }
 
+impl<T> Mutex<T> {
+    /// Makes `value` the mutex's, unlocked, in a process `process_fork`
+    /// made: its copy of a mutex that another thread of the original held
+    /// is locked for ever, and what it guards may be half-changed. The old
+    /// value is forgotten, not dropped: nothing of it is trusted.
+    ///
+    /// # Safety
+    /// Only in a process `process_fork` made, while it has no thread but
+    /// the one the call returned in, which must not hold the mutex.
+    pub unsafe fn reset_after_fork(&self, value: T) {
+        // SAFETY: no other thread is there to reach the value, per the
+        // caller; the old one is overwritten without being read.
+        unsafe { core::ptr::write(self.data.get(), value) };
+        self.state.store(0, Ordering::Release);
+    }
+}
+
 impl<T: Default> Default for Mutex<T> {
     fn default() -> Self {
         Mutex::new(T::default())

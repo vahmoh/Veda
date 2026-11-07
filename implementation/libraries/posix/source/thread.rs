@@ -60,7 +60,8 @@ struct Start {
 }
 
 /// `__clone(func, stack, flags, arg, ptid, tls, ctid)`: a new thread in this
-/// process. Processes are made with `posix_spawn` instead.
+/// process. Processes are made with `posix_spawn`, and copied with `fork`
+/// (`crate::fork`), instead.
 ///
 /// # Safety
 /// The arguments are musl's: `stack` the top of a stack for the thread,
@@ -145,6 +146,38 @@ pub fn set_main_stack(top: usize, size: usize) {
     *MAIN_STACK.lock() = (top, size);
 }
 
+/// Where the main thread's stack is, as a process `fork` is about to make
+/// has it.
+pub fn main_stack() -> (usize, usize) {
+    *MAIN_STACK.lock()
+}
+
+/// In a process `fork` made, whose one thread is the calling one, of id
+/// `pid`: the layer keeps that thread's handle alone, at the process's
+/// priority, and knows the original's main thread's stack
+/// (`main_stack`), which its memory has.
+///
+/// # Safety
+/// As `runtime::sync::Mutex::reset_after_fork`: in the copy, before it has
+/// another thread.
+pub unsafe fn forked(pid: i32, main_stack: (usize, usize)) {
+    // SAFETY: per the caller.
+    unsafe {
+        MAIN_STACK.reset_after_fork(main_stack);
+        HANDLES.reset_after_fork(BTreeMap::new());
+    }
+    keep_self(pid);
+}
+
+/// Keeps the calling thread's handle, as its id `tid`'s.
+fn keep_self(tid: i32) {
+    if let Ok(h) = call(nr::THREAD_SELF, [0; 6]) {
+        // SAFETY: a fresh handle from the kernel.
+        let thread = Thread(unsafe { Handle::from_raw(h as u32) });
+        HANDLES.lock().insert(tid, Arc::new(thread));
+    }
+}
+
 /// `__veda_main_stack(top, size)`: the main thread's stack, for musl's
 /// `pthread_getattr_np` (which on Linux probes it with `mremap`): 0, or -1
 /// if the startup message did not say.
@@ -199,11 +232,7 @@ pub fn exists(tid: i32) -> bool {
 /// Keeps the main thread's handle, as [`__veda_clone`] keeps the others':
 /// called by it, once it has an id.
 pub fn main_thread_ready() {
-    if let Ok(h) = call(nr::THREAD_SELF, [0; 6]) {
-        // SAFETY: a fresh handle from the kernel.
-        let thread = Thread(unsafe { Handle::from_raw(h as u32) });
-        HANDLES.lock().insert(crate::signal::current_tid(), Arc::new(thread));
-    }
+    keep_self(crate::signal::current_tid());
 }
 
 /// Keeps the handle of the calling thread, `tid`, which a host started

@@ -37,6 +37,12 @@ const ARG_MAX: usize = 2 << 20;
 /// does).
 static REPLACING: AtomicI32 = AtomicI32::new(0);
 
+/// In a process `fork` made, whose one thread is the calling one: no other
+/// is replacing the program.
+pub fn forked() {
+    REPLACING.store(0, Ordering::Release);
+}
+
 /// Whether the thread `tid` is to end, another replacing the program.
 pub fn stopping_others(tid: i32) -> bool {
     let by = REPLACING.load(Ordering::Acquire);

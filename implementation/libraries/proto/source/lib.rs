@@ -70,6 +70,18 @@ pub fn with_registry<R>(f: impl FnOnce(&registry::Client) -> R) -> Result<R, Ser
     Ok(f(slot.as_ref().unwrap()))
 }
 
+/// In a process `process_fork` made: `registry` is its registry channel (a
+/// clone its original made for it), in place of the original's, which
+/// reaches nothing there.
+///
+/// # Safety
+/// As `runtime::sync::Mutex::reset_after_fork`: in the copy, before it has
+/// another thread.
+pub unsafe fn forked(registry: Channel) {
+    // SAFETY: per the caller.
+    unsafe { REGISTRY.reset_after_fork(Some(registry::Client::new(registry))) };
+}
+
 /// Registers this process as the provider of service `name`. Returns the
 /// listener on which new connections arrive.
 pub fn register(name: &str) -> Result<Channel, ServiceError> {

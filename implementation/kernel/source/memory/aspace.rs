@@ -3,6 +3,12 @@
 
 //! User address spaces: a page-table hierarchy plus the list of VMO mappings
 //! that it is lazily populated from on page faults.
+//!
+//! An address space can be copied for a process `process_fork` makes
+//! ([`AddressSpace::fork`]): memory that is its own is copied on write, a
+//! page at a time as either side first writes it (`super::cow`), and other
+//! memory is shared, as `fork` has a Unix process's private and shared
+//! mappings.
 
 use alloc::collections::{BTreeMap, BTreeSet, LinkedList};
 use alloc::sync::Arc;
@@ -77,6 +83,23 @@ fn range_end(addr: u64, len: u64) -> Result<u64, Error> {
     super::checked_page_align_up(len).and_then(|len| addr.checked_add(len)).ok_or(Error::InvalidArgs)
 }
 
+/// What a process `process_fork` makes has of a mapping
+/// ([`AddressSpace::fork`]), as it was mapped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Inherit {
+    /// Mapped with `map_flags::SHARED`: the VMO itself, even where nothing
+    /// else reaches it, as `MAP_SHARED` memory.
+    pub shared: bool,
+    /// The handle it was mapped with may be transferred (`TRANSFER`): the
+    /// VMO may reach another process.
+    pub transferable: bool,
+}
+
+impl Inherit {
+    /// Memory that is the address space's own: a fork's copy has a copy.
+    pub const OWN: Inherit = Inherit { shared: false, transferable: true };
+}
+
 #[derive(Clone)]
 pub struct Mapping {
     pub start: u64,
@@ -91,6 +114,8 @@ pub struct Mapping {
     /// no handle reaches it: each of its pages is mapped here and nowhere
     /// else, so a page is freed as soon as it is unmapped or decommitted.
     pub private: bool,
+    /// What a fork's copy has of it.
+    pub inherit: Inherit,
 }
 
 impl Mapping {
@@ -106,6 +131,13 @@ impl Mapping {
             global: false,
             cache: self.vmo.cache(),
         }
+    }
+
+    /// The flags of its pages as `protect` and a fork leave them: never
+    /// writable where the VMO's frames may be another's too, which only a
+    /// write fault makes a page's own ([`AddressSpace::handle_fault`]).
+    fn shareable_pte_flags(&self) -> Flags {
+        Flags { writable: self.perms.write && !self.vmo.shares(), ..self.pte_flags() }
     }
 }
 
@@ -156,7 +188,8 @@ impl AddressSpace {
 
     /// Maps `len` bytes of `vmo` starting at `vmo_offset`. Returns the
     /// address. `addr` is a hint unless `fixed` is set. The mapping may
-    /// later be given at most the permissions `max`.
+    /// later be given at most the permissions `max`; a fork's copy has of
+    /// it what `inherit` says.
     #[allow(clippy::too_many_arguments)] // mirrors the VM_MAP system call
     pub fn map(
         &self,
@@ -167,6 +200,7 @@ impl AddressSpace {
         fixed: bool,
         perms: Perms,
         max: Perms,
+        inherit: Inherit,
         commit: bool,
     ) -> Result<u64, Error> {
         if len == 0 || !vmo_offset.is_multiple_of(PAGE_SIZE) {
@@ -176,7 +210,8 @@ impl AddressSpace {
         if vmo_offset.checked_add(len).is_none_or(|e| e > vmo.size()) {
             return Err(Error::OutOfRange);
         }
-        self.insert(Mapping { start: 0, len, vmo, vmo_offset, perms, max, private: false }, addr, fixed, commit)
+        let m = Mapping { start: 0, len, vmo, vmo_offset, perms, max, private: false, inherit };
+        self.insert(m, addr, fixed, commit)
     }
 
     /// Maps `len` bytes of new zero-filled memory that only this mapping
@@ -189,7 +224,7 @@ impl AddressSpace {
         let vmo = Vmo::new_anonymous(len, Cache::WriteBack).ok_or(Error::NoMemory)?;
         let len = vmo.size();
         self.insert(
-            Mapping { start: 0, len, vmo, vmo_offset: 0, perms, max: Perms::ALL, private: true },
+            Mapping { start: 0, len, vmo, vmo_offset: 0, perms, max: Perms::ALL, private: true, inherit: Inherit::OWN },
             addr,
             fixed,
             commit,
@@ -390,7 +425,9 @@ impl AddressSpace {
                 // Faults on its pages are refused from now on.
                 paging::unmap_range(self.root, m.start, m.end());
             } else {
-                paging::protect_range(self.root, m.start, m.end(), m.pte_flags());
+                // A page whose frame another VMO holds too becomes writable
+                // as it is written, a copy of its own.
+                paging::protect_range(self.root, m.start, m.end(), m.shareable_pte_flags());
             }
         }
         drop(map);
@@ -430,13 +467,33 @@ impl AddressSpace {
             return Fault::Invalid;
         }
         let va = page_align_down(addr);
+        let offset = m.vmo_offset + (va - m.start);
+        let mut flags = m.pte_flags();
         // The page is inside the VMO (mappings never reach past their VMO,
-        // which never shrinks): only memory can be missing.
-        let Some(frame) = m.vmo.page(m.vmo_offset + (va - m.start), true) else { return Fault::OutOfMemory };
-        match paging::map(self.root, va, frame, m.pte_flags(), true) {
-            Ok(()) => Fault::Resolved,
-            Err(_) => Fault::OutOfMemory,
+        // which never shrinks): only memory can be missing. A write makes
+        // the page the VMO's own (a copy of a frame another VMO holds too);
+        // a read maps such a frame read-only, until it is written.
+        let frame = if write && flags.writable {
+            m.vmo.page_for_write(offset)
+        } else {
+            let frame = m.vmo.page(offset, true);
+            if frame.is_some_and(|f| m.vmo.is_shared(f)) {
+                flags.writable = false;
+            }
+            frame
+        };
+        let Some(frame) = frame else { return Fault::OutOfMemory };
+        // A copy replaces the frame the page had: no processor may read the
+        // old one through what its TLB remembers once the copy is written.
+        let replaced = paging::translate(self.root, va).is_some_and(|(at, _)| page_align_down(at) != frame);
+        if paging::map(self.root, va, frame, flags, true).is_err() {
+            return Fault::OutOfMemory;
         }
+        drop(map);
+        if replaced {
+            crate::architecture::tlb::shootdown_space(self.root, va, PAGE_SIZE);
+        }
+        Fault::Resolved
     }
 
     /// Ensures every page of `[addr, addr+len)` is mapped with the required
@@ -482,6 +539,91 @@ impl AddressSpace {
             total += m.vmo.committed_bytes();
         }
         total
+    }
+
+    /// A copy of this address space, for a process `process_fork` makes:
+    /// the same mappings at the same places, with the same permissions,
+    /// each of what its [`Inherit`] says:
+    ///
+    /// * memory that is the address space's own is copied: anonymous
+    ///   memory that nothing reaches but its mappings here (its private
+    ///   memory, and VMOs mapped through handles that have since closed),
+    ///   not mapped `shared`. The copy and the original share its frames
+    ///   until either writes a page, which then gets one of its own
+    ///   ([`Vmo::fork_copy`]): its writable pages here are made read-only
+    ///   until then;
+    /// * other memory is the same VMO, if the handle it was mapped with may
+    ///   be transferred, as the process could have given it the VMO;
+    /// * the rest is not there.
+    ///
+    /// The copy's pages are mapped as they are first touched. `NoMemory` if
+    /// there is none for the copy's tables or the frames' counts; nothing
+    /// is shared then.
+    pub fn fork(&self) -> Result<Arc<AddressSpace>, Error> {
+        let map = self.mappings.lock();
+        // How many mappings here each VMO has, and whether any is shared.
+        let mut vmos: BTreeMap<u64, (usize, bool)> = BTreeMap::new();
+        for m in map.values() {
+            let (count, shared) = vmos.entry(m.vmo.koid).or_insert((0, false));
+            *count += 1;
+            *shared |= m.inherit.shared;
+        }
+        // Memory nothing reaches but these mappings: no handle, no other
+        // address space, no guest holds its VMO, which counts a reference
+        // for each.
+        let copied = |m: &Mapping| {
+            let (count, shared) = vmos[&m.vmo.koid];
+            m.vmo.copyable() && (m.private || (!shared && Arc::strong_count(&m.vmo) == count))
+        };
+        // The copies' tables of frames and counts are kernel memory, taken
+        // on user space's behalf as the frames are.
+        let pages: u64 = map
+            .values()
+            .filter(|m| copied(m))
+            .map(|m| (m.vmo.koid, m.vmo.committed_pages()))
+            .collect::<BTreeMap<u64, u64>>()
+            .values()
+            .sum();
+        if !super::phys::user_may_use(pages.saturating_mul(32).saturating_add(64 * 1024)) {
+            return Err(Error::NoMemory);
+        }
+        let child = Arc::new(AddressSpace {
+            root: paging::new_user_root().ok_or(Error::NoMemory)?,
+            mappings: SpinLock::new(BTreeMap::new()),
+            dynamic_base: self.dynamic_base,
+        });
+        // No writable page here may lead to a frame that is shared, so
+        // they go read-only before any is, everywhere this address space
+        // is loaded; a write faults then, and copies.
+        let mut protected = false;
+        for m in map.values().filter(|m| m.perms.write && copied(m)) {
+            paging::protect_range(self.root, m.start, m.end(), Flags { writable: false, ..m.pte_flags() });
+            protected = true;
+        }
+        if protected {
+            crate::architecture::tlb::shootdown_space(self.root, USER_START, USER_END - USER_START);
+        }
+        let mut copies: BTreeMap<u64, Arc<Vmo>> = BTreeMap::new();
+        let mut theirs = child.mappings.lock();
+        for m in map.values() {
+            let vmo = if copied(m) {
+                match copies.get(&m.vmo.koid) {
+                    Some(copy) => copy.clone(),
+                    None => {
+                        let copy = m.vmo.fork_copy().ok_or(Error::NoMemory)?;
+                        copies.insert(m.vmo.koid, copy.clone());
+                        copy
+                    }
+                }
+            } else if m.inherit.transferable {
+                m.vmo.clone()
+            } else {
+                continue;
+            };
+            theirs.insert(m.start, Mapping { vmo, ..m.clone() });
+        }
+        drop(theirs);
+        Ok(child)
     }
 
     /// Loads this address space on the current CPU.

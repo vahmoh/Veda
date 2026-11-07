@@ -24,6 +24,18 @@ pub fn adopt(vmo: Vmo) {
     *TTY.lock() = Tty::open(vmo).map(Arc::new);
 }
 
+/// In a process `fork` made: the terminal's state is what `vmo`, a
+/// duplicate the original made for it, holds.
+///
+/// # Safety
+/// As `runtime::sync::Mutex::reset_after_fork`: in the copy, before it has
+/// another thread.
+pub unsafe fn forked(vmo: Option<Vmo>) {
+    let tty = vmo.and_then(Tty::open).map(Arc::new);
+    // SAFETY: per the caller.
+    unsafe { TTY.reset_after_fork(tty) };
+}
+
 pub fn get() -> Option<Arc<Tty>> {
     TTY.lock().clone()
 }

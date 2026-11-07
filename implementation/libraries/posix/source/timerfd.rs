@@ -87,7 +87,41 @@ impl Timer {
     }
 }
 
+/// A timer as a copy of it in a process `fork` makes has it
+/// ([`TimerFd::fork_copy`]).
+pub struct Copy {
+    realtime: bool,
+    deadline: Option<u64>,
+    interval: u64,
+    expirations: u64,
+}
+
 impl TimerFd {
+    /// What a copy of it in a process `fork` makes has (`crate::fork`):
+    /// its clock, its next expiration, its period and the expirations not
+    /// read yet.
+    pub fn fork_copy(&self) -> Copy {
+        let s = self.timer.state.lock();
+        Copy { realtime: self.timer.realtime, deadline: s.deadline, interval: s.interval, expirations: s.expirations }
+    }
+
+    /// A copy of one in the process `fork` copied ([`Self::fork_copy`]): a
+    /// timer of its own, armed as that one was, which this process's
+    /// timers' thread expires.
+    pub fn restored(copy: Copy) -> Result<TimerFd, isize> {
+        let event = Event::create().map_err(error::kernel)?;
+        let state = State { deadline: copy.deadline, interval: copy.interval, expirations: copy.expirations };
+        let timer = Arc::new(Timer { realtime: copy.realtime, state: Mutex::new(state), event });
+        if copy.expirations > 0 {
+            let _ = timer.event.0.signal(0, READABLE);
+        }
+        TIMERS.lock().push(Arc::downgrade(&timer));
+        if copy.deadline.is_some() {
+            wake_timers()?;
+        }
+        Ok(TimerFd { timer })
+    }
+
     /// Whether a read would not wait.
     pub fn readable(&self) -> bool {
         self.timer.expire(time::monotonic_ns());
@@ -129,6 +163,21 @@ impl TimerFd {
 /// it (once it has started).
 static TIMERS: Mutex<Vec<Weak<Timer>>> = Mutex::new(Vec::new());
 static WAKE: Mutex<Option<Event>> = Mutex::new(None);
+
+/// In a process `fork` made: no timers yet (the descriptors' copies are
+/// made again: [`TimerFd::restored`]), and no thread for them, which the
+/// original's was.
+///
+/// # Safety
+/// As `runtime::sync::Mutex::reset_after_fork`: in the copy, before it has
+/// another thread.
+pub unsafe fn forked() {
+    // SAFETY: per the caller.
+    unsafe {
+        TIMERS.reset_after_fork(Vec::new());
+        WAKE.reset_after_fork(None);
+    }
+}
 
 /// Has the timers' thread look at the timers again (one was set), starting
 /// it if it has not started.
