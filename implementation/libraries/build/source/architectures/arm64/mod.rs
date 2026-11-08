@@ -14,14 +14,14 @@ pub const TARGET: &str = "aarch64-unknown-linux-musl";
 /// freestanding and soft-float, as the kernel's.
 pub const SOFT_FLOAT_TARGET: &str = "aarch64-unknown-none-softfloat";
 
-/// Where a program for [`SOFT_FLOAT_TARGET`] is linked. That target is the
-/// kernel's, whose `core` Rust ships compiled for a fixed address, so its
-/// programs cannot be position-independent, as the others are: they are
-/// linked at this address, which is clear of every other program's place
-/// beside Linux compatibility's. A Linux program linked for a fixed
-/// address has a low one (LLVM's linker's 0x200000, GNU's 0x400000, Go's
-/// 0x10000); and this is not where Veda places the rest of a process
-/// (`abi::PROGRAM_BASE` and up, the kernel's mappings from 16 TiB, Linux
-/// compatibility's libraries and vDSO below 127 TiB), nor where Go's
-/// runtime asks for its heap (`0x..c0_0000_0000`).
-pub const SOFT_FLOAT_IMAGE_BASE: u64 = 0x2000_0000_0000;
+/// The linker's arguments for a program for [`SOFT_FLOAT_TARGET`], beyond
+/// [`LINK_ARGS`](crate::LINK_ARGS). That target is the kernel's, which Rust
+/// links at a fixed address, and its `core` and `alloc` are compiled for
+/// one: their constants that hold addresses (a trait object's table, where
+/// a panic is) are in read-only data. Such a program is linked
+/// position-independent all the same (`-pie`), for its loader to place at a
+/// random address, its read-only data relocated too (`-z notext`, which
+/// marks it `DF_TEXTREL`): the loader relocates those pages in a copy of
+/// its own before the program runs, and maps them read-only
+/// (`elf::Elf::relocate`).
+pub const SOFT_FLOAT_LINK_ARGS: &[&str] = &["-pie", "-znotext"];

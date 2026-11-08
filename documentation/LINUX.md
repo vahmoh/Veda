@@ -274,9 +274,11 @@ process's handles allow, as a program of Veda's.
 - **Its own memory.** Linux compatibility shares the process with the
   program, which could overwrite it, as a C program can its C library: it
   gains nothing that way that its process had not. It is at a random
-  address on AMD64; on ARM64 at a fixed one, out of the program's way, as
-  the soft-float target it is built for has no `core` for code that can
-  be anywhere.
+  address. On ARM64, the `core` of the soft-float target it is built for
+  keeps addresses in its read-only data: the loader relocates those pages
+  (text relocations) in a copy of the process's own, before anything runs,
+  and maps them read-only, so no part of it is ever writable that its
+  segments do not make so (`elf::Elf::relocate`).
 - **Its vDSO** is the program's own memory, in no other process, which
   holds no more than the program could ask the kernel for: its code, and
   the clocks' scale, which it can read but never write.

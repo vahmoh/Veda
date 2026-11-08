@@ -14,8 +14,10 @@
 //! it is:
 //!
 //! * **Veda programs** (Rust, on this runtime): position-independent and
-//!   relocated here, so that their RELRO is read-only from the start. Their
-//!   arguments and environment travel in the startup message.
+//!   relocated here, so that their RELRO is read-only from the start, as is
+//!   read-only data that relocations change (text relocations, which Linux
+//!   compatibility has on ARM64: `elf::Elf::relocate`). Their arguments and
+//!   environment travel in the startup message.
 //! * **POSIX programs** (C, built by Veda's GCC; Rust on its standard
 //!   library), which relocate themselves if they are position-independent.
 //!   Their arguments, environment and auxiliary vector are laid out on
@@ -264,7 +266,10 @@ fn load_image(
     }
     if relocate {
         // Through a mapping of the VMO here, which faults pages in only
-        // where relocations are (in the writable segments).
+        // where relocations are: in the writable segments, and in read-only
+        // ones of a program with text relocations, whose pages are then the
+        // process's own too (`Elf::file_pages`). The program's process maps
+        // none of them writable that its segments do not make so.
         let image = vm::Mapping::new(Vmo(vmo.0.duplicate(None)?), len, map_flags::READ | map_flags::WRITE)?;
         // SAFETY: a mapping of a VMO made above, which nothing else maps yet.
         elf.relocate(unsafe { image.as_mut_slice() }, bias).map_err(SpawnError::BadElf)?;

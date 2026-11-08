@@ -148,7 +148,8 @@ pub enum ElfError {
     /// The entry point is not in an executable segment.
     BadEntry,
     /// A relocation is malformed, of a type a static executable does not
-    /// have, or outside the writable segments.
+    /// have, or outside the segments it may change (the writable ones, or
+    /// any of an executable with text relocations).
     BadRelocation,
     /// The image or its arguments are larger than the space for them.
     TooLarge,
@@ -522,20 +523,23 @@ impl<'a> Elf<'a> {
 
     /// Where the pages of `run` (one of [`page_runs`]) are in the file, if
     /// they can be the file's own: the offset of the first, when nothing
-    /// writes them (no writable segment touches them, so neither the
-    /// program nor relocations do) and every byte a segment puts in them is
-    /// the file's, at one distance from where memory has it, a whole number
-    /// of pages. Where the file is in memory page by page, such pages can
-    /// be shared by every process running the program; what else they hold
-    /// is the file's too (its bytes around the segments', and past its end
-    /// whatever follows it), which no segment puts in memory. `None` when
-    /// they need memory of their own: a copy of what the segments put
-    /// there, zeros elsewhere.
+    /// writes them (no writable segment touches them, so the program does
+    /// not, nor does a relocation [`Elf::relocate`] makes) and every byte a
+    /// segment puts in them is the file's, at one distance from where
+    /// memory has it, a whole number of pages. Where the file is in memory
+    /// page by page, such pages can be shared by every process running the
+    /// program; what else they hold is the file's too (its bytes around the
+    /// segments', and past its end whatever follows it), which no segment
+    /// puts in memory. `None` when they need memory of their own: a copy
+    /// of what the segments put there, zeros elsewhere.
     pub fn file_pages(&self, run: &PageRun) -> Option<u64> {
         if run.perms.write {
             return None;
         }
         let end = run.start.checked_add(run.len)?;
+        if self.text_relocations_in(run.start, end) {
+            return None;
+        }
         let mut distance = None;
         for s in self.segments() {
             if page_up(s.end())? <= run.start || end <= page_down(s.vaddr) {
@@ -636,53 +640,59 @@ impl<'a> Elf<'a> {
     ///
     /// A static position-independent executable has only relative
     /// relocations (in its `DT_RELA` and `DT_RELR` tables), each a word of a
-    /// writable segment; anything else is refused ([`ElfError::Dynamic`]
-    /// for libraries it needs, [`ElfError::BadRelocation`] for the rest).
-    /// After an error the image is relocated in part.
+    /// writable segment, or of any of its segments if it says it has text
+    /// relocations (`DT_TEXTREL`, or `DF_TEXTREL` in `DT_FLAGS`); anything
+    /// else is refused ([`ElfError::Dynamic`] for libraries it needs,
+    /// [`ElfError::BadRelocation`] for the rest). After an error the image
+    /// is relocated in part.
+    ///
+    /// Text relocations, which a dynamic linker makes in the program's own
+    /// memory (writable for the purpose, and so, for a time, writable and
+    /// executable), are made here in the loader's copy of the image, before
+    /// the program runs; the program's pages are then mapped with their
+    /// segments' permissions alone ([`page_runs`]), so nothing of it is ever
+    /// writable that its segments do not make so. The pages they write are
+    /// the process's own, as relocated RELRO is ([`Elf::file_pages`]): no
+    /// other process's change. And they write the program's own image, as
+    /// it could have held it already: a program gains nothing by them.
+    /// (Linux compatibility has them on ARM64: the `core` and `alloc` of
+    /// the soft-float target it is built for are compiled for a fixed
+    /// address, and keep addresses in their read-only data.)
     pub fn relocate(&self, image: &mut [u8], bias: u64) -> Result<(), ElfError> {
         if image.len() as u64 != self.hi - self.lo {
             return Err(ElfError::BadRelocation);
         }
         let tables = self.relocation_tables()?;
-        let mut image = Image { bytes: image, lo: self.lo, loads: Loads::of(self) };
-        for r in tables.rela.as_chunks::<RELA_SIZE>().0 {
-            let (at, info, addend) = (u64_at(r, 0), u64_at(r, 8), u64_at(r, 16));
-            let (symbol, kind) = (info >> 32, info as u32);
-            if kind == R_NONE {
-                continue;
+        let mut image = Image { bytes: image, lo: self.lo, loads: Loads::of(self), text: tables.text };
+        tables.each(self.machine, |at, addend| {
+            match addend {
+                Some(addend) => *image.word(at)? = bias.wrapping_add(addend).to_le_bytes(),
+                None => image.add_bias(at, bias)?,
             }
-            if kind != self.machine.relative || symbol != 0 {
-                return Err(ElfError::BadRelocation);
-            }
-            *image.word(at)? = bias.wrapping_add(addend).to_le_bytes();
-        }
-        // `DT_RELR`: an address (even), whose word is relocated, then
-        // bitmaps (odd), whose bits 1 to 63 say which of the 63 words after
-        // the last one relocated are too.
-        let mut next: Option<u64> = None;
-        for w in tables.relr.as_chunks::<RELR_SIZE>().0 {
-            let w = u64::from_le_bytes(*w);
-            next = Some(if w & 1 == 0 {
-                image.add_bias(w, bias)?;
-                w.checked_add(8).ok_or(ElfError::BadRelocation)?
-            } else {
-                let base = next.ok_or(ElfError::BadRelocation)?;
-                for bit in (1..64).filter(|&bit| w >> bit & 1 != 0) {
-                    image.add_bias(base.checked_add(8 * (bit - 1)).ok_or(ElfError::BadRelocation)?, bias)?;
-                }
-                base.checked_add(8 * 63).ok_or(ElfError::BadRelocation)?
-            });
-        }
-        Ok(())
+            Ok(())
+        })
+    }
+
+    /// Whether the executable has text relocations, one of which
+    /// [`Elf::relocate`] makes in `[start, end)` (before the load bias), or
+    /// may (they are malformed: relocating fails). Without text
+    /// relocations, it relocates writable segments alone.
+    fn text_relocations_in(&self, start: u64, end: u64) -> bool {
+        let Ok(tables) = self.relocation_tables() else { return false };
+        // The walk stops at the first relocation there, or a malformed one.
+        let there = |at: u64| at < end && start < at.saturating_add(8);
+        tables.text
+            && tables.each(self.machine, |at, _| if there(at) { Err(ElfError::BadRelocation) } else { Ok(()) }).is_err()
     }
 
     /// The relocation tables, from the dynamic section.
     fn relocation_tables(&self) -> Result<Tables<'a>, ElfError> {
-        let Some((offset, size)) = self.dynamic else { return Ok(Tables { rela: &[], relr: &[] }) };
+        let Some((offset, size)) = self.dynamic else { return Ok(Tables { rela: &[], relr: &[], text: false }) };
         // Validated by `parse_for`.
         let dynamic = file_range(self.data, offset, size).ok_or(ElfError::BadSegment)?;
         let (mut rela, mut rela_size, mut rela_entry) = (0, 0, RELA_SIZE as u64);
         let (mut relr, mut relr_size, mut relr_entry) = (0, 0, RELR_SIZE as u64);
+        let mut text = false;
         for d in dynamic.as_chunks::<DYN_SIZE>().0 {
             let (tag, value) = (u64_at(d, 0), u64_at(d, 8));
             match tag {
@@ -694,11 +704,12 @@ impl<'a> Elf<'a> {
                 dt::RELR => relr = value,
                 dt::RELRSZ => relr_size = value,
                 dt::RELRENT => relr_entry = value,
-                // Relocations without addends (other processors'), of the
-                // procedure linkage table, or of read-only segments.
+                // Relocations without addends (other processors'), or of
+                // the procedure linkage table.
                 dt::RELSZ | dt::PLTRELSZ if value != 0 => return Err(ElfError::BadRelocation),
-                dt::TEXTREL => return Err(ElfError::BadRelocation),
-                dt::FLAGS if value & dt::DF_TEXTREL != 0 => return Err(ElfError::BadRelocation),
+                // Relocations of read-only segments too.
+                dt::TEXTREL => text = true,
+                dt::FLAGS if value & dt::DF_TEXTREL != 0 => text = true,
                 _ => {}
             }
         }
@@ -714,6 +725,7 @@ impl<'a> Elf<'a> {
         Ok(Tables {
             rela: table(rela, rela_size, rela_entry, RELA_SIZE)?,
             relr: table(relr, relr_size, relr_entry, RELR_SIZE)?,
+            text,
         })
     }
 
@@ -730,6 +742,52 @@ impl<'a> Elf<'a> {
 struct Tables<'a> {
     rela: &'a [u8],
     relr: &'a [u8],
+    /// Whether the executable has text relocations: relocations of its
+    /// read-only segments too.
+    text: bool,
+}
+
+impl Tables<'_> {
+    /// Calls `f` with each relocation, in the tables' order: the address of
+    /// the word it changes (before the load bias), and the addend the word
+    /// becomes the load bias plus (`DT_RELA`'s), or `None` for one the load
+    /// bias is added to (`DT_RELR`'s). Stops at the first error, `f`'s or a
+    /// malformed relocation's.
+    fn each(
+        &self,
+        machine: Machine,
+        mut f: impl FnMut(u64, Option<u64>) -> Result<(), ElfError>,
+    ) -> Result<(), ElfError> {
+        for r in self.rela.as_chunks::<RELA_SIZE>().0 {
+            let (at, info, addend) = (u64_at(r, 0), u64_at(r, 8), u64_at(r, 16));
+            let (symbol, kind) = (info >> 32, info as u32);
+            if kind == R_NONE {
+                continue;
+            }
+            if kind != machine.relative || symbol != 0 {
+                return Err(ElfError::BadRelocation);
+            }
+            f(at, Some(addend))?;
+        }
+        // `DT_RELR`: an address (even), whose word is relocated, then
+        // bitmaps (odd), whose bits 1 to 63 say which of the 63 words after
+        // the last one relocated are too.
+        let mut next: Option<u64> = None;
+        for w in self.relr.as_chunks::<RELR_SIZE>().0 {
+            let w = u64::from_le_bytes(*w);
+            next = Some(if w & 1 == 0 {
+                f(w, None)?;
+                w.checked_add(8).ok_or(ElfError::BadRelocation)?
+            } else {
+                let base = next.ok_or(ElfError::BadRelocation)?;
+                for bit in (1..64).filter(|&bit| w >> bit & 1 != 0) {
+                    f(base.checked_add(8 * (bit - 1)).ok_or(ElfError::BadRelocation)?, None)?;
+                }
+                base.checked_add(8 * 63).ok_or(ElfError::BadRelocation)?
+            });
+        }
+        Ok(())
+    }
 }
 
 /// The loadable segments' addresses and permissions, gathered once: the
@@ -763,14 +821,18 @@ struct Image<'i> {
     bytes: &'i mut [u8],
     lo: u64,
     loads: Loads,
+    /// Whether its read-only segments are relocated too (text relocations).
+    text: bool,
 }
 
 impl Image<'_> {
     /// The word at `at` (before the load bias), if relocations may change
-    /// it: it is in a writable segment.
+    /// it: it is in a writable segment, or in any segment of an executable
+    /// with text relocations.
     fn word(&mut self, at: u64) -> Result<&mut [u8; 8], ElfError> {
         let end = at.checked_add(8).ok_or(ElfError::BadRelocation)?;
-        if !self.loads.iter().any(|(start, stop, perms)| perms.write && start <= at && end <= stop) {
+        let text = self.text;
+        if !self.loads.iter().any(|(start, stop, perms)| (perms.write || text) && start <= at && end <= stop) {
             return Err(ElfError::BadRelocation);
         }
         // Segments are in the span, from `lo` on.

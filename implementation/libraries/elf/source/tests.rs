@@ -416,16 +416,57 @@ fn refuses_relocations_a_static_executable_has_not() {
     assert_eq!(refused(&[], &[], &[(dt::RELA, 0x5000), (dt::RELASZ, 25)]), ElfError::BadRelocation);
     assert_eq!(refused(&[], &[], &[(dt::RELA, 0x4ff0), (dt::RELASZ, 24)]), ElfError::BadRelocation);
     assert_eq!(refused(&[], &[], &[(dt::RELA, u64::MAX), (dt::RELASZ, 24)]), ElfError::BadRelocation);
-    // Libraries, relocations of the code, of the PLT, or without addends.
+    // Libraries, relocations of the PLT, or without addends.
     assert_eq!(refused(&[], &[], &[(dt::NEEDED, 1)]), ElfError::Dynamic);
-    assert_eq!(refused(&[], &[], &[(dt::TEXTREL, 0)]), ElfError::BadRelocation);
-    assert_eq!(refused(&[], &[], &[(dt::FLAGS, dt::DF_TEXTREL)]), ElfError::BadRelocation);
     assert_eq!(refused(&[], &[], &[(dt::PLTRELSZ, 24)]), ElfError::BadRelocation);
     assert_eq!(refused(&[], &[], &[(dt::RELSZ, 16)]), ElfError::BadRelocation);
     // An image that is not the span's.
     let bytes = static_pie(&[], &[], &[]).build();
     let elf = Elf::parse_for(&bytes, amd64::MACHINE).unwrap();
     assert_eq!(elf.relocate(&mut [0u8; 4096], 0), Err(ElfError::BadRelocation));
+}
+
+/// Relocations of read-only data (at 0x200, among the first segment's
+/// bytes) and of the code (0x1048), then, in `DT_RELR`, the word after the
+/// data's, in an executable that says it has text relocations with `flag`.
+fn text_relocations(flag: (u64, u64)) -> Exe {
+    let relative = amd64::MACHINE.relative as u64;
+    let mut tags = rela_tags(2);
+    tags.extend([(dt::RELR, 0x5030), (dt::RELRSZ, 8), (dt::RELRENT, 8), flag]);
+    static_pie(&[(0x200, relative, 0x1040), (0x1048, relative, 0x2240)], &[0x208], &tags)
+}
+
+#[test]
+fn text_relocations_change_read_only_segments_too() {
+    for flag in [(dt::FLAGS, dt::DF_TEXTREL), (dt::TEXTREL, 0)] {
+        let bytes = text_relocations(flag).build();
+        let elf = Elf::parse_for(&bytes, amd64::MACHINE).unwrap();
+        let mut image = image_of(&elf);
+        image[0x208..0x210].copy_from_slice(&0x1100u64.to_le_bytes());
+        let bias = 0x5555_0000_0000;
+        elf.relocate(&mut image, bias).unwrap();
+        assert_eq!(word_at(&image, 0x200), bias + 0x1040);
+        assert_eq!(word_at(&image, 0x1048), bias + 0x2240);
+        assert_eq!(word_at(&image, 0x208), bias + 0x1100);
+        // The pages they change are the process's own, as the writable
+        // segments' are; the relocation tables' are still the file's.
+        let in_file: Vec<bool> = file_pages(&elf, Relro::ReadOnly).iter().map(Option::is_some).collect();
+        assert_eq!(in_file, [false, false, false, false, true], "{flag:?}");
+    }
+    // Without them, the same relocations are refused.
+    let bytes = text_relocations((dt::FLAGS, 0)).build();
+    let elf = Elf::parse_for(&bytes, amd64::MACHINE).unwrap();
+    assert_eq!(elf.relocate(&mut image_of(&elf), 0x1000), Err(ElfError::BadRelocation));
+    assert_eq!(file_pages(&elf, Relro::ReadOnly)[..2], [Some(0), Some(0x1000)]);
+    // With them, a relocation is still in one segment: not between two
+    // (0x1240 to 0x2240), across two, or past the last.
+    let relative = amd64::MACHINE.relative as u64;
+    let tags = [rela_tags(1), vec![(dt::FLAGS, dt::DF_TEXTREL)]].concat();
+    for at in [0x1300, 0x2ffc, 0x4ffc, 0x6000] {
+        let bytes = static_pie(&[(at, relative, 0)], &[], &tags).build();
+        let elf = Elf::parse_for(&bytes, amd64::MACHINE).unwrap();
+        assert_eq!(elf.relocate(&mut image_of(&elf), 0x1000), Err(ElfError::BadRelocation), "{at:#x}");
+    }
 }
 
 #[test]
@@ -861,8 +902,8 @@ impl Rng {
 }
 
 /// Executables of every layout the tests build: a static one, a static PIE
-/// with relocations of both kinds and a note, one whose segments share a
-/// page, and a dynamically linked one.
+/// with relocations of both kinds and a note, one with text relocations,
+/// one whose segments share a page, and a dynamically linked one.
 fn corpus() -> Vec<Vec<u8>> {
     let relative = amd64::MACHINE.relative as u64;
     let mut tags = rela_tags(2);
@@ -874,7 +915,8 @@ fn corpus() -> Vec<Vec<u8>> {
     let mut shared = Exe::new(0x401000, vec![seg(RX, 0x401000, 0x900, 0x900), seg(RW, 0x401a00, 0x10, 0x1000)]);
     shared.headers_in_first = false;
     shared.extra.push(extra(pt::PHDR, 0x401000, 0));
-    vec![typical().build(), pie.build(), shared.build(), dynamic(b"/system/lib/libc.so\0").build()]
+    let text = text_relocations((dt::FLAGS, dt::DF_TEXTREL));
+    vec![typical().build(), pie.build(), text.build(), shared.build(), dynamic(b"/system/lib/libc.so\0").build()]
 }
 
 /// `data` with a few random changes, most of them in the headers, where
@@ -921,6 +963,9 @@ fn exercise(bytes: &[u8]) {
         let (lo, hi) = elf.span();
         assert!(runs.iter().all(|r| r.len > 0 && lo <= r.start && r.start + r.len <= hi));
         assert!(runs.windows(2).all(|w| w[0].start + w[0].len <= w[1].start));
+        for run in &runs {
+            let _ = elf.file_pages(run);
+        }
     }
     let (lo, hi) = elf.span();
     if hi - lo <= 16 << 20 {

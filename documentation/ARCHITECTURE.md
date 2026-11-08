@@ -340,7 +340,9 @@ each is:
   of 2^28 pages). A program from the system image runs from the image's
   own pages where nothing writes them (its code and read-only data,
   through slices of the image's VMO), shared by every process that runs
-  it; only the pages its writable segments touch are its own. A
+  it; only the pages written are its own: those its writable segments
+  touch, and read-only ones its loader relocates (Linux compatibility's,
+  on ARM64). A
   dynamically linked POSIX program names the system's dynamic linker, the
   C library's shared object (`/system/lib/libc.so`, the only one started),
   which is loaded beside it, at a random address of its own, and links it
