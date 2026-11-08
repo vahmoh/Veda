@@ -168,8 +168,9 @@ fn architecture_call(_t: &mut Task, _n: usize, _a: [usize; 6]) -> Option<Outcome
 }
 
 /// `clone`, in the architecture's argument order (x86-64: flags, stack,
-/// parent's id word, child's id word, thread pointer); a pidfd goes where
-/// the parent's id would.
+/// parent's id word, child's id word, thread pointer; ARM64's, Linux's
+/// `CLONE_BACKWARDS`: the thread pointer before the child's id word); a
+/// pidfd goes where the parent's id would.
 fn clone(t: &mut Task, a: [u64; 6]) -> Result<usize, isize> {
     #[cfg(target_arch = "x86_64")]
     let (flags, stack, ptid, ctid, tls) = (a[0], a[1], a[2], a[3], a[4]);

@@ -156,15 +156,10 @@ pub fn run(t: &mut Task) -> ! {
             // Registers no code can have (a frame's that `rt_sigreturn`
             // took back): as Linux, a fault.
             Err(Error::InvalidArgs) => {
-                let fault = Fault {
-                    signal: crate::linux::sig::SEGV,
-                    code: crate::linux::si::KERNEL,
-                    addr: 0,
-                    trap: 13,
-                    error: 0,
-                };
+                let fault = architecture::refused(&t.state);
                 t.fault = Some(fault);
-                posix::host::force(fault.signal, posix::host::Info { code: fault.code, ..Default::default() });
+                let info = posix::host::Info { code: fault.code, addr: Some(fault.addr), ..Default::default() };
+                posix::host::force(fault.signal, info);
             }
             Err(e) => {
                 runtime::println!("{}: its code cannot run: {e}", crate::process_name());

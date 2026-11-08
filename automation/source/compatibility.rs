@@ -9,14 +9,18 @@
 //! |---------|----------|--------|
 //! | `checks-musl` | the driver VM's toolchain for Linux on musl (`cargo automation linux`) | statically |
 //! | `checks-musl-dynamic` | the same, with musl's dynamic linker built from the same source | dynamically, its root `musl` |
-//! | `checks-glibc-static` | this machine's GCC and glibc, where it has them | statically |
+//! | `checks-glibc-static` | this machine's GCC and glibc, where they are the architecture's | statically |
 //! | `checks-glibc` | the same | dynamically, its root `glibc`: this machine's dynamic linker and C library |
 //! | `checks-rust` | Rust, for Linux on musl as Rust ships it | statically |
 //!
 //! A dynamically linked one runs with the Linux root beside it
 //! (`VEDA_LINUX_ROOT`), which holds its dynamic linker and C library where
-//! it looks for them. They are Linux's x86-64 programs: Linux
-//! compatibility runs those.
+//! it looks for them. They are Linux's programs for the architecture Veda
+//! is built for, x86-64's or AArch64's, which Linux compatibility runs:
+//! the driver VM's toolchain is that architecture's, and Rust builds for
+//! it on any machine (linked by LLVM's linker, which Rust ships, where the
+//! machine is another's). This machine's glibc is the architecture's only
+//! on a machine of it.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -25,9 +29,16 @@ use crate::architecture;
 use crate::util::{self, Recipe, Result};
 
 /// Whether the image has the Linux programs on musl, which the GUI
-/// scripts run: the driver VM's toolchain builds them, for AMD64.
+/// scripts run: the driver VM's toolchain builds them.
 pub fn built() -> bool {
-    architecture::current().name == "amd64" && musl_gcc().exists()
+    musl_gcc().exists()
+}
+
+/// Linux's name for the architecture's processor (`uname`'s machine):
+/// what musl's dynamic linker, GCC's target for glibc and Rust's for musl
+/// are named after (`x86_64`, `aarch64`).
+fn machine() -> &'static str {
+    std::str::from_utf8(architecture::current().machine.platform).expect("a processor's name")
 }
 
 /// The driver VM's C compiler, for Linux on musl.
@@ -38,17 +49,14 @@ fn musl_gcc() -> PathBuf {
 /// Files for the image: each one's path and bytes.
 type Files = Vec<(String, Vec<u8>)>;
 
-/// Where the tests are built.
+/// Where the tests are built, for the architecture.
 fn out() -> PathBuf {
-    util::target_dir().join("linux-compatibility")
+    util::target_dir().join("linux-compatibility").join(architecture::current().name)
 }
 
 /// The files of `/system/tests/linux` (relative to `/system`): the test
 /// programs and their roots, those that can be built here.
 pub fn image_files() -> Result<Files> {
-    if architecture::current().name != "amd64" {
-        return Ok(Vec::new());
-    }
     let out = out();
     util::create_dir_all(&out)?;
     let source = util::workspace_root().join("verification").join("linux");
@@ -59,9 +67,13 @@ pub fn image_files() -> Result<Files> {
     }
     match glibc(&out, &source.join("checks.c"))? {
         Some(built) => files.extend(built),
-        None => {
-            util::status("Note", "no Linux programs on glibc in the tests: this machine's GCC has no glibc to link")
-        }
+        None => util::status(
+            "Note",
+            format!(
+                "no Linux programs on glibc in the tests: this machine's GCC has no glibc for {} to link",
+                machine()
+            ),
+        ),
     }
     files.extend(rust(&out, &source.join("checks.rs"))?);
     Ok(files.into_iter().map(|(name, data)| (format!("tests/linux/{name}"), data)).collect())
@@ -112,12 +124,13 @@ fn musl(out: &Path, source: &Path) -> Result<Option<Files>> {
         util::run(Command::new("make").current_dir(&build).arg(format!("-j{jobs}")).arg("lib/libc.so"))?;
         recipe.record()?;
     }
+    let linker = format!("/lib/ld-musl-{}.so.1", machine());
     let mut cc = Command::new(&gcc);
     c_flags(&mut cc);
-    cc.arg("-L").arg(build.join("lib")).arg("-Wl,-dynamic-linker,/lib/ld-musl-x86_64.so.1").arg(source);
+    cc.arg("-L").arg(build.join("lib")).arg(format!("-Wl,-dynamic-linker,{linker}")).arg(source);
     let exe = out.join("checks-musl-dynamic");
     files.push(("checks-musl-dynamic".to_string(), compile(cc, &exe, &[source, &gcc, &library])?));
-    files.push(("musl/lib/ld-musl-x86_64.so.1".to_string(), util::read(&library)?));
+    files.push((format!("musl{linker}"), util::read(&library)?));
     Ok(Some(files))
 }
 
@@ -127,11 +140,13 @@ const GLIBC_TERMS: [&str; 2] = ["/usr/share/doc/libc6/copyright", "/usr/share/li
 
 /// The programs on glibc, by this machine's GCC, and its dynamic linker and
 /// C library for the one linked dynamically, with glibc's licence. None if
-/// this machine's GCC is not glibc's for x86-64, or cannot link statically.
+/// this machine's GCC is not glibc's for the architecture, or cannot link
+/// statically.
 fn glibc(out: &Path, source: &Path) -> Result<Option<Files>> {
-    let machine = Command::new("gcc").arg("-dumpmachine").output().ok();
-    let machine = machine.filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
-    if machine.as_deref() != Some("x86_64-linux-gnu") {
+    let triple = format!("{}-linux-gnu", machine());
+    let target = Command::new("gcc").arg("-dumpmachine").output().ok();
+    let target = target.filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    if target.as_deref() != Some(triple.as_str()) {
         return Ok(None);
     }
     // glibc's terms, which go with it.
@@ -152,7 +167,7 @@ fn glibc(out: &Path, source: &Path) -> Result<Option<Files>> {
     let exe = compile(cc, &out.join("checks-glibc"), &[source])?;
     // Its dynamic linker, where it names it, and its C library, where the
     // dynamic linker looks for it.
-    let elf = elf::Elf::parse_for(&exe, elf::amd64::MACHINE).map_err(|e| format!("checks-glibc: {e}"))?;
+    let elf = elf::Elf::parse_for(&exe, architecture::current().machine).map_err(|e| format!("checks-glibc: {e}"))?;
     let interpreter = elf.interpreter().map(|p| String::from_utf8_lossy(p).into_owned());
     let interpreter = interpreter.ok_or("checks-glibc: no dynamic linker")?;
     let libc = Command::new(&gcc).arg("-print-file-name=libc.so.6").output().map_err(|e| format!("gcc: {e}"))?;
@@ -162,16 +177,22 @@ fn glibc(out: &Path, source: &Path) -> Result<Option<Files>> {
     files.push(("checks-glibc".to_string(), exe));
     files.push((format!("glibc/{}", relative(Path::new(&interpreter))), util::read(Path::new(&interpreter))?));
     // Where Debian's and Ubuntu's dynamic linkers look first.
-    files.push(("glibc/lib/x86_64-linux-gnu/libc.so.6".to_string(), util::read(&libc)?));
+    files.push((format!("glibc/lib/{triple}/libc.so.6"), util::read(&libc)?));
     Ok(Some(files))
 }
 
 /// The program on Rust's standard library, for Linux on musl as Rust ships
-/// it (linked statically, with the C library Rust ships).
+/// it (linked statically, with the C library Rust ships): by this
+/// machine's C compiler, or for another machine's processor by LLVM's
+/// linker, which Rust ships too.
 fn rust(out: &Path, source: &Path) -> Result<Files> {
     let exe = out.join("checks-rust");
     let mut rustc = Command::new("rustc");
-    rustc.args(["--edition", "2024", "-O", "--target", "x86_64-unknown-linux-musl", "-C", "strip=symbols"]);
+    let target = format!("{}-unknown-linux-musl", machine());
+    rustc.args(["--edition", "2024", "-O", "--target", &target, "-C", "strip=symbols"]);
+    if architecture::current().machine != elf::NATIVE {
+        rustc.args(["-C", "linker=rust-lld"]);
+    }
     // No path of this machine's in what panics say.
     rustc.arg(format!("--remap-path-prefix={}=/veda", util::workspace_root().display()));
     rustc.arg(source);

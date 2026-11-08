@@ -250,6 +250,13 @@ pub fn while_accessible<R>(at: usize, len: usize, write: bool, f: impl FnOnce() 
     Some(r)
 }
 
+/// Whether one of the program's areas holds `at`, whatever it allows: a
+/// fault there is one of access (`SEGV_ACCERR`), not of a place where
+/// nothing is mapped, as Linux tells them apart by its areas.
+pub fn holds(at: u64) -> bool {
+    MAP.lock().holding(at, at.saturating_add(1)).is_some()
+}
+
 /// Every area, for `/proc/self/maps`.
 pub fn areas() -> Vec<(u64, Area)> {
     MAP.lock().areas.iter().map(|(s, a)| (*s, a.clone())).collect()

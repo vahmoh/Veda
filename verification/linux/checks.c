@@ -8,11 +8,13 @@
  * break), files (sendfile and copy_file_range among them), /proc and
  * /sys, pipes, threads and their thread-local storage, signals (handlers
  * with their context, masks, the alternate stack, faults turned into
- * signals, registers kept across a handler, SA_RESTART), robust mutexes,
- * time and the vDSO, sockets, epoll, futexes, starting programs, fork (the
- * copy's memory its own, but what is wiped for it or kept from it, pipes
- * and files shared, a copy that runs another program), and execve in
- * place.
+ * signals, registers kept across a handler, SA_RESTART; on AArch64 the
+ * frame's records, its frame record, breakpoints, misaligned accesses, a
+ * handler with no restorer of its own and a frame that is refused), robust
+ * mutexes, time and the vDSO, sockets, epoll, futexes, starting programs,
+ * fork (the copy's memory its own, but what is wiped for it or kept from
+ * it, pipes and files shared, a copy that runs another program), and
+ * execve in place. It is built for x86-64 and for AArch64.
  *
  * Each check prints "ok - NAME" or "not ok - NAME: REASON", and the last
  * line is "PASS: N failed"; the program exits with the number of failed
@@ -53,6 +55,25 @@
 #include <unistd.h>
 #include <linux/futex.h>
 
+/* What differs between the architectures the checks are built for: Linux's
+   name for the processor, the vDSO's names and their version, and an
+   instruction that is none. */
+#if defined(__aarch64__)
+#define MACHINE "aarch64"
+#define VDSO(name) "__kernel_" name
+#define VDSO_VERSION "LINUX_2.6.39"
+#define INVALID_INSTRUCTION "udf #0"
+#elif defined(__x86_64__)
+#define MACHINE "x86_64"
+#define VDSO(name) "__vdso_" name
+#define VDSO_VERSION "LINUX_2.6"
+#define INVALID_INSTRUCTION "ud2"
+#else
+#error "the checks are for x86-64 and AArch64"
+#endif
+
+extern char **environ;
+
 static int failures;
 
 static void report(const char *name, int ok, const char *fmt, ...)
@@ -82,8 +103,15 @@ static void check_startup(int argc, char **argv)
 	CHECK("program path", exe && exe[0], "AT_EXECFN %s", exe ? exe : "(none)");
 	struct utsname u;
 	int r = uname(&u);
-	CHECK("uname", r == 0 && !strcmp(u.sysname, "Linux") && !strcmp(u.machine, "x86_64"), "%s %s", u.sysname,
+	CHECK("uname", r == 0 && !strcmp(u.sysname, "Linux") && !strcmp(u.machine, MACHINE), "%s %s", u.sysname,
 	      u.machine);
+#if defined(__aarch64__)
+	/* Floating point and SIMD, which every AArch64 processor of Linux's
+	   has, as the processor's ID registers say. */
+	unsigned long hwcap = getauxval(AT_HWCAP);
+	CHECK("hardware capabilities", (hwcap & (HWCAP_FP | HWCAP_ASIMD)) == (HWCAP_FP | HWCAP_ASIMD), "AT_HWCAP %#lx",
+	      hwcap);
+#endif
 	CHECK("ids", getuid() == 1000 && geteuid() == 1000 && getgid() == 1000, "uid %d", getuid());
 	CHECK("main thread", getpid() == (pid_t)syscall(SYS_gettid), "pid %d tid %ld", getpid(), syscall(SYS_gettid));
 }
@@ -466,12 +494,13 @@ static void on_usr1(int s, siginfo_t *info, void *context)
 
 static sigjmp_buf fault_jump;
 static void *fault_addr;
-static volatile sig_atomic_t fault_signal;
+static volatile sig_atomic_t fault_signal, fault_code;
 
 static void on_fault(int s, siginfo_t *info, void *context)
 {
 	(void)context;
 	fault_signal = s;
+	fault_code = info->si_code;
 	fault_addr = info->si_addr;
 	siglongjmp(fault_jump, 1);
 }
@@ -532,7 +561,7 @@ static void check_signals(void)
 	      fault_addr);
 	fault_signal = 0;
 	if (!sigsetjmp(fault_jump, 1))
-		__asm__ volatile("ud2");
+		__asm__ volatile(INVALID_INSTRUCTION);
 	CHECK("SIGILL", fault_signal == SIGILL, "signal %d", fault_signal);
 
 	/* A timer's signal interrupts a wait (no SA_RESTART: EINTR), and the
@@ -600,6 +629,191 @@ static void check_restart(void)
 	close(restart_pipe[0]);
 	close(restart_pipe[1]);
 }
+
+#if defined(__aarch64__)
+/* The records of a context's __reserved (Linux's struct _aarch64_ctx), and
+   the two the checks look for: the vector registers, and a fault's
+   syndrome. */
+struct record {
+	uint32_t magic, size;
+};
+#define FPSIMD_MAGIC 0x46508001
+#define ESR_MAGIC 0x45535201
+
+/* The record of `magic` in the context `uc`, or 0. */
+static const struct record *find_record(const ucontext_t *uc, uint32_t magic)
+{
+	const unsigned char *at = (const void *)uc->uc_mcontext.__reserved;
+	const unsigned char *end = at + sizeof uc->uc_mcontext.__reserved;
+	while (at + sizeof(struct record) <= end) {
+		const struct record *r = (const void *)at;
+		if (r->magic == magic)
+			return r;
+		if (!r->magic || r->size < sizeof *r)
+			return 0;
+		at += r->size;
+	}
+	return 0;
+}
+
+/* What a handler saw of a fault's frame: its signal, the context's fault
+   address, pc and frame pointer and link register, the frame record the
+   handler's frame pointer pointed at as it started, its records. */
+static struct {
+	int signal, code, vector;
+	void *addr;
+	unsigned long fault_address, pc, fp, lr, record[2], esr;
+} seen;
+static sigjmp_buf frame_jump;
+
+static void on_fault_frame(int s, siginfo_t *info, void *context)
+{
+	const ucontext_t *uc = context;
+	/* The frame record of this handler, which a function that calls
+	   another has: what its frame pointer was as it started. */
+	const unsigned long *record = *(unsigned long **)__builtin_frame_address(0);
+	seen.signal = s;
+	seen.code = info->si_code;
+	seen.addr = info->si_addr;
+	seen.fault_address = uc->uc_mcontext.fault_address;
+	seen.pc = uc->uc_mcontext.pc;
+	seen.fp = uc->uc_mcontext.regs[29];
+	seen.lr = uc->uc_mcontext.regs[30];
+	seen.record[0] = record[0];
+	seen.record[1] = record[1];
+	const struct record *vector = find_record(uc, FPSIMD_MAGIC), *esr = find_record(uc, ESR_MAGIC);
+	seen.vector = vector == (const void *)uc->uc_mcontext.__reserved && vector->size == 528;
+	seen.esr = esr && esr->size == 16 ? ((const uint64_t *)esr)[1] : 0;
+	siglongjmp(frame_jump, 1);
+}
+
+static volatile sig_atomic_t trap_signal, trap_code;
+static void *trap_addr;
+static unsigned long trap_pc;
+
+/* A breakpoint's handler, which goes on past it, as a debugger does, with
+   x0 changed. */
+static void on_trap(int s, siginfo_t *info, void *context)
+{
+	ucontext_t *uc = context;
+	trap_signal = s;
+	trap_code = info->si_code;
+	trap_addr = info->si_addr;
+	trap_pc = uc->uc_mcontext.pc;
+	uc->uc_mcontext.regs[0] = 42;
+	uc->uc_mcontext.pc += 4;
+}
+
+/* Linux's struct sigaction on AArch64, as its system call takes it. */
+struct kernel_sigaction {
+	void (*handler)(int, siginfo_t *, void *);
+	unsigned long flags;
+	void (*restorer)(void);
+	uint64_t mask;
+};
+
+static volatile sig_atomic_t returned_by_vdso;
+
+static void on_usr2_vdso(int s, siginfo_t *info, void *context)
+{
+	(void)info;
+	(void)context;
+	returned_by_vdso = s;
+}
+
+/* AArch64's signal frame, as Linux lays it out: a fault's context (where it
+   was, its syndrome, the vector registers), the frame record the handler's
+   frame pointer points at, which unwinders follow; a breakpoint's SIGTRAP,
+   whose handler sends the code on with a register changed; a misaligned
+   exclusive access's SIGBUS; a handler the C library gave no restorer,
+   which returns through the vDSO's (`__kernel_rt_sigreturn`); and a frame
+   whose registers user code cannot have, which `rt_sigreturn` refuses. */
+static void check_signal_frame(const char *self)
+{
+	struct sigaction sa = {0}, old;
+	sa.sa_sigaction = on_fault_frame;
+	sa.sa_flags = SA_SIGINFO | SA_NODEFER;
+	sigaction(SIGSEGV, &sa, &old);
+	static unsigned long store_at;
+	if (!sigsetjmp(frame_jump, 1))
+		__asm__ volatile("adr x9, 1f\n\tstr x9, %0\n\tmov x9, #0x7000\n1:\tstr wzr, [x9]"
+				 : "=m"(store_at)
+				 :
+				 : "x9", "memory");
+	sigaction(SIGSEGV, &old, 0);
+	CHECK("fault's context", seen.signal == SIGSEGV && seen.code == SEGV_MAPERR && seen.addr == (void *)0x7000 &&
+	      seen.fault_address == 0x7000 && seen.pc == store_at,
+	      "signal %d code %d at %p, fault address %#lx, pc %#lx (the store at %#lx)", seen.signal, seen.code,
+	      seen.addr, seen.fault_address, seen.pc, store_at);
+	/* A data abort of user code, a write, a translation fault. */
+	unsigned long esr = seen.esr;
+	CHECK("fault's syndrome", (esr >> 26 & 0x3f) == 0x24 && esr & 1 << 6 && (esr & 0x3c) == 0x04, "%#lx", esr);
+	CHECK("vector registers' record", seen.vector, "not the first record, of 528 bytes");
+	CHECK("frame record", seen.record[0] == seen.fp && seen.record[1] == seen.lr, "%#lx %#lx, not %#lx %#lx",
+	      seen.record[0], seen.record[1], seen.fp, seen.lr);
+
+	sa.sa_sigaction = on_trap;
+	sa.sa_flags = SA_SIGINFO;
+	sigaction(SIGTRAP, &sa, &old);
+	static unsigned long brk_at;
+	unsigned long changed;
+	__asm__ volatile("adr x9, 1f\n\tstr x9, %1\n\tmov x0, #0\n1:\tbrk #0x3e8\n\tmov %0, x0"
+			 : "=r"(changed), "=m"(brk_at)
+			 :
+			 : "x0", "x9", "memory");
+	sigaction(SIGTRAP, &old, 0);
+	CHECK("SIGTRAP of brk", trap_signal == SIGTRAP && trap_code == TRAP_BRKPT && trap_addr == (void *)brk_at &&
+	      trap_pc == brk_at && changed == 42,
+	      "signal %d code %d at %p, pc %#lx (brk at %#lx), x0 %lu", trap_signal, trap_code, trap_addr, trap_pc, brk_at,
+	      changed);
+
+	/* An exclusive access must be aligned (one across 16 bytes, even with
+	   FEAT_LSE2). Not every processor checks: QEMU's may not. */
+	sa.sa_sigaction = on_fault;
+	sa.sa_flags = SA_SIGINFO | SA_NODEFER;
+	sigaction(SIGBUS, &sa, &old);
+	static _Alignas(16) uint64_t words[4];
+	char *misaligned = (char *)words + 12;
+	fault_signal = 0;
+	if (!sigsetjmp(fault_jump, 1)) {
+		uint64_t v;
+		__asm__ volatile("ldxr %0, [%1]\n\tclrex" : "=r"(v) : "r"(misaligned) : "memory");
+	}
+	sigaction(SIGBUS, &old, 0);
+	if (!fault_signal)
+		printf("# a misaligned exclusive access did not fault: this processor does not check them\n");
+	CHECK("SIGBUS of a misaligned access",
+	      !fault_signal || (fault_signal == SIGBUS && fault_code == BUS_ADRALN && fault_addr == misaligned),
+	      "signal %d code %d at %p", fault_signal, fault_code, fault_addr);
+
+	/* No SA_RESTORER: the handler returns to the vDSO's restorer. */
+	struct kernel_sigaction k = {on_usr2_vdso, SA_SIGINFO, 0, 0}, was;
+	long r = syscall(SYS_rt_sigaction, SIGUSR2, &k, &was, 8);
+	raise(SIGUSR2);
+	CHECK("a handler with no restorer of its own", r == 0 && returned_by_vdso == SIGUSR2, "returned %ld, ran %d", r,
+	      (int)returned_by_vdso);
+	syscall(SYS_rt_sigaction, SIGUSR2, &was, 0, 8);
+
+	/* A frame changed to have the processor's interrupts masked: refused,
+	   and SIGSEGV ends the process. */
+	char *args[] = {(char *)self, "bad-frame", 0};
+	pid_t pid = 0;
+	int status = -1;
+	r = posix_spawn(&pid, self, 0, 0, args, environ);
+	pid_t waited = r == 0 ? waitpid(pid, &status, 0) : -1;
+	CHECK("a frame that is refused", waited == pid && WIFSIGNALED(status) && WTERMSIG(status) == SIGSEGV,
+	      "status %#x", status);
+}
+
+/* What `checks bad-frame` has for SIGUSR1: a handler that changes its
+   frame's pstate to one no user code has. */
+static void on_usr1_bad_frame(int s, siginfo_t *info, void *context)
+{
+	(void)s;
+	(void)info;
+	((ucontext_t *)context)->uc_mcontext.pstate |= 0x80;
+}
+#endif
 
 static pthread_mutex_t robust;
 
@@ -718,7 +932,13 @@ static int vdso_tables(struct vdso *v)
 		case DT_VERDEF: v->verdef = p; break;
 		}
 	}
-	return v->strings && v->symbols && v->hash && v->gnu_hash && v->versym && v->verdef;
+	/* DT_GNU_HASH where Linux has one: on x86-64, not on AArch64 (its vDSO
+	   is linked with DT_HASH alone). */
+#if defined(__x86_64__)
+	if (!v->gnu_hash)
+		return 0;
+#endif
+	return v->strings && v->symbols && v->hash && v->versym && v->verdef;
 }
 
 /* Whether symbol `i` is function `name`, of version `version`. */
@@ -737,15 +957,16 @@ static int vdso_is(const struct vdso *v, Elf64_Word i, const char *name, const c
 	}
 }
 
-/* Function `name` of version LINUX_2.6: through DT_HASH, as musl and Go
-   look, or through DT_GNU_HASH and its Bloom filter, as glibc does. */
+/* Function `name` of the vDSO's version (LINUX_2.6 on x86-64, LINUX_2.6.39
+   on AArch64): through DT_HASH, as musl and Go look, or through DT_GNU_HASH
+   and its Bloom filter, as glibc does where there is one. */
 static void *vdso_function(const struct vdso *v, const char *name, int gnu)
 {
 	if (!gnu) {
 		Elf64_Word buckets = v->hash[0];
 		const Elf64_Word *chain = v->hash + 2 + buckets;
 		for (Elf64_Word i = v->hash[2 + elf_hash(name) % buckets]; i; i = chain[i])
-			if (vdso_is(v, i, name, "LINUX_2.6"))
+			if (vdso_is(v, i, name, VDSO_VERSION))
 				return (void *)(v->base + v->symbols[i].st_value);
 		return 0;
 	}
@@ -758,7 +979,7 @@ static void *vdso_function(const struct vdso *v, const char *name, int gnu)
 	if (!((word >> (h % 64)) & (word >> ((h >> shift) % 64)) & 1))
 		return 0;
 	for (Elf64_Word i = bucket[h % buckets]; i; i++) {
-		if ((chain[i - first] | 1) == (h | 1) && vdso_is(v, i, name, "LINUX_2.6"))
+		if ((chain[i - first] | 1) == (h | 1) && vdso_is(v, i, name, VDSO_VERSION))
 			return (void *)(v->base + v->symbols[i].st_value);
 		if (chain[i - first] & 1)
 			break;
@@ -836,27 +1057,34 @@ static void check_vdso(void)
 		CHECK("vdso tables", 0, "no symbols, hash tables or versions");
 		return;
 	}
-	const char *names[] = {"__vdso_clock_gettime", "__vdso_gettimeofday", "__vdso_time", "__vdso_clock_getres",
-			       "__vdso_getcpu"};
-	void *found[5];
+	/* Linux's functions on the architecture: x86-64's time and getcpu too,
+	   and AArch64's return from a signal handler. */
+	const char *names[] = {VDSO("clock_gettime"), VDSO("gettimeofday"), VDSO("clock_getres"),
+#if defined(__x86_64__)
+			       VDSO("time"), VDSO("getcpu")
+#else
+			       VDSO("rt_sigreturn")
+#endif
+	};
+	enum { FUNCTIONS = sizeof names / sizeof *names };
+	void *found[FUNCTIONS];
 	int all = 1;
-	for (int i = 0; i < 5; i++) {
+	for (int i = 0; i < FUNCTIONS; i++) {
 		found[i] = vdso_function(&v, names[i], 0);
-		if (!found[i] || vdso_function(&v, names[i], 1) != found[i]) {
-			CHECK("vdso functions", 0, "%s by DT_HASH %p, by DT_GNU_HASH %p", names[i], found[i],
-			      vdso_function(&v, names[i], 1));
+		void *by_gnu = v.gnu_hash ? vdso_function(&v, names[i], 1) : found[i];
+		if (!found[i] || by_gnu != found[i]) {
+			CHECK("vdso functions", 0, "%s by DT_HASH %p, by DT_GNU_HASH %p", names[i], found[i], by_gnu);
 			all = 0;
 		}
 	}
 	if (!all)
 		return;
-	CHECK("vdso functions", vdso_function(&v, "__vdso_nothing", 0) == 0 && vdso_function(&v, "__vdso_nothing", 1) == 0,
+	CHECK("vdso functions",
+	      vdso_function(&v, "__vdso_nothing", 0) == 0 && (!v.gnu_hash || vdso_function(&v, "__vdso_nothing", 1) == 0),
 	      "found what is not there");
 	clock_gettime_t clock_gettime_vdso = (clock_gettime_t)found[0];
 	gettimeofday_t gettimeofday_vdso = (gettimeofday_t)found[1];
-	time_fn_t time_vdso = (time_fn_t)found[2];
-	clock_gettime_t clock_getres_vdso = (clock_gettime_t)found[3];
-	getcpu_t getcpu_vdso = (getcpu_t)found[4];
+	clock_gettime_t clock_getres_vdso = (clock_gettime_t)found[2];
 
 	/* Each clock it reads agrees with the system call; so do the C
 	   library's, through it or not. */
@@ -883,12 +1111,16 @@ static void check_vdso(void)
 	      ua, us, ub);
 	struct timezone zone;
 	CHECK("vdso gettimeofday's zone", gettimeofday_vdso(&a, &zone) == 0 && gettimeofday_vdso(0, 0) == 0, "failed");
+#if defined(__x86_64__)
+	time_fn_t time_vdso = (time_fn_t)found[3];
+	getcpu_t getcpu_vdso = (getcpu_t)found[4];
 	time_t t = 0, ta = time_vdso(&t), ts = syscall(SYS_time, 0), tb = time_vdso(0);
 	CHECK("vdso time", ta == t && ta <= ts && ts <= tb && ta > 1700000000, "%ld %ld %ld", (long)ta, (long)ts, (long)tb);
 	unsigned cpu = ~0u, node = ~0u;
 	long processors = sysconf(_SC_NPROCESSORS_CONF);
 	CHECK("vdso getcpu", getcpu_vdso(&cpu, &node, 0) == 0 && cpu < (unsigned long)processors && node != ~0u,
 	      "cpu %u node %u of %ld", cpu, node, processors);
+#endif
 	/* What it does not read, the system call does: the CPU time, and a
 	   clock that is none (the call's error, as the kernel returns it). */
 	struct timespec spent;
@@ -948,7 +1180,7 @@ static void check_vdso_after_exec(void)
 	struct vdso v;
 	void *f = 0;
 	if (ehdr && maps_area("[vdso]", &start, &end, perms) && start == ehdr && vdso_tables(&v))
-		f = vdso_function(&v, "__vdso_clock_gettime", 0);
+		f = vdso_function(&v, VDSO("clock_gettime"), 0);
 	CHECK("execve maps the vdso again", f && clock_agrees((clock_gettime_t)f, CLOCK_REALTIME, why, sizeof why),
 	      "AT_SYSINFO_EHDR %lx, [vdso] at %lx %s", ehdr, start, why);
 }
@@ -984,8 +1216,6 @@ static void check_futex(void)
 	CHECK("futex value", r == -1 && errno == EAGAIN, "returned %ld", r);
 	CHECK("futex wake", syscall(SYS_futex, &word, FUTEX_WAKE_PRIVATE, 1, 0, 0, 0) == 0, "woke");
 }
-
-extern char **environ;
 
 static volatile sig_atomic_t chld_pid, chld_status, chld_code;
 
@@ -1371,9 +1601,23 @@ int main(int argc, char **argv)
 	}
 	if (argc >= 2 && !strcmp(argv[1], "bad-stack")) {
 		signal(SIGSEGV, on_segv_with_no_stack);
+#if defined(__aarch64__)
+		__asm__ volatile("mov x9, #16\n\tmov sp, x9\n\tldr x0, [x9, #-16]" ::: "x0", "x9", "memory");
+#else
 		__asm__ volatile("mov $16, %%rsp\n\tmovq 0, %%rax" ::: "memory");
+#endif
 		__builtin_unreachable();
 	}
+#if defined(__aarch64__)
+	if (argc >= 2 && !strcmp(argv[1], "bad-frame")) {
+		struct sigaction sa = {0};
+		sa.sa_sigaction = on_usr1_bad_frame;
+		sa.sa_flags = SA_SIGINFO;
+		sigaction(SIGUSR1, &sa, 0);
+		raise(SIGUSR1);
+		return 0;
+	}
+#endif
 	if (argc >= 2 && !strcmp(argv[1], "exec")) {
 		char pid[16];
 		snprintf(pid, sizeof pid, "%d", getpid());
@@ -1390,6 +1634,9 @@ int main(int argc, char **argv)
 	check_threads();
 	check_signals();
 	check_restart();
+#if defined(__aarch64__)
+	check_signal_frame((const char *)getauxval(AT_EXECFN));
+#endif
 	check_robust_mutex();
 	check_time();
 	check_vdso();

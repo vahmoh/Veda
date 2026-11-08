@@ -239,7 +239,8 @@ const FUNCTIONS: [(&str, &str); 5] = [
 /// caller's stack pointer just above it (`rsp`, register 7): DWARF's
 /// `DW_CFA_def_cfa rsp, 8` and `DW_CFA_offset rip, 1` (one word of the
 /// data alignment, -8, from the frame's address).
-const FRAME: Frame = Frame { return_address: 16, data_alignment: -8, instructions: &[0x0c, 7, 8, 0x80 | 16, 1] };
+const FRAME: Frame =
+    Frame { return_address: 16, data_alignment: -8, signal: false, instructions: &[0x0c, 7, 8, 0x80 | 16, 1] };
 
 /// The vDSO's code, as the image has it.
 pub fn code() -> Option<Code> {
@@ -255,12 +256,14 @@ pub fn code() -> Option<Code> {
         .enumerate()
         .map(|(i, &(name, alias))| Function {
             name,
-            alias,
+            alias: Some(alias),
             offset: table[1 + 2 * i] as usize,
             size: table[2 + 2 * i] as usize,
         })
         .collect();
-    Some(Code { text, functions, version: "LINUX_2.6", frame: FRAME })
+    // One rule for all of it; and no restorer, which every handler on
+    // x86-64 has of its own (`SA_RESTORER`).
+    Some(Code { text, functions, version: "LINUX_2.6", frames: alloc::vec![(0..text.len(), FRAME)], restorer: None })
 }
 
 #[cfg(test)]

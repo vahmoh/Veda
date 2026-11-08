@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Linux programs, as Linux's toolchains built them (`/system/tests/linux`,
-//! `automation/source/compatibility.rs`), run on Veda's Linux
-//! compatibility: the checks of `verification/linux`, on musl and glibc,
-//! linked statically and dynamically (with their own Linux root), and on
-//! Rust's standard library; and `execve` in place.
+//! Linux programs, as Linux's toolchains built them for the architecture
+//! (`/system/tests/linux`, `automation/source/compatibility.rs`), run on
+//! Veda's Linux compatibility: the checks of `verification/linux`, on musl
+//! and glibc, linked statically and dynamically (with their own Linux
+//! root), and on Rust's standard library; and `execve` in place.
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -27,10 +27,6 @@ const PROGRAMS: [(&str, Option<&str>); 5] = [
 ];
 
 pub fn test_linux_programs() -> TestResult {
-    if !cfg!(target_arch = "x86_64") {
-        runtime::println!("linux programs: none to run (Linux compatibility runs x86-64 programs only, as yet)");
-        return Ok(());
-    }
     let fs = vfs_client()?;
     let mut ran = 0;
     for (name, root) in PROGRAMS {

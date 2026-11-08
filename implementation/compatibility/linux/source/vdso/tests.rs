@@ -34,7 +34,8 @@ fn c_string(b: &[u8], at: usize) -> String {
 }
 
 /// Code for the image: bytes that are no instructions, and functions in
-/// them, their names those of x86-64's vDSO.
+/// them, their names those of x86-64's vDSO, each with its other name, one
+/// rule for all of them.
 fn code() -> Code {
     let text: &'static [u8] = std::vec![0xcc; 200].leak();
     let names = [
@@ -47,13 +48,36 @@ fn code() -> Code {
     let functions = names
         .iter()
         .enumerate()
-        .map(|(i, &(name, alias))| Function { name, alias, offset: 40 * i, size: 30 })
+        .map(|(i, &(name, alias))| Function { name, alias: Some(alias), offset: 40 * i, size: 30 })
         .collect();
+    let frame = Frame { return_address: 16, data_alignment: -8, signal: false, instructions: &[0x0c, 7, 8, 0x90, 1] };
+    Code { text, functions, version: "LINUX_2.6", frames: std::vec![(0..text.len(), frame)], restorer: None }
+}
+
+/// Code for the image as ARM64's has it: functions of one name each, the
+/// signal return last, in a part of its own whose rule is a signal
+/// frame's, after a no-op.
+fn arm64_code() -> Code {
+    let text: &'static [u8] = std::vec![0; 208].leak();
+    let names = ["__kernel_clock_gettime", "__kernel_gettimeofday", "__kernel_clock_getres", "__kernel_rt_sigreturn"];
+    let functions = names
+        .iter()
+        .enumerate()
+        .map(|(i, &name)| Function { name, alias: None, offset: if i == 3 { 196 } else { 64 * i }, size: 8 })
+        .collect();
+    let called = Frame { return_address: 30, data_alignment: -8, signal: false, instructions: &[0x0c, 31, 0] };
+    let signal = Frame {
+        return_address: 30,
+        data_alignment: 8,
+        signal: true,
+        instructions: &[0x0c, 29, 0, 0x80 | 29, 0, 0x80 | 30, 1],
+    };
     Code {
         text,
         functions,
-        version: "LINUX_2.6",
-        frame: Frame { return_address: 16, data_alignment: -8, instructions: &[0x0c, 7, 8, 0x90, 1] },
+        version: "LINUX_2.6.39",
+        frames: std::vec![(0..192, called), (192..208, signal)],
+        restorer: Some(196),
     }
 }
 
@@ -172,12 +196,16 @@ fn by_gnu_hash(image: &[u8], d: &Dynamic, name: &str) -> Option<usize> {
 
 #[test]
 fn hashes_are_the_abi_s() {
-    // As Go's runtime has them for x86-64's vDSO.
+    // As Go's runtime has them for x86-64's vDSO...
     assert_eq!(elf_hash(b"LINUX_2.6"), 0x3ae75f6);
     assert_eq!(elf_hash(b"__vdso_gettimeofday"), 0x315ca59);
     assert_eq!(gnu_hash(b"__vdso_gettimeofday"), 0xb01bca00);
     assert_eq!(elf_hash(b"__vdso_clock_gettime"), 0xd35ec75);
     assert_eq!(gnu_hash(b"__vdso_clock_gettime"), 0x6e43a318);
+    // ... and for ARM64's.
+    assert_eq!(elf_hash(b"LINUX_2.6.39"), 0x75fcb89);
+    assert_eq!(elf_hash(b"__kernel_clock_gettime"), 0xb0cd725);
+    assert_eq!(gnu_hash(b"__kernel_clock_gettime"), 0xdfa941fd);
     assert_eq!((elf_hash(b""), gnu_hash(b"")), (0, 5381));
 }
 
@@ -210,45 +238,53 @@ fn the_data_page_holds_the_scale() {
 
 #[test]
 fn functions_are_found_by_name_and_version() {
-    let code = code();
-    let image = build(&code);
-    // Veda's own reader of executables takes it.
-    elf::Elf::parse(&image).unwrap();
-    assert_eq!(u16_at(&image, 16), ET_DYN);
-    // One loadable segment, the image whole, linked at 0.
-    assert_eq!(segments(&image, elf::pt::LOAD), [(0, 0, image.len() as u64)]);
-    let d = dynamic(&image);
-    assert_eq!(d.soname, "linux-vdso.so.1");
-    // musl's count of the symbols, from `DT_HASH`.
-    let count = u32_at(&image, d.hash + 4) as usize;
-    assert_eq!(count, 1 + 2 * code.functions.len());
-    assert_eq!(symbol(&image, &d, 0), (String::new(), 0, 0, 0, 0, 0));
-    for f in &code.functions {
-        for (name, bind) in [(f.name, STB_GLOBAL), (f.alias, STB_WEAK)] {
-            let i = by_hash(&image, &d, name).unwrap_or_else(|| panic!("{name} by DT_HASH"));
-            assert_eq!(by_gnu_hash(&image, &d, name), Some(i), "{name} by DT_GNU_HASH");
-            assert!((1..count).contains(&i));
-            let value = (TEXT + f.offset) as u64;
-            assert_eq!(symbol(&image, &d, i), (String::from(name), bind, STT_FUNC, Index::Text as u16, value, 30));
-            assert_eq!(version(&image, &d, i).as_deref(), Some("LINUX_2.6"), "{name}");
+    for code in [code(), arm64_code()] {
+        let image = build(&code);
+        // Veda's own reader of executables takes it.
+        elf::Elf::parse(&image).unwrap();
+        assert_eq!(u16_at(&image, 16), ET_DYN);
+        // One loadable segment, the image whole, linked at 0.
+        assert_eq!(segments(&image, elf::pt::LOAD), [(0, 0, image.len() as u64)]);
+        let d = dynamic(&image);
+        assert_eq!(d.soname, "linux-vdso.so.1");
+        // musl's count of the symbols, from `DT_HASH`: each function by its
+        // names.
+        let count = u32_at(&image, d.hash + 4) as usize;
+        let names: usize = code.functions.iter().map(|f| 1 + usize::from(f.alias.is_some())).sum();
+        assert_eq!(count, 1 + names);
+        assert_eq!(symbol(&image, &d, 0), (String::new(), 0, 0, 0, 0, 0));
+        for f in &code.functions {
+            for (name, bind) in [(Some(f.name), STB_GLOBAL), (f.alias, STB_WEAK)] {
+                let Some(name) = name else { continue };
+                let i = by_hash(&image, &d, name).unwrap_or_else(|| panic!("{name} by DT_HASH"));
+                assert_eq!(by_gnu_hash(&image, &d, name), Some(i), "{name} by DT_GNU_HASH");
+                assert!((1..count).contains(&i));
+                let value = (TEXT + f.offset) as u64;
+                let size = f.size as u64;
+                assert_eq!(
+                    symbol(&image, &d, i),
+                    (String::from(name), bind, STT_FUNC, Index::Text as u16, value, size)
+                );
+                assert_eq!(version(&image, &d, i).as_deref(), Some(code.version), "{name}");
+            }
         }
+        // What is not there is not found, by either table.
+        for name in ["__vdso_getrandom", "__vdso_clock_gettime64", "__kernel_time", code.version, ""] {
+            assert_eq!(by_hash(&image, &d, name), None);
+            assert_eq!(by_gnu_hash(&image, &d, name), None);
+        }
+        // The versions: the object's own, which no symbol is of, then the
+        // functions', each with its hash, as Go matches them.
+        let (base, functions) = (d.verdef, d.verdef + VERDEF + VERDAUX);
+        assert_eq!(u32_at(&image, base + 16) as usize, VERDEF + VERDAUX);
+        assert_eq!((u16_at(&image, base + 2), u16_at(&image, base + 4)), (VER_FLG_BASE, 1));
+        assert_eq!(u32_at(&image, base + 8), elf_hash(b"linux-vdso.so.1"));
+        assert_eq!((u16_at(&image, functions + 2), u16_at(&image, functions + 4)), (0, 2));
+        assert_eq!(u32_at(&image, functions + 8), elf_hash(code.version.as_bytes()));
+        assert_eq!(u32_at(&image, functions + 16), 0);
+        // The code, where the symbols say.
+        assert_eq!(&image[TEXT..TEXT + code.text.len()], code.text);
     }
-    // What is not there is not found, by either table.
-    for name in ["__vdso_getrandom", "__vdso_clock_gettime64", "LINUX_2.6", ""] {
-        assert_eq!(by_hash(&image, &d, name), None);
-        assert_eq!(by_gnu_hash(&image, &d, name), None);
-    }
-    // The versions: the object's own, which no symbol is of, then the
-    // functions', each with its hash, as Go matches them.
-    let (base, functions) = (d.verdef, d.verdef + VERDEF + VERDAUX);
-    assert_eq!(u32_at(&image, base + 16) as usize, VERDEF + VERDAUX);
-    assert_eq!((u16_at(&image, base + 2), u16_at(&image, base + 4)), (VER_FLG_BASE, 1));
-    assert_eq!(u32_at(&image, base + 8), elf_hash(b"linux-vdso.so.1"));
-    assert_eq!((u16_at(&image, functions + 2), u16_at(&image, functions + 4)), (0, 2));
-    assert_eq!(u32_at(&image, functions + 8), 0x3ae75f6);
-    assert_eq!(u32_at(&image, functions + 16), 0);
-    // The code, where the symbols say.
-    assert_eq!(&image[TEXT..TEXT + code.text.len()], code.text);
 }
 
 #[test]
@@ -264,24 +300,70 @@ fn the_note_and_the_call_frame_information_are_found() {
     assert_eq!(size, 24);
     // The index of `.eh_frame`: one entry, for the code, whose frame
     // description entry covers it all and follows its common entry's rule.
-    let [(header, _, _)] = segments(&image, elf::pt::GNU_EH_FRAME)[..] else { panic!("one index") };
+    let parts = frames(&image);
+    assert_eq!(parts.len(), 1);
+    let (start, len, augmentation, rule) = &parts[0];
+    assert_eq!((*start, *len), (TEXT, code.text.len()));
+    assert_eq!(augmentation.as_slice(), b"zR");
+    assert_eq!(rule.as_slice(), &[1, 0x78, 16, 1, PCREL | SDATA4, 0x0c, 7, 8, 0x90, 1]);
+}
+
+/// What `.eh_frame_hdr` indexes, as an unwinder finds it: each frame
+/// description entry's code (its start in the image and its length, from
+/// the entry itself), and its common entry's augmentation and the rest of
+/// it (alignments, return address column, augmentation data and
+/// instructions, as far as the padding). The common entries come first
+/// each time, and the entries end with a word of none.
+fn frames(image: &[u8]) -> Vec<(usize, usize, Vec<u8>, Vec<u8>)> {
+    let [(header, _, _)] = segments(image, elf::pt::GNU_EH_FRAME)[..] else { panic!("one index") };
     let header = header as usize;
     assert_eq!(&image[header..header + 4], &[1, PCREL | SDATA4, UDATA4, DATAREL | SDATA4]);
-    let frames = (header as i64 + 4 + i32_at(&image, header + 4)) as usize;
-    assert_eq!(u32_at(&image, header + 8), 1);
-    assert_eq!(header as i64 + i32_at(&image, header + 12), TEXT as i64);
-    let fde = (header as i64 + i32_at(&image, header + 16)) as usize;
-    let cie = fde + 4 - u32_at(&image, fde + 4) as usize;
-    assert_eq!(cie, frames);
-    assert_eq!(u32_at(&image, cie + 4), 0, "a common entry");
-    assert_eq!(&image[cie + 8..cie + 12], b"\x01zR\0");
-    assert_eq!(&image[cie + 12..cie + 17], &[1, 0x78, 16, 1, PCREL | SDATA4]);
-    assert_eq!(&image[cie + 17..cie + 22], code.frame.instructions);
-    assert_eq!((u32_at(&image, cie) + 4) % 8, 0);
-    assert_eq!(fde as i64 + 8 + i32_at(&image, fde + 8), TEXT as i64);
-    assert_eq!(u32_at(&image, fde + 12) as usize, code.text.len());
-    // The entries end.
-    assert_eq!(u32_at(&image, fde + 4 + u32_at(&image, fde) as usize), 0);
+    let first = (header as i64 + 4 + i32_at(image, header + 4)) as usize;
+    let count = u32_at(image, header + 8) as usize;
+    let mut parts = Vec::new();
+    let mut last = None;
+    for n in 0..count {
+        let entry = header + 12 + 8 * n;
+        let start = (header as i64 + i32_at(image, entry)) as usize;
+        let fde = (header as i64 + i32_at(image, entry + 4)) as usize;
+        let cie = fde + 4 - u32_at(image, fde + 4) as usize;
+        assert_eq!(cie, if n == 0 { first } else { last.unwrap() }, "a common entry before each");
+        assert_eq!(u32_at(image, cie + 4), 0, "a common entry");
+        assert_eq!(image[cie + 8], 1, "version 1");
+        let augmentation: Vec<u8> = image[cie + 9..].iter().take_while(|&&b| b != 0).copied().collect();
+        let rule_at = cie + 10 + augmentation.len();
+        let cie_end = cie + 4 + u32_at(image, cie) as usize;
+        assert_eq!(cie_end, fde);
+        assert_eq!((fde - cie) % 8, 0);
+        let rule = image[rule_at..cie_end].iter().rev().skip_while(|&&b| b == 0).collect::<Vec<_>>();
+        let rule: Vec<u8> = rule.into_iter().rev().copied().collect();
+        assert_eq!(fde as i64 + 8 + i32_at(image, fde + 8), start as i64);
+        let len = u32_at(image, fde + 12) as usize;
+        parts.push((start, len, augmentation, rule));
+        // The next common entry, or the entries' end.
+        let next = fde + 4 + u32_at(image, fde) as usize;
+        last = Some(next);
+        if n + 1 == count {
+            assert_eq!(u32_at(image, next), 0);
+        }
+    }
+    // The table is in the order of the code, and leaves none of it out.
+    assert!(parts.windows(2).all(|w| w[0].0 + w[0].1 == w[1].0));
+    parts
+}
+
+#[test]
+fn a_signal_return_is_a_signal_frame() {
+    let code = arm64_code();
+    let image = build(&code);
+    let parts = frames(&image);
+    // The functions, whose caller is at the link register, then the signal
+    // return, whose caller is the interrupted code, by the frame record.
+    assert_eq!(parts.len(), 2);
+    assert_eq!((parts[0].0, parts[0].1, parts[0].2.as_slice()), (TEXT, 192, b"zR".as_slice()));
+    assert_eq!(parts[0].3, [1, 0x78, 30, 1, PCREL | SDATA4, 0x0c, 31]);
+    assert_eq!((parts[1].0, parts[1].1, parts[1].2.as_slice()), (TEXT + 192, 16, b"zRS".as_slice()));
+    assert_eq!(parts[1].3, [1, 8, 30, 1, PCREL | SDATA4, 0x0c, 29, 0, 0x9d, 0, 0x9e, 1]);
 }
 
 #[test]

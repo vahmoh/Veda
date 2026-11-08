@@ -100,6 +100,14 @@ pub mod arch_prctl {
     pub const SET_CPUID: u32 = 0x1012;
 }
 
+/// What a frame's context says of the exception a fault was: its vector
+/// (`trapno`) and error code (`err`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Exception {
+    pub trap: u64,
+    pub error: u64,
+}
+
 /// The signal a fault stands for, as Linux raises it (`arch/x86/kernel/traps.c`,
 /// `fault.c`): which, how (`si_code`) and where (`si_addr`).
 pub fn fault(s: &ForeignState) -> Fault {
@@ -121,7 +129,15 @@ pub fn fault(s: &ForeignState) -> Fault {
         // #GP, #OF, #BR and the rest.
         _ => (sig::SEGV, si::KERNEL, 0),
     };
-    Fault { signal, code, addr, trap: s.vector, error: s.error_code }
+    Fault { signal, code, addr, exception: Exception { trap: s.vector, error: s.error_code } }
+}
+
+/// The fault registers no code can have are (a frame's that `rt_sigreturn`
+/// took back, whose return the processor refuses): a general protection
+/// fault, `SIGSEGV`, as Linux's `iret` takes it.
+pub fn refused(_s: &ForeignState) -> Fault {
+    use crate::linux::{si, sig};
+    Fault { signal: sig::SEGV, code: si::KERNEL, addr: 0, exception: Exception { trap: 13, error: 0 } }
 }
 
 /// The legacy virtual system calls' page (`vsyscall`): a call into it is
@@ -252,8 +268,8 @@ pub fn push_frame(s: &mut ForeignState, frame: &Frame, stack: &AltStack) -> Opti
     }
     let segments = (frame::USER_CS as u64) | (frame::USER_DS as u64) << 48;
     put(&mut bytes, m + frame::CSGSFS, segments);
-    put(&mut bytes, m + frame::ERR, frame.fault.map_or(0, |f| f.error));
-    put(&mut bytes, m + frame::TRAPNO, frame.fault.map_or(0, |f| f.trap));
+    put(&mut bytes, m + frame::ERR, frame.fault.map_or(0, |f| f.exception.error));
+    put(&mut bytes, m + frame::TRAPNO, frame.fault.map_or(0, |f| f.exception.trap));
     put(&mut bytes, m + frame::OLDMASK, frame.restore_mask);
     put(&mut bytes, m + frame::CR2, frame.fault.map_or(0, |f| f.addr));
     put(&mut bytes, m + frame::FPSTATE, fpstate);
@@ -360,6 +376,13 @@ pub mod fpu {
                 MXCSR_MASK.store(u64::from(mask), Ordering::Relaxed);
             }
         }
+    }
+
+    /// Has the registers be as a new program starts with them: their first
+    /// state, with the control words Linux starts with.
+    pub fn reset() {
+        // SAFETY: no address: the first state, which the processor takes.
+        let _ = unsafe { restore(0, false) };
     }
 
     /// The bytes the registers take in a frame.
@@ -497,9 +520,20 @@ pub fn describe(s: &ForeignState) -> (u64, u64) {
     (s.registers.rip, s.registers.rsp)
 }
 
+/// What `/proc/cpuinfo` says of processor `cpu` of `cpus`, named `brand`,
+/// as Linux says it on x86-64: its name, where it is (one package, a core
+/// each), and its features ([`cpu_flags`]).
+pub fn cpuinfo(cpu: u32, cpus: u32, brand: &str) -> alloc::string::String {
+    alloc::format!(
+        "processor\t: {cpu}\nmodel name\t: {brand}\nphysical id\t: 0\nsiblings\t: {cpus}\ncore id\t\t: {cpu}\n\
+         cpu cores\t: {cpus}\napicid\t\t: {cpu}\nflags\t\t: {}\n\n",
+        cpu_flags()
+    )
+}
+
 /// The processor's features, as `/proc/cpuinfo`'s `flags` name them: those
 /// of CPUID leaf 1 and 7 that programs look for there.
-pub fn cpu_flags() -> alloc::string::String {
+fn cpu_flags() -> alloc::string::String {
     let (l1, l7) = (core::arch::x86_64::__cpuid(1), core::arch::x86_64::__cpuid_count(7, 0));
     let named: [(u32, u32, &str); 22] = [
         (l1.edx, 0, "fpu"),

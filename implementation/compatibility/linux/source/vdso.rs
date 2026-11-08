@@ -4,11 +4,14 @@
 //! The vDSO: the shared object Linux puts in every program, which the
 //! auxiliary vector says where it is (`AT_SYSINFO_EHDR`) and whose
 //! functions the C libraries and Go call for the time (`clock_gettime`,
-//! `gettimeofday`, `time`, `clock_getres`) and the processor (`getcpu`).
-//! Without it each is a system call, two passes through the kernel here
-//! and the POSIX layer's work; with it, the program reads the time in its
-//! own code, as Veda's programs do (`runtime::time`): the processor's
-//! clock counter, scaled as the kernel scales it.
+//! `gettimeofday`, `clock_getres`, and on x86-64 `time`) and the processor
+//! (x86-64's `getcpu`). Without it each is a system call, two passes
+//! through the kernel here and the POSIX layer's work; with it, the program
+//! reads the time in its own code, as Veda's programs do (`runtime::time`):
+//! the processor's clock counter, scaled as the kernel scales it. On ARM64
+//! it also holds where a signal handler returns to when the C library gave
+//! it no restorer of its own (`__kernel_rt_sigreturn`, [`restorer`]), as
+//! glibc and Go leave it there.
 //!
 //! **The image** is made here ([`image`]) as Linux's linker makes Linux's:
 //! an ELF shared object linked at 0, its headers and tables in its first
@@ -16,10 +19,11 @@
 //! second ([`TEXT`]). Its functions are found as glibc, musl and Go find
 //! them: by name, through its dynamic section's symbols and either hash
 //! table (`DT_HASH`, `DT_GNU_HASH`), and by version (`DT_VERSYM`,
-//! `DT_VERDEF`), each under Linux's other, weak name too. Its call frame
-//! information (`PT_GNU_EH_FRAME`) leads an unwinder (a profiler's, a
-//! debugger's) through them to their callers, and its note says which
-//! Linux it is, as `uname` does.
+//! `DT_VERDEF`), each under Linux's other, weak name too where it has one.
+//! Its call frame information (`PT_GNU_EH_FRAME`) leads an unwinder (a
+//! profiler's, a debugger's, a C++ exception's) through them to their
+//! callers, and out of a signal handler through the restorer, and its note
+//! says which Linux it is, as `uname` does.
 //!
 //! **The data page**, right below the image ([`DATA`]), holds the scale the
 //! clocks are read with ([`data`]), where the code reads it, as Linux's
@@ -42,6 +46,8 @@
 
 use alloc::vec::Vec;
 use core::mem::{offset_of, size_of};
+use core::ops::Range;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use abi::ClockInfo;
 use runtime::sync::Lazy;
@@ -85,37 +91,76 @@ pub struct Code {
     pub text: &'static [u8],
     /// The functions, where they are in it.
     pub functions: Vec<Function>,
-    /// The version of Linux's they are of (`LINUX_2.6` on x86-64).
+    /// The version of Linux's they are of (`LINUX_2.6` on x86-64,
+    /// `LINUX_2.6.39` on ARM64).
     pub version: &'static str,
-    /// Where the caller of a function is.
-    pub frame: Frame,
+    /// Where the caller is, part by part of the code: each part (where in
+    /// the code), in the order of their starts, and the rule that holds at
+    /// each of its instructions.
+    pub frames: Vec<(Range<usize>, Frame)>,
+    /// Where in the code a signal handler that has no restorer of its own
+    /// returns to, to make `rt_sigreturn`, where the architecture's Linux
+    /// gives it one there (ARM64's `__kernel_rt_sigreturn`).
+    pub restorer: Option<usize>,
 }
 
 /// One of the vDSO's functions.
 pub struct Function {
     /// Its name (`__vdso_clock_gettime`).
     pub name: &'static str,
-    /// Linux's other name for it, a weak one (`clock_gettime`).
-    pub alias: &'static str,
+    /// Linux's other name for it, a weak one (`clock_gettime`), where it
+    /// has one (on x86-64).
+    pub alias: Option<&'static str>,
     /// Where it is in the code, and its size.
     pub offset: usize,
     pub size: usize,
 }
 
-/// Where a function's caller is, at every instruction of the code, as
-/// DWARF's call frame information says it: the column of the return
-/// address, the data alignment factor (-64 to 63), and the instructions
-/// (`DW_CFA_*`) of the rule, which a common information entry starts with.
+/// Where a function's caller is, at every instruction of a part of the
+/// code, as DWARF's call frame information says it: the column of the
+/// return address, the data alignment factor (-64 to 63), whether the
+/// part is where a signal handler returns to (whose caller is the code the
+/// signal interrupted: `S` in the augmentation, which tells unwinders that
+/// its return address is no call's), and the instructions (`DW_CFA_*`) of
+/// the rule, which a common information entry starts with.
 pub struct Frame {
     pub return_address: u8,
     pub data_alignment: i8,
+    pub signal: bool,
     pub instructions: &'static [u8],
 }
 
+/// The image made once, and where in it a handler returns to
+/// ([`restorer`]): `None` where the architecture has no vDSO.
+static VDSO: Lazy<Option<(Vec<u8>, Option<usize>)>> =
+    Lazy::new(|| architecture::vdso::code().map(|code| (build(&code), code.restorer.map(|at| TEXT + at))));
+
+/// Where the program's vDSO is (its image's address), as the loader last
+/// mapped it: 0 before it has.
+static PLACED: AtomicU64 = AtomicU64::new(0);
+
 /// The image, made once: `None` where the architecture has no vDSO.
 pub fn image() -> Option<&'static [u8]> {
-    static IMAGE: Lazy<Option<Vec<u8>>> = Lazy::new(|| architecture::vdso::code().map(|code| build(&code)));
-    IMAGE.as_deref()
+    VDSO.as_ref().map(|(image, _)| image.as_slice())
+}
+
+/// Notes where the loader mapped the image, for the program it loaded:
+/// `at`.
+pub fn placed(at: u64) {
+    PLACED.store(at, Ordering::Release);
+}
+
+/// Where a signal handler that has no restorer of its own returns to:
+/// the vDSO's `rt_sigreturn`, as Linux's kernel has it return there where
+/// it gives one (`architecture::vdso`), wherever the program has its
+/// vDSO, unmapped or not (the return then faults, as on Linux). `None`
+/// where there is none: the handler has nowhere to return to.
+pub fn restorer() -> Option<u64> {
+    let at = VDSO.as_ref()?.1?;
+    match PLACED.load(Ordering::Acquire) {
+        0 => None,
+        image => Some(image + at as u64),
+    }
 }
 
 /// The data page's bytes, from its start: the clocks' scale (the kernel's
@@ -329,17 +374,15 @@ struct Symbol {
 /// as Linux's.
 pub(crate) fn build(code: &Code) -> Vec<u8> {
     use format::*;
-    // Each function by both its names, in the order of their buckets of the
+    // Each function by its names, in the order of their buckets of the
     // GNU hash table, which needs them so; the first symbol is none.
     let mut symbols: Vec<Symbol> = code
         .functions
         .iter()
         .flat_map(|f| {
             let value = TEXT + f.offset;
-            [
-                Symbol { name: f.name, bind: STB_GLOBAL, value, size: f.size },
-                Symbol { name: f.alias, bind: STB_WEAK, value, size: f.size },
-            ]
+            let alias = f.alias.map(|name| Symbol { name, bind: STB_WEAK, value, size: f.size });
+            core::iter::once(Symbol { name: f.name, bind: STB_GLOBAL, value, size: f.size }).chain(alias)
         })
         .collect();
     let buckets = symbols.len().div_ceil(4).max(1) as u32;
@@ -470,7 +513,8 @@ pub(crate) fn build(code: &Code) -> Vec<u8> {
     image.end(Index::Note);
 
     // `.eh_frame_hdr`, the index of `.eh_frame`: where it is, and a table
-    // of its frame description entries by address, one for all the code.
+    // of its frame description entries by address, one for each part of
+    // the code.
     image.start(".eh_frame_hdr", SHT_PROGBITS, 4, Index::None, 0, 0);
     let header = image.at();
     image.u8(1);
@@ -479,41 +523,45 @@ pub(crate) fn build(code: &Code) -> Vec<u8> {
     image.u8(DATAREL | SDATA4);
     let frames_at = image.at();
     image.u32(0);
-    image.u32(1);
-    image.offset(TEXT, header);
-    let entry_at = image.at();
-    image.u32(0);
+    image.u32(code.frames.len() as u32);
+    let mut entries_at = Vec::new();
+    for (part, _) in &code.frames {
+        image.offset(TEXT + part.start, header);
+        entries_at.push(image.at());
+        image.u32(0);
+    }
     image.end(Index::EhFrameHdr);
 
-    // `.eh_frame`: a common information entry, whose rule holds at every
-    // instruction, and the frame description entry of the code, which adds
-    // nothing to it; then the entries' end.
+    // `.eh_frame`: for each part, a common information entry, whose rule
+    // holds at every instruction of the part, and the part's frame
+    // description entry, which adds nothing to it; then the entries' end.
     image.start(".eh_frame", SHT_PROGBITS, 8, Index::None, 0, 0);
-    let cie = image.at();
-    image.set_offset(frames_at, cie, frames_at);
-    let frame = &code.frame;
-    debug_assert!((-64..64).contains(&frame.data_alignment), "a one-byte SLEB128");
-    image.u32(0);
-    image.u32(0);
-    image.u8(1);
-    image.bytes.extend_from_slice(b"zR\0");
-    image.u8(1);
-    image.u8(frame.data_alignment as u8 & 0x7f);
-    image.u8(frame.return_address);
-    image.u8(1);
-    image.u8(PCREL | SDATA4);
-    image.bytes.extend_from_slice(frame.instructions);
-    image.align(8);
-    image.set_offset(cie, image.at() - 4, cie);
-    let fde = image.at();
-    image.set_offset(entry_at, fde, header);
-    image.u32(0);
-    image.offset(fde + 4, cie);
-    image.offset(TEXT, image.at());
-    image.u32(code.text.len() as u32);
-    image.u8(0);
-    image.align(8);
-    image.set_offset(fde, image.at() - 4, fde);
+    image.set_offset(frames_at, image.at(), frames_at);
+    for ((part, frame), entry_at) in code.frames.iter().zip(entries_at) {
+        debug_assert!((-64..64).contains(&frame.data_alignment), "a one-byte SLEB128");
+        let cie = image.at();
+        image.u32(0);
+        image.u32(0);
+        image.u8(1);
+        image.bytes.extend_from_slice(if frame.signal { b"zRS\0" } else { b"zR\0" });
+        image.u8(1);
+        image.u8(frame.data_alignment as u8 & 0x7f);
+        image.u8(frame.return_address);
+        image.u8(1);
+        image.u8(PCREL | SDATA4);
+        image.bytes.extend_from_slice(frame.instructions);
+        image.align(8);
+        image.set_offset(cie, image.at() - 4, cie);
+        let fde = image.at();
+        image.set_offset(entry_at, fde, header);
+        image.u32(0);
+        image.offset(fde + 4, cie);
+        image.offset(TEXT + part.start, image.at());
+        image.u32(part.len() as u32);
+        image.u8(0);
+        image.align(8);
+        image.set_offset(fde, image.at() - 4, fde);
+    }
     image.u32(0);
     image.end(Index::EhFrame);
 

@@ -123,6 +123,9 @@ fn in_place(t: &mut Task, file: File, args: &[&[u8]], env: &[&[u8]]) -> Result<(
                 exe: file.path,
             });
             t.state = architecture::start(loaded.entry, loaded.sp);
+            // The old program's vector registers go too: the new one starts
+            // with their first state, as on Linux.
+            architecture::fpu::reset();
             Ok(())
         }
         Err(e) => {

@@ -78,25 +78,26 @@ impl AltStack {
 }
 
 /// A fault's signal, as the exception that raised it says: which signal,
-/// how (`si_code`), where (`si_addr`), and the exception (its vector and
-/// error code on x86-64, as the frame's context reports them).
+/// how (`si_code`), where (`si_addr`), and the exception, as the frame's
+/// context reports it (`architecture::Exception`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Fault {
     pub signal: u32,
     pub code: i32,
     pub addr: u64,
-    pub trap: u64,
-    pub error: u64,
+    pub exception: architecture::Exception,
 }
 
 /// What a signal's frame holds and enters: the handler, its restorer (the
 /// code it returns to, which makes `rt_sigreturn`), the mask the thread
-/// goes back to, what the signal says, and the fault it is, if it is one.
+/// goes back to, what the signal says (and whether the handler takes it:
+/// `SA_SIGINFO`), and the fault it is, if it is one.
 pub struct Frame {
     pub handler: u64,
     pub restorer: u64,
     pub restore_mask: u64,
     pub info: Siginfo,
+    pub siginfo: bool,
     pub fault: Option<Fault>,
     pub onstack: bool,
 }
@@ -165,20 +166,28 @@ fn enter_handler(t: &mut Task, next: &Next) {
         }
     }
     let fault = t.fault.take().filter(|f| f.signal == next.signal);
+    // A handler returns through the restorer the C library gives; without
+    // one, through the vDSO's, where the architecture's Linux has one
+    // (ARM64's `__kernel_rt_sigreturn`). x86-64's has none: there is
+    // nowhere to return to.
+    let restorer =
+        if action.flags & sig::SA_RESTORER != 0 { Some(action.restorer as u64) } else { crate::vdso::restorer() };
+    let Some(restorer) = restorer else {
+        force_sigsegv(next.signal);
+        return;
+    };
     let frame = Frame {
         handler: action.handler as u64,
-        restorer: action.restorer as u64,
+        restorer,
         restore_mask: next.restore,
         info: next.info.siginfo(next.signal),
+        siginfo: action.flags & sig::SA_SIGINFO != 0,
         fault,
         onstack: action.flags & sig::SA_ONSTACK != 0,
     };
     let sp = architecture::sp(&t.state);
     let switched = t.altstack.top_for(sp, frame.onstack).is_some();
-    // Linux's x86-64 handlers return through the restorer the C library
-    // gives: without one there is nowhere to return to.
-    let laid_out = action.flags & sig::SA_RESTORER != 0 || !cfg!(target_arch = "x86_64");
-    if !laid_out || architecture::push_frame(&mut t.state, &frame, &t.altstack).is_none() {
+    if architecture::push_frame(&mut t.state, &frame, &t.altstack).is_none() {
         force_sigsegv(next.signal);
         return;
     }

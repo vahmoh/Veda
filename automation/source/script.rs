@@ -94,7 +94,7 @@
 //! requires native-toolchain        # only with GCC in the image (the same)
 //! requires media                   # only with the media decoder (FFmpeg and dav1d, the same)
 //! requires rust-toolchain          # only with the Rust test programs (the same)
-//! requires linux-programs          # only with the Linux test programs (the driver VM's toolchain, `cargo automation linux`; AMD64)
+//! requires linux-programs          # only with the Linux test programs (the driver VM's toolchain, `cargo automation linux`)
 //! requires curl                    # only with curl (the same)
 //! requires web                     # only with the browser (`cargo automation web`); skipped otherwise
 //! requires python                  # only with Python (`cargo automation python`); skipped otherwise

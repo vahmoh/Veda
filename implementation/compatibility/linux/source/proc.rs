@@ -205,15 +205,7 @@ fn cpuinfo() -> String {
     let brand = String::from_utf8_lossy(&info.cpu_brand);
     let brand = brand.trim_end_matches('\0').trim();
     let cpus = info.cpu_count.max(1);
-    let mut text = String::new();
-    for cpu in 0..cpus {
-        text.push_str(&format!(
-            "processor\t: {cpu}\nmodel name\t: {brand}\nphysical id\t: 0\nsiblings\t: {cpus}\ncore id\t\t: {cpu}\n\
-             cpu cores\t: {cpus}\napicid\t\t: {cpu}\nflags\t\t: {}\n\n",
-            crate::architecture::cpu_flags()
-        ));
-    }
-    text
+    (0..cpus).map(|cpu| crate::architecture::cpuinfo(cpu, cpus, brand)).collect()
 }
 
 fn meminfo() -> String {

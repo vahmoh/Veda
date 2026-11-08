@@ -367,9 +367,7 @@ fn unrunnable(script: &Script, gl_gpu: impl Fn() -> bool) -> Option<String> {
         return Some("needs curl: `cargo automation toolchain`".into());
     }
     if script.boot.requires.contains(&Requirement::LinuxPrograms) && !crate::compatibility::built() {
-        return Some(
-            "needs the Linux test programs: the driver VM's toolchain (`cargo automation linux`), on AMD64".into(),
-        );
+        return Some("needs the Linux test programs: the driver VM's toolchain (`cargo automation linux`)".into());
     }
     if let Some(part) = script.boot.requires.iter().filter_map(|r| r.part()).find(|&part| !toolchain::built(part)) {
         return Some(format!("needs the {part}: `cargo automation toolchain`"));

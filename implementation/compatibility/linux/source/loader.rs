@@ -159,8 +159,9 @@ pub fn load(program: &File, linker: Option<&File>, args: &[&[u8]], env: &[&[u8]]
 /// nothing of Linux compatibility's. The data page is mapped through a
 /// handle that allows reading alone, so that nothing makes it writable
 /// (`mprotect` fails with `EACCES`, as on Linux). Returns the image's
-/// address, for the auxiliary vector (`AT_SYSINFO_EHDR`): 0 where the
-/// architecture has no vDSO.
+/// address, for the auxiliary vector (`AT_SYSINFO_EHDR`), which the
+/// handlers without a restorer return through (`vdso::restorer`): 0 where
+/// the architecture has no vDSO.
 fn map_vdso() -> Result<u64, isize> {
     let Some(image) = vdso::image() else { return Ok(0) };
     let size = image.len().next_multiple_of(PAGE as usize);
@@ -180,6 +181,7 @@ fn map_vdso() -> Result<u64, isize> {
     }
     memory::record(at as u64, vdso::DATA as u64, PROT_READ, Kind::Vvar);
     memory::record((at + vdso::DATA) as u64, size as u64, PROT_READ | PROT_EXEC, Kind::Vdso);
+    vdso::placed((at + vdso::DATA) as u64);
     Ok((at + vdso::DATA) as u64)
 }
 

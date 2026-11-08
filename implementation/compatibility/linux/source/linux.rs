@@ -90,14 +90,24 @@ pub mod si {
     use linux_raw_sys::general as g;
 
     pub const KERNEL: i32 = g::SI_KERNEL as i32;
+    pub const ILL_ILLOPC: i32 = g::ILL_ILLOPC as i32;
     pub const ILL_ILLOPN: i32 = g::ILL_ILLOPN as i32;
     pub const FPE_INTDIV: i32 = g::FPE_INTDIV as i32;
+    pub const FPE_FLTDIV: i32 = g::FPE_FLTDIV as i32;
+    pub const FPE_FLTOVF: i32 = g::FPE_FLTOVF as i32;
+    pub const FPE_FLTUND: i32 = g::FPE_FLTUND as i32;
+    pub const FPE_FLTRES: i32 = g::FPE_FLTRES as i32;
     pub const FPE_FLTINV: i32 = g::FPE_FLTINV as i32;
+    pub const FPE_FLTUNK: i32 = g::FPE_FLTUNK as i32;
     pub const SEGV_MAPERR: i32 = g::SEGV_MAPERR as i32;
     pub const SEGV_ACCERR: i32 = g::SEGV_ACCERR as i32;
     pub const SEGV_CPERR: i32 = g::SEGV_CPERR as i32;
+    pub const SEGV_MTESERR: i32 = g::SEGV_MTESERR as i32;
     pub const BUS_ADRALN: i32 = g::BUS_ADRALN as i32;
+    pub const BUS_OBJERR: i32 = g::BUS_OBJERR as i32;
+    pub const TRAP_BRKPT: i32 = g::TRAP_BRKPT as i32;
     pub const TRAP_TRACE: i32 = g::TRAP_TRACE as i32;
+    pub const TRAP_HWBKPT: i32 = g::TRAP_HWBKPT as i32;
 }
 
 /// `clone`'s flags.
