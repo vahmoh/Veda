@@ -44,6 +44,7 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("initrd", &["std"]),
     ("heap", &[]),
     ("frames", &[]),
+    ("slabs", &[]),
     ("ipc", &[]),
     ("raster", &[]),
     ("font", &[]),

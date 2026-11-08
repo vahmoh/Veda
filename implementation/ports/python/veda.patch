@@ -1249,19 +1249,7 @@
              f.write(b'x' * PAGESIZE * 3)
 --- a/Lib/test/_test_multiprocessing.py
 +++ b/Lib/test/_test_multiprocessing.py
-@@ -797,7 +797,10 @@
-             self.skipTest('test not appropriate for {}'.format(self.TYPE))
- 
-         sm = multiprocessing.get_start_method()
--        N = 5 if sm == 'spawn' else 100
-+        # On Veda a hundred children alive at once grow the kernel's heap,
-+        # which keeps what it grew to: a later test that takes much memory
-+        # (test_http_cookies) then runs short in the 2 GiB the tests have.
-+        N = 5 if sm == 'spawn' or support.is_veda else 100
- 
-         # Try to overwhelm the forkserver loop with events
-         procs = [self.Process(target=self._test_sleep, args=(0.01,))
-@@ -6144,8 +6147,12 @@
+@@ -6144,8 +6144,12 @@
                       "Only Spawn on windows so no risk of mixing")
      @only_run_in_spawn_testsuite("avoids redundant testing.")
      def test_mixed_startmethod(self):
@@ -1275,7 +1263,7 @@
              queue = multiprocessing.get_context("fork").Queue()
              process_ctx = multiprocessing.get_context(process_method)
              p = process_ctx.Process(target=close_queue, args=(queue,))
-@@ -6154,7 +6161,7 @@
+@@ -6154,7 +6158,7 @@
                  p.start()
  
          # non-fork-based locks can be used with all other start methods
@@ -1284,7 +1272,7 @@
              for process_method in multiprocessing.get_all_start_methods():
                  queue = multiprocessing.get_context(queue_method).Queue()
                  process_ctx = multiprocessing.get_context(process_method)
-@@ -6193,6 +6200,7 @@
+@@ -6193,6 +6197,7 @@
  
      @unittest.skipIf(os.name == "nt", "requires POSIX")
      @support.requires_non_root_user
@@ -1292,7 +1280,7 @@
      @support.subTests("mode", [
          os.R_OK,  # read-only directory
          os.R_OK | os.X_OK, # read-only directory
-@@ -6228,6 +6236,7 @@
+@@ -6228,6 +6233,7 @@
  
      @unittest.skipIf(os.name == "nt", "requires POSIX")
      @support.requires_non_root_user
@@ -1300,7 +1288,7 @@
      def test_default_start_method_without_usable_tempdir(self):
          # Neither importing multiprocessing nor determining the default
          # start method may fail when tempfile finds no usable temporary
-@@ -7382,6 +7391,8 @@
+@@ -7382,6 +7388,8 @@
          self.assertEqual(rc, 0)
          self.assertFalse(err, msg=err.decode('utf-8'))
  

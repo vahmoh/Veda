@@ -18,6 +18,7 @@ members = [
     "implementation/libraries/image",
     "implementation/libraries/heap",
     "implementation/libraries/frames",
+    "implementation/libraries/slabs",
     "implementation/libraries/build",
     "implementation/libraries/runtime",
     "implementation/libraries/ipc",
@@ -136,6 +137,7 @@ font = { path = "implementation/libraries/font" }
 image = { path = "implementation/libraries/image" }
 heap = { path = "implementation/libraries/heap" }
 frames = { path = "implementation/libraries/frames" }
+slabs = { path = "implementation/libraries/slabs" }
 build = { path = "implementation/libraries/build" }
 runtime = { path = "implementation/libraries/runtime" }
 ipc = { path = "implementation/libraries/ipc" }

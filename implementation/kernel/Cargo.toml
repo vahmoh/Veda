@@ -21,6 +21,7 @@ elf = { workspace = true }
 initrd = { workspace = true }
 entropy = { workspace = true }
 frames = { workspace = true }
+slabs = { workspace = true }
 hv = { workspace = true }
 acpi = { workspace = true }
 iommu = { workspace = true }

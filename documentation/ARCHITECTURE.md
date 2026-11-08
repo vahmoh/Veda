@@ -154,7 +154,12 @@ key, and **Install Veda** does nothing yet. A disk's system has no menu.
   for it in chunks of a page: the kernel's heap takes an allocation over
   2 KiB as physically contiguous memory, which memory fragmented by use
   may not have, so no allocation of the kernel's grows with what is
-  unmapped. `vm_barrier` has every processor that runs a thread of the
+  unmapped. The heap's smaller allocations are blocks of slabs, frames
+  each carved into blocks of one size (`slabs`): a slab whose blocks are
+  all free goes back to the frame allocator, but for one of each size,
+  kept for the next, so that a burst of them (the page maps of a hundred
+  copies of a process) leaves its memory to programs once it is over.
+  `vm_barrier` has every processor that runs a thread of the
   caller's process go through a full memory barrier before it returns, as
   Linux's `membarrier` does, by the shootdowns' IPI, which flushes nothing
   for it: the C library's dynamic linker orders with it what every thread

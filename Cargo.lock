@@ -1480,6 +1480,7 @@ dependencies = [
  "hv",
  "initrd",
  "iommu",
+ "slabs",
 ]
 
 [[package]]
@@ -2520,6 +2521,10 @@ checksum = "95890f873bec569a0362c235787f3aca6e1e887302ba4840839bcc6459c42da6"
 dependencies = [
  "quote",
 ]
+
+[[package]]
+name = "slabs"
+version = "0.1.0"
 
 [[package]]
 name = "smoltcp"

@@ -15,15 +15,20 @@
 //! have; it holds no frame of either, so that this process's writes there
 //! cost nothing, and what it unmaps there is free at once.
 //!
+//! What the kernel takes for copies is free again once they are gone,
+//! however many were alive at once.
+//!
 //! The copy runs in the middle of this program: it touches neither the
 //! heap nor a lock another thread of this one may have held as it was
 //! made, and talks over a channel with system calls alone.
 
 use alloc::format;
 use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 
 use abi::{Error, RawHandle, Rights, map_flags, nr, signals};
 use runtime::object::{Channel, Event, Vmo};
+use runtime::println;
 use runtime::sys::call;
 use runtime::vm;
 
@@ -424,6 +429,69 @@ pub fn test_inherit() -> TestResult {
     vm::unmap(None, shared, PAGE).map_err(s)?;
     vm::unmap(None, mixed, 2 * PAGE).map_err(s)?;
     vm::unmap(None, holed, 3 * PAGE).map_err(s)?;
+    result
+}
+
+/// How many copies [`test_burst`] has alive at once, as CPython's tests of
+/// `multiprocessing` start.
+const BURST: usize = 100;
+/// The private memory they are copies of: each copy's map of its pages
+/// takes the kernel some 1.5 MiB, so that a hundred take more than any
+/// test before.
+const BURST_LEN: usize = 128 << 20;
+
+/// A burst of copies, ended at once: what the kernel took for them (each
+/// one's map of the pages it shares, in the kernel's heap) is free again
+/// once they are gone, not the heap's for good. A quarter of it (16 MiB at
+/// least) may stay taken, by what the system's other programs take
+/// meanwhile (the driver VM's Linux may still be starting).
+pub fn test_burst() -> TestResult {
+    let rw = map_flags::READ | map_flags::WRITE;
+    let private = vm::allocate(None, BURST_LEN, 0, rw).map_err(s)?;
+    fill(private, BURST_LEN, 1);
+    let before = left();
+    let mut copies = Vec::with_capacity(BURST);
+    let made = (0..BURST).try_for_each(|_| match runtime::process::fork(&[]) {
+        Ok(Some(copy)) => {
+            copies.push(copy);
+            Ok(())
+        }
+        // The copy waits to be ended.
+        Ok(None) => loop {
+            runtime::time::sleep_until(abi::DEADLINE_INFINITE);
+        },
+        Err(e) => Err(format!("process_fork: {e}")),
+    });
+    let taken = before.saturating_sub(left());
+    for copy in &copies {
+        let _ = copy.kill();
+    }
+    let deadline = runtime::time::now_ns() + 20_000_000_000;
+    let ended = copies.iter().all(|c| c.0.wait(signals::TERMINATED, deadline).is_ok());
+    drop(copies);
+    let result = made.and_then(|()| {
+        check(ended, "the copies ended")?;
+        // Gone, a process's memory may take a moment to be free: a
+        // processor may hold its address space until it runs another.
+        let stayed = || before.saturating_sub(left());
+        let slack = (taken / 4).max(16 << 20);
+        let back = (0..200).any(|_| {
+            if stayed() <= slack {
+                return true;
+            }
+            runtime::time::sleep(runtime::time::Duration::from_millis(100));
+            false
+        });
+        let what = format!(
+            "{BURST} copies took {} MiB, of which {} MiB stayed taken once they were gone",
+            taken >> 20,
+            stayed() >> 20
+        );
+        check(back, &what)?;
+        println!("a burst of copies: {what}");
+        Ok(())
+    });
+    vm::unmap(None, private, BURST_LEN).map_err(s)?;
     result
 }
 

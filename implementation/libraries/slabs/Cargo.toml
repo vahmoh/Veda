@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "slabs"
+description = "The kernel heap's small allocations: blocks of eight sizes, carved out of pages that go back once all their blocks are free"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "source/lib.rs"
+
+[lints]
+workspace = true
