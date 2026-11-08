@@ -109,8 +109,9 @@ program's own, which it sets with `arch_prctl` on x86-64 and itself in
 `TPIDR_EL0` on ARM64, and Linux compatibility's); the vector registers
 (x87, SSE and AVX; ARM64's floating-point and SIMD registers) stay the
 program's, as Linux compatibility, built soft-float, never touches them:
-on ARM64 only the code that saves them in a signal frame and loads them
-back does, and the POSIX layer's signal entry, which keeps them. So the
+on ARM64 only the code that saves them (for a signal frame, or a new
+thread) and loads them back does, and the POSIX layer's signal entry,
+which keeps them. So the
 program's system calls reach no part of the kernel: what it asks is asked
 by Linux compatibility, of the kernel's objects and Veda's services, with
 its process's handles.
@@ -127,7 +128,7 @@ programs make is Linux compatibility's own (`crate::syscall`):
 
 | Calls | What Linux compatibility does |
 |-------|-------------------------------|
-| `clone`, `clone3` | A thread: a kernel thread that runs the program from the call, its stack and thread pointer as asked, its ids written where asked, its `CLEARTID` word cleared and woken as it ends (the kernel's exit futex) |
+| `clone`, `clone3` | A thread: a kernel thread that runs the program from the call, with the caller's vector registers (its floating-point environment, rounding mode and all, which POSIX has a new thread inherit), its stack and thread pointer as asked, its ids written where asked, its `CLEARTID` word cleared and woken as it ends (the kernel's exit futex) |
 | `vfork`, `clone` with `CLONE_VM` | A child in the program's memory, on a thread of its own, with copies of the descriptors, working directory and signal handlers (but those shared) and an id of its own (that of a process made for it), while its parent waits: its `execve` starts the program in that process, its `_exit` ends it as a process whose status the parent waits for |
 | `fork`, `clone` and `clone3` without `CLONE_VM` | A copy of the process (below), which sends `SIGCHLD` as it ends: the ids written as asked (`CLONE_PARENT_SETTID` in the parent, `CLONE_CHILD_SETTID` in the child, `CLONE_CHILD_CLEARTID` cleared as its thread ends), and a pidfd (`CLONE_PIDFD`). Sharing what two processes cannot (`CLONE_FILES`, `CLONE_FS`, `CLONE_SIGHAND`, `CLONE_SETTLS`), another signal at its end, and `CLONE_VFORK` are refused (`EINVAL`) |
 | `execve`, `execveat` | A Linux program in place: the other threads end, the memory and the handlers go, the descriptors marked close-on-exec close. A program of Veda's runs in a process of its own, which this one waits for and ends as |
@@ -335,8 +336,9 @@ the vDSO, at the cost of a few dozen instructions: no system call.
 
   The C program checks its start, its memory, files (`sendfile` and
   `copy_file_range` among them), `/proc` (`/proc/self/fd/N` among it) and
-  `/sys`, pipes, threads and
-  thread-local storage, signals (handlers and their context, masks, the
+  `/sys`, pipes, threads,
+  thread-local storage and the rounding mode a thread starts with (its
+  maker's), signals (handlers and their context, masks, the
   alternate stack, `SIGSEGV` and `SIGILL`, the vector registers kept
   across a handler, a timer ending a blocking call, a call `SA_RESTART`
   starts again, a fault whose handler has no stack; on ARM64 the frame's

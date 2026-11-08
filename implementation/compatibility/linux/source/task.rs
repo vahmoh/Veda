@@ -13,7 +13,8 @@
 //! call a signal may start again, and its robust futex list. `clone` makes
 //! one ([`clone`]), on a stack of its own for Linux compatibility's code,
 //! which goes once the thread has ended ([`reap`]); the program's own
-//! stack is the program's, as on Linux.
+//! stack is the program's, as on Linux, and the new thread starts with the
+//! vector registers of the one that made it, as there.
 //!
 //! `fork`, and `clone` without `CLONE_VM`, make a process that is a copy of
 //! this one ([`fork`]): the kernel copies its memory, the program's and
@@ -174,11 +175,13 @@ pub fn run(t: &mut Task) -> ! {
 /// this process (`CLONE_VM | CLONE_THREAD | CLONE_SIGHAND`, the files and
 /// the working directory shared too, as every thread library asks), or a
 /// child that shares its memory (`CLONE_VM` alone, `vfork`'s), each
-/// returning 0 from the call on `stack`, its thread pointer `tls` with
-/// `CLONE_SETTLS`; or, without `CLONE_VM`, a process of memory of its own
-/// ([`fork`]). Sharing the program cannot have (a thread with descriptors
-/// of its own) is refused (`EINVAL`). A pidfd asked for (`CLONE_PIDFD`)
-/// goes to `pidfd`: `clone`'s `parent_tid`, `clone3`'s own field.
+/// returning 0 from the call on `stack` with the caller's vector registers
+/// (its floating-point environment, which POSIX has a thread inherit), its
+/// thread pointer `tls` with `CLONE_SETTLS`; or, without `CLONE_VM`, a
+/// process of memory of its own ([`fork`]). Sharing the program cannot
+/// have (a thread with descriptors of its own) is refused (`EINVAL`). A
+/// pidfd asked for (`CLONE_PIDFD`) goes to `pidfd`: `clone`'s
+/// `parent_tid`, `clone3`'s own field.
 #[allow(clippy::too_many_arguments)] // the call's own
 pub fn clone(
     t: &mut Task,
@@ -315,9 +318,9 @@ fn forked(t: &mut Task) {
 }
 
 /// Starts thread `child` of [`clone`] (a child `vfork` made, if `apart`):
-/// its stack, its kernel thread, the ids the program asked for. Returns its
-/// id (a thread's, or the child's process id), and what to wait on for a
-/// `CLONE_VFORK` child.
+/// its stack, its kernel thread, the ids the program asked for, the
+/// calling thread's vector registers. Returns its id (a thread's, or the
+/// child's process id), and what to wait on for a `CLONE_VFORK` child.
 fn start(
     child: &mut Box<Task>,
     apart: Option<Apart>,
@@ -382,7 +385,8 @@ fn start(
     }
     let clear = if flags & CHILD_CLEARTID != 0 { child_tid } else { 0 };
     let child = Box::leak(core::mem::replace(child, Task::new(ForeignState::default())));
-    let start = Box::leak(Box::new(Start { task: child, thread: Some(handle), clear_tid: clear }));
+    let vector = architecture::fpu::saved();
+    let start = Box::leak(Box::new(Start { task: child, thread: Some(handle), clear_tid: clear, vector }));
     let top = base + GUARD + HOST_STACK;
     LIVE.fetch_add(1, Ordering::AcqRel);
     let raw = start.thread.as_ref().map_or(0, |h| h.raw() as usize);
@@ -403,21 +407,29 @@ struct Start {
     thread: Option<Thread>,
     /// Its `CLONE_CHILD_CLEARTID` word.
     clear_tid: u64,
+    /// Its vector registers: those of the thread that made it, as it made
+    /// the call.
+    vector: architecture::fpu::Registers,
 }
 
 /// Where a thread [`clone`] makes starts, on its own stack: its thread
-/// pointer, its word cleared as it ends, the layer's knowledge of it, then
-/// the program's code.
+/// pointer, its word cleared as it ends, the layer's knowledge of it, its
+/// vector registers, then the program's code.
 extern "C" fn thread_entry(start: *mut Start) -> ! {
+    // The box goes as it is taken apart, and the registers as they are
+    // loaded: what this function holds is never dropped, as `run` does
+    // not return.
     // SAFETY: `clone` leaked it for this thread alone.
-    let start = unsafe { Box::from_raw(start) };
-    let Start { task, thread, clear_tid } = *start;
+    let Start { task, thread, clear_tid, vector } = *unsafe { Box::from_raw(start) };
     let tp = task.block.pointer();
     let _ = call(nr::THREAD_SET_TLS, [tp, 0, 0, 0, 0, 0]);
     let _ = call(nr::THREAD_SET_EXIT_FUTEX, [clear_tid as usize, 0, 0, 0, 0, 0]);
     if let Some(thread) = thread {
         posix::host::thread_ready(task.tid, thread);
     }
+    // Nothing of this program's touches them before the program's code
+    // runs.
+    architecture::fpu::load(vector);
     run(task)
 }
 

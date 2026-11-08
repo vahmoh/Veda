@@ -198,7 +198,7 @@ pub fn pop_frame(s: &mut ForeignState) -> Option<(u64, (u64, i32, u64))> {
     let back = frame::take_back(&bytes)?;
     let r = &mut s.registers;
     (r.x, r.sp, r.pc, r.pstate) = (back.registers.x, back.registers.sp, back.registers.pc, back.registers.pstate);
-    fpu::load(&back.vector);
+    fpu::load(back.vector);
     Some((back.mask, back.stack))
 }
 
@@ -287,11 +287,15 @@ linux_compatibility_fpu_load:
         fn linux_compatibility_fpu_load(from: *const Fpsimd);
     }
 
+    /// The registers, as [`saved`] keeps them.
+    pub type Registers = Fpsimd;
+
     /// Nothing to learn: every processor Veda runs on has the same
     /// registers.
     pub fn init() {}
 
-    /// The registers as they are.
+    /// The registers as they are: a signal frame's, or those a thread
+    /// `clone` starts is to have ([`load`]).
     pub fn saved() -> Fpsimd {
         let mut v = Fpsimd::default();
         // SAFETY: the registers, into memory of their layout, 16-byte
@@ -303,16 +307,16 @@ linux_compatibility_fpu_load:
     /// Has the program's registers be `v`: which any values are, of every
     /// register (a reserved bit of `FPSR` or `FPCR` set is ignored, as
     /// Linux leaves it).
-    pub fn load(v: &Fpsimd) {
+    pub fn load(v: Fpsimd) {
         // SAFETY: registers no code of this program's uses, from memory of
         // their layout.
-        unsafe { linux_compatibility_fpu_load(v) };
+        unsafe { linux_compatibility_fpu_load(&v) };
     }
 
     /// Has them be as a new program starts with them: all zero, rounding
     /// to nearest, every exception masked.
     pub fn reset() {
-        load(&Fpsimd::default());
+        load(Fpsimd::default());
     }
 }
 

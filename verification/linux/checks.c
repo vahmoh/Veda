@@ -6,7 +6,8 @@
  * Veda's Linux compatibility gives it: its start (arguments, auxiliary
  * vector, uname), its memory (the heap, mmap and friends, the program
  * break), files (sendfile and copy_file_range among them), /proc and
- * /sys, pipes, threads and their thread-local storage, signals (handlers
+ * /sys, pipes, threads, their thread-local storage and the rounding mode
+ * they start with (their maker's), signals (handlers
  * with their context, masks, the alternate stack, faults turned into
  * signals, registers kept across a handler, SA_RESTART; on AArch64 the
  * frame's records, its frame record, breakpoints, misaligned accesses, a
@@ -27,6 +28,7 @@
 #include <elf.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <fenv.h>
 #include <poll.h>
 #include <pthread.h>
 #include <sched.h>
@@ -479,6 +481,66 @@ static void check_threads(void)
 	CHECK("pthread_join", joined == made, "%d joined right", joined);
 	CHECK("mutex", counter == made * 1000, "counter %d", counter);
 	CHECK("thread-local storage", tls_value == 99, "%d", tls_value);
+}
+
+/* The rounding mode, as fegetround says it, read and set (as fesetround
+   sets it) in the processor's registers themselves: glibc has those two
+   in libm, which the root of the program it links dynamically does not
+   have. On x86-64 both control words, which must agree (-1 if not): the
+   x87's, which glibc's fegetround reads, and SSE's, which musl's reads. */
+#define ROUNDING (FE_TONEAREST | FE_DOWNWARD | FE_UPWARD | FE_TOWARDZERO)
+
+static int rounding(void)
+{
+#if defined(__aarch64__)
+	unsigned long fpcr;
+	__asm__ volatile("mrs %0, fpcr" : "=r"(fpcr));
+	return (int)(fpcr & ROUNDING);
+#else
+	unsigned short cw;
+	unsigned int mxcsr;
+	__asm__ volatile("fnstcw %0\n\tstmxcsr %1" : "=m"(cw), "=m"(mxcsr));
+	int x87 = cw & ROUNDING, sse = (int)(mxcsr >> 3) & ROUNDING;
+	return x87 == sse ? x87 : -1;
+#endif
+}
+
+static void set_rounding(int mode)
+{
+#if defined(__aarch64__)
+	unsigned long fpcr;
+	__asm__ volatile("mrs %0, fpcr" : "=r"(fpcr));
+	fpcr = (fpcr & ~(unsigned long)ROUNDING) | (unsigned long)mode;
+	__asm__ volatile("msr fpcr, %0" : : "r"(fpcr));
+#else
+	unsigned short cw;
+	unsigned int mxcsr;
+	__asm__ volatile("fnstcw %0\n\tstmxcsr %1" : "=m"(cw), "=m"(mxcsr));
+	cw = (unsigned short)((cw & ~ROUNDING) | mode);
+	mxcsr = (mxcsr & ~(unsigned int)(ROUNDING << 3)) | (unsigned int)mode << 3;
+	__asm__ volatile("fldcw %0\n\tldmxcsr %1" : : "m"(cw), "m"(mxcsr));
+#endif
+}
+
+static void *rounding_of_thread(void *arg)
+{
+	(void)arg;
+	return (void *)(intptr_t)rounding();
+}
+
+/* A thread starts with the floating-point environment of the one that made
+   it, as POSIX has it (Linux's clone copies the registers): rounding
+   upward here, as its maker's is, which is set back to the nearest after. */
+static void check_thread_rounding(void)
+{
+	set_rounding(FE_UPWARD);
+	pthread_t t;
+	void *r = (void *)(intptr_t)-1;
+	int made = pthread_create(&t, 0, rounding_of_thread, 0) == 0 && pthread_join(t, &r) == 0;
+	int mine = rounding();
+	set_rounding(FE_TONEAREST);
+	CHECK("thread's rounding mode", made && (intptr_t)r == FE_UPWARD && mine == FE_UPWARD,
+	      "the thread's %#lx, its maker's %#x, upward %#x", (long)(intptr_t)r, mine, FE_UPWARD);
 }
 
 static volatile sig_atomic_t got_signal, got_code;
@@ -1632,6 +1694,7 @@ int main(int argc, char **argv)
 	check_proc();
 	check_pipes();
 	check_threads();
+	check_thread_rounding();
 	check_signals();
 	check_restart();
 #if defined(__aarch64__)

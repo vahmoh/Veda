@@ -335,6 +335,7 @@ pub fn pop_frame(s: &mut ForeignState) -> Option<(u64, (u64, i32, u64))> {
 /// `XSAVE`. Linux compatibility touches none of these registers itself
 /// (it is built without them), so they are the program's as it left them.
 pub mod fpu {
+    use alloc::vec::Vec;
     use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
     /// `XSAVE`'s area for what the kernel enabled, or 0 before [`init`]
@@ -351,6 +352,19 @@ pub mod fpu {
     const SW_BYTES: usize = 464;
     /// Where `XSAVE`'s header is.
     const HEADER: usize = 512;
+
+    /// Memory the registers are saved in, or loaded from: 64-byte aligned,
+    /// as `XSAVE`'s area is.
+    #[repr(C, align(64))]
+    struct Block([u8; 64]);
+
+    /// The registers, kept in this program's own memory ([`saved`]).
+    pub struct Registers(Vec<Block>);
+
+    /// Blocks of `bytes` (rounded up), zeroed.
+    fn blocks(bytes: usize) -> Vec<Block> {
+        (0..bytes.div_ceil(64)).map(|_| Block([0; 64])).collect()
+    }
 
     /// Learns the processor's registers: what `XSAVE` saves (CPUID leaf
     /// 0xD, `XCR0`) and which bits of `MXCSR` it takes.
@@ -414,8 +428,25 @@ pub mod fpu {
         })
     }
 
-    /// [`save`] into `at`, the program's memory, `size` bytes (and its
-    /// end's marker) writable.
+    /// The registers as they are, as a thread `clone` starts is to have
+    /// them ([`load`]).
+    pub fn saved() -> Registers {
+        let size = size();
+        let mut area = blocks(size + 4);
+        // SAFETY: memory of our own, `size` bytes and the end's marker,
+        // 64-byte aligned.
+        unsafe { save_into(area.as_mut_ptr() as usize, size, FEATURES.load(Ordering::Relaxed)) };
+        Registers(area)
+    }
+
+    /// Has the registers be `v`, as [`saved`] kept them.
+    pub fn load(v: Registers) {
+        // SAFETY: what `XSAVE` (or `FXSAVE`) saved, which the processor
+        // takes back.
+        unsafe { load_from(v.0.as_ptr() as usize, FEATURES.load(Ordering::Relaxed)) };
+    }
+
+    /// [`save`] into `at`: `size` bytes (and its end's marker) writable.
     unsafe fn save_into(at: usize, size: usize, features: u64) {
         // SAFETY: per the caller.
         unsafe {
@@ -445,9 +476,7 @@ pub mod fpu {
     /// `at` must be 0 or an address the program gave.
     pub unsafe fn restore(at: usize, xstate: bool) -> Option<()> {
         let size = size();
-        #[repr(C, align(64))]
-        struct Block([u8; 64]);
-        let mut area: alloc::vec::Vec<Block> = (0..size.div_ceil(64)).map(|_| Block([0; 64])).collect();
+        let mut area = blocks(size);
         // SAFETY: the blocks are `size` rounded up to 64 bytes, contiguous.
         let bytes = unsafe { core::slice::from_raw_parts_mut(area.as_mut_ptr().cast::<u8>(), area.len() * 64) };
         let features = FEATURES.load(Ordering::Relaxed);
@@ -494,15 +523,27 @@ pub mod fpu {
         if features != 0 {
             // The header says what the area holds: the rest starts afresh.
             bytes[HEADER..HEADER + 8].copy_from_slice(&present.to_le_bytes());
-            // SAFETY: an area checked as the processor checks it.
-            unsafe {
-                core::arch::asm!("xrstor64 [{}]", in(reg) bytes.as_ptr(), in("eax") features as u32, in("edx") (features >> 32) as u32, options(nostack));
-            }
-        } else {
-            // SAFETY: as above.
-            unsafe { core::arch::asm!("fxrstor64 [{}]", in(reg) bytes.as_ptr(), options(nostack)) };
         }
+        // SAFETY: an area checked as the processor checks it.
+        unsafe { load_from(bytes.as_ptr() as usize, features) };
         Some(())
+    }
+
+    /// Loads the registers from `at`, in `XSAVE`'s format for `features`
+    /// (`FXSAVE`'s if 0).
+    ///
+    /// # Safety
+    /// `at` must be memory of our own, 64-byte aligned, that holds an area
+    /// the processor takes.
+    unsafe fn load_from(at: usize, features: u64) {
+        // SAFETY: per the caller.
+        unsafe {
+            if features != 0 {
+                core::arch::asm!("xrstor64 [{}]", in(reg) at, in("eax") features as u32, in("edx") (features >> 32) as u32, options(nostack));
+            } else {
+                core::arch::asm!("fxrstor64 [{}]", in(reg) at, options(nostack));
+            }
+        }
     }
 }
 
