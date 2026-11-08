@@ -13,7 +13,7 @@ and the empty input as its standard input: `python3 stdlib.py`, or
 `python3 stdlib.py host ADDRESS TCP-PORT UDP-PORT` to reach the host
 machine's servers too (see `check_host`).
 
-What Veda does not have (fork, exec...) is checked too: it must fail as
+What Veda does not have (exec, a shell...) is checked too: it must fail as
 documentation/PYTHON.md says.
 """
 
@@ -449,7 +449,7 @@ def check_subprocess():
     # os.posix_spawn directly.
     pid = os.posix_spawn(sys.executable, [sys.executable, "-c", "raise SystemExit(7)"], os.environ)
     ensure(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]) == 7, "posix_spawn's child")
-    ensure(not hasattr(os, "fork") and not hasattr(os, "execv"), "fork or exec is there")
+    ensure(not hasattr(os, "execv"), "exec is there")
     for name in ("execl", "execle", "execlp", "execlpe", "execvp", "execvpe"):
         ensure(not hasattr(os, name), f"os.{name} is there")
     # os.spawn*() start programs with posix_spawn.
@@ -464,6 +464,111 @@ def check_subprocess():
     finally:
         os.setpriority(os.PRIO_PROCESS, 0, 0)
     ensure(r.stdout == "3\n", f"the child's nice value is {r.stdout!r}")
+
+
+def forked(child):
+    """Forks: the copy runs `child()` and exits with what it returns (1 if
+    it raises, after printing why, or returns no number): it never goes on
+    with the checks. Returns the copy's process id."""
+    pid = os.fork()
+    if pid == 0:
+        code = 1
+        try:
+            code = child()
+        except BaseException:
+            traceback.print_exc()
+        finally:
+            os._exit(code if isinstance(code, int) else 1)
+    return pid
+
+
+def exit_code(pid):
+    """Waits for child `pid`: its exit code, or minus the signal that ended
+    it."""
+    waited, status = os.waitpid(pid, 0)
+    ensure(waited == pid, f"waitpid gave {waited}, not {pid}")
+    return os.waitstatus_to_exitcode(status)
+
+
+def check_fork():
+    import json
+    import random
+    import signal
+    import warnings
+
+    # The copy goes on from the call, in memory of its own, with the
+    # functions registered to run around a fork run: the parent's before
+    # it and after it, and the copy's once its interpreter is its own
+    # (PyOS_AfterFork_Child), with the forking thread alone, whose id is
+    # the copy's process id, and random numbers of its own.
+    calls = []
+    os.register_at_fork(before=lambda: calls.append("before"), after_in_parent=lambda: calls.append("parent"),
+                        after_in_child=lambda: calls.append("child"))
+    memory = ["the parent's"]
+    read_end, write_end = os.pipe()
+    stop = threading.Event()
+    waiter = threading.Thread(target=stop.wait, name="waiter")
+    waiter.start()
+
+    def child():
+        memory[0] = "the child's"
+        seen = {"calls": calls, "pid": os.getpid(), "ppid": os.getppid(), "thread": threading.get_native_id(),
+                "threads": [t.name for t in threading.enumerate()], "random": random.random()}
+        os.write(write_end, json.dumps(seen).encode())
+        return 7
+
+    try:
+        with warnings.catch_warnings(record=True) as warned:
+            warnings.simplefilter("always", DeprecationWarning)
+            pid = forked(child)
+    finally:
+        stop.set()
+        waiter.join(30)
+        os.close(write_end)
+    ours = random.random()
+    with open(read_end, "rb") as reader:
+        said = reader.read()
+    ensure(exit_code(pid) == 7, "the child's exit code")
+    seen = json.loads(said)
+    ensure(calls == ["before", "parent"], f"the parent's functions ran as {calls}")
+    ensure(seen["calls"] == ["before", "child"], f"the child's functions ran as {seen['calls']}")
+    ensure(seen["pid"] == pid and seen["ppid"] == os.getpid(), f"the child is {seen['pid']}, of {seen['ppid']}")
+    ensure(seen["thread"] == pid, f"the child's thread is {seen['thread']}")
+    ensure(seen["threads"] == ["MainThread"], f"the child has the threads {seen['threads']}")
+    ensure(memory == ["the parent's"], "the child wrote the parent's memory")
+    ensure(seen["random"] != ours, "the child's random numbers are the parent's")
+    # The parent is warned: its other thread is not in the copy.
+    ensure(any(w.category is DeprecationWarning and "multi-threaded" in str(w.message) for w in warned),
+           f"forking with a thread warned {[str(w.message) for w in warned]}")
+    # A thread that forks is the copy's main thread (warned of the other).
+    pids = []
+    t = threading.Thread(target=lambda: pids.append(
+        forked(lambda: 0 if threading.current_thread() is threading.main_thread() else 2)))
+    with warnings.catch_warnings(action="ignore", category=DeprecationWarning):
+        t.start()
+        t.join(30)
+    ensure(pids and exit_code(pids[0]) == 0, "the thread that forked is not the copy's main thread")
+    # The copy keeps the signal handlers, and ends as a signal ends it.
+    handled = []
+    previous = signal.signal(signal.SIGUSR1, lambda signum, frame: handled.append(signum))
+    try:
+        pid = forked(lambda: signal.raise_signal(signal.SIGUSR1) or (0 if handled else 2))
+    finally:
+        signal.signal(signal.SIGUSR1, previous)
+    ensure(exit_code(pid) == 0 and not handled, "the copy's handler")
+    pid = forked(lambda: os.kill(os.getpid(), signal.SIGTERM) or time.sleep(60) or 2)
+    code = exit_code(pid)
+    ensure(code == -signal.SIGTERM, f"the copy ended by SIGTERM exited with {code}")
+    # WNOHANG does not wait for a copy that has not ended.
+    go_read, go_write = os.pipe()
+    try:
+        pid = forked(lambda: 9 if os.read(go_read, 1) == b"x" else 2)
+        ensure(os.waitpid(pid, os.WNOHANG) == (0, 0), "waitpid with WNOHANG waited")
+        os.write(go_write, b"x")
+        ensure(exit_code(pid) == 9, "the copy that waited")
+    finally:
+        os.close(go_read)
+        os.close(go_write)
 
 
 def child_of_multiprocessing(connection, value):
@@ -487,26 +592,40 @@ def square(n):
 def check_multiprocessing():
     import multiprocessing
 
-    ensure(multiprocessing.get_all_start_methods() == ["spawn"], multiprocessing.get_all_start_methods)
-    ensure(multiprocessing.get_start_method() == "spawn", "the default start method")
-    ours, theirs = multiprocessing.Pipe()
-    p = multiprocessing.Process(target=child_of_multiprocessing, args=(theirs, 21))
+    # Processes spawned (the default) or forked from this one; none forked
+    # by a server process, which this one could not signal (os.kill reaches
+    # a process's own children alone).
+    methods = multiprocessing.get_all_start_methods()
+    ensure(methods == ["spawn", "fork"], f"the start methods are {methods}")
+    raises(ValueError, multiprocessing.get_context, "forkserver")
+    for method in methods:
+        context = multiprocessing.get_context(method)
+        ours, theirs = context.Pipe()
+        p = context.Process(target=child_of_multiprocessing, args=(theirs, 21))
+        p.start()
+        ensure(ours.poll(60) and ours.recv() == 42, f"{method}: the child's answer")
+        p.join(60)
+        ensure(p.exitcode == 0, f"{method}: the child exited with {p.exitcode}")
+        # A lock, an event and a queue between processes: named semaphores.
+        lock, event, results = context.Lock(), context.Event(), context.Queue()
+        lock.acquire()
+        p = context.Process(target=child_with_a_lock, args=(lock, event, results))
+        p.start()
+        ensure(results.get(timeout=60) is False, f"{method}: the child took the lock this process holds")
+        ensure(event.wait(60), f"{method}: the child's event")
+        lock.release()
+        ensure(results.get(timeout=60) is True, f"{method}: the child did not get the lock once it was free")
+        ensure(results.get(timeout=60) == "done", f"{method}: the child's last word")
+        p.join(60)
+        ensure(p.exitcode == 0, f"{method}: the child with the lock exited with {p.exitcode}")
+    # A forked child runs what this process made, which pickle cannot send.
+    context = multiprocessing.get_context("fork")
+    results = context.Queue()
+    p = context.Process(target=lambda: results.put(os.getppid()))
     p.start()
-    ensure(ours.poll(60) and ours.recv() == 42, "the child's answer")
+    ensure(results.get(timeout=60) == os.getpid(), "the forked child's parent")
     p.join(60)
-    ensure(p.exitcode == 0, f"the child exited with {p.exitcode}")
-    # A lock, an event and a queue between processes: named semaphores.
-    lock, event, results = multiprocessing.Lock(), multiprocessing.Event(), multiprocessing.Queue()
-    lock.acquire()
-    p = multiprocessing.Process(target=child_with_a_lock, args=(lock, event, results))
-    p.start()
-    ensure(results.get(timeout=60) is False, "the child took the lock this process holds")
-    ensure(event.wait(60), "the child's event")
-    lock.release()
-    ensure(results.get(timeout=60) is True, "the child did not get the lock once it was free")
-    ensure(results.get(timeout=60) == "done", "the child's last word")
-    p.join(60)
-    ensure(p.exitcode == 0, f"the child with the lock exited with {p.exitcode}")
+    ensure(p.exitcode == 0, f"the forked child exited with {p.exitcode}")
 
 
 def check_process_pools():
@@ -514,14 +633,16 @@ def check_process_pools():
     import multiprocessing
 
     expected = [n * n for n in range(10)]
-    with multiprocessing.Pool(2) as pool:
-        squares = pool.map(square, range(10))
-        ensure(pool.apply_async(square, (11,)).get(60) == 121, "an asynchronous result")
-    ensure(squares == expected, f"Pool.map gave {squares}")
-    with concurrent.futures.ProcessPoolExecutor(2) as executor:
-        squares = list(executor.map(square, range(10)))
-        ensure(executor.submit(square, 12).result(timeout=60) == 144, "a future of the executor")
-    ensure(squares == expected, f"ProcessPoolExecutor.map gave {squares}")
+    for method in multiprocessing.get_all_start_methods():
+        context = multiprocessing.get_context(method)
+        with context.Pool(2) as pool:
+            squares = pool.map(square, range(10))
+            ensure(pool.apply_async(square, (11,)).get(60) == 121, f"{method}: an asynchronous result")
+        ensure(squares == expected, f"{method}: Pool.map gave {squares}")
+        with concurrent.futures.ProcessPoolExecutor(2, mp_context=context) as executor:
+            squares = list(executor.map(square, range(10)))
+            ensure(executor.submit(square, 12).result(timeout=60) == 144, f"{method}: a future of the executor")
+        ensure(squares == expected, f"{method}: ProcessPoolExecutor.map gave {squares}")
 
 
 def child_of_shared_memory(name):
@@ -1134,6 +1255,7 @@ CHECKS = [
     ("files", check_files),
     ("threads", check_threads),
     ("subprocess", check_subprocess),
+    ("fork", check_fork),
     ("multiprocessing", check_multiprocessing),
     ("process pools", check_process_pools),
     ("shared memory", check_shared_memory),

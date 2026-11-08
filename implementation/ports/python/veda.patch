@@ -53,7 +53,7 @@
 +if test "x$ac_sys_system" = xVeda
 +then :
 +
-+  for name in fork fork1 vfork forkpty execv fexecve clock_settime \
++  for name in forkpty execv fexecve clock_settime \
 +      link linkat symlink symlinkat mkfifo mkfifoat mknod mknodat \
 +      openpty posix_openpt grantpt unlockpt ptsname ptsname_r \
 +      chroot mremap sendfile splice copy_file_range process_vm_readv \
@@ -193,8 +193,8 @@
  
 +dnl Veda's C library is musl's, which has functions Veda does not carry out:
 +dnl they would be found, and fail when called. Veda starts a program in one
-+dnl step, from its file (posix_spawn): there is no fork() to copy a process
-+dnl with, nor exec() to replace a program (_posixsubprocess spawns instead).
++dnl step, from its file (posix_spawn): fork() copies a process, but there is
++dnl no exec() to replace its program (_posixsubprocess spawns instead).
 +dnl Its files have no links, hard or symbolic (but
 +dnl for the names of shared memory objects, in /dev/shm, which sem_open
 +dnl links), and there are no named pipes or device files to make. It has no
@@ -205,7 +205,7 @@
 +dnl libutil.a that musl installs would find some again: they are not looked
 +dnl in.
 +AS_VAR_IF([ac_sys_system], [Veda], [
-+  for name in fork fork1 vfork forkpty execv fexecve clock_settime \
++  for name in forkpty execv fexecve clock_settime \
 +      link linkat symlink symlinkat mkfifo mkfifoat mknod mknodat \
 +      openpty posix_openpt grantpt unlockpt ptsname ptsname_r \
 +      chroot mremap sendfile splice copy_file_range process_vm_readv \
@@ -417,14 +417,15 @@
          # Return True if the given file is an WASM module
 --- a/Lib/multiprocessing/context.py
 +++ b/Lib/multiprocessing/context.py
-@@ -338,12 +338,17 @@
+@@ -338,12 +338,18 @@
          'spawn': SpawnContext(),
          'forkserver': ForkServerContext(),
      }
-+    # Without fork() (as on Veda), processes are spawned: none is forked,
-+    # from this one or from a server.
-+    if not hasattr(os, 'fork'):
-+        del _concrete_contexts['fork'], _concrete_contexts['forkserver']
++    # The server's processes are its children, not this one's: where a
++    # process signals its own children alone (as on Veda), their pids reach
++    # nothing, and terminate() and kill() could not end them.
++    if sys.platform == 'veda':
++        del _concrete_contexts['forkserver']
  
      def _get_platform_default_context():
          # bpo-33725: running arbitrary code after fork() is no longer reliable
@@ -474,8 +475,8 @@
 +
 +elif _exists("posix_spawn") and not _exists("spawnv"):
 +    # Where a program starts in one step, with posix_spawn() (Veda has no
-+    # fork() and no exec*()), so do spawn*()'s: one that cannot be started
-+    # fails here (OSError), not in a child that exits with 127.
++    # exec*()), so do spawn*()'s: one that cannot be started fails here
++    # (OSError), not in a child that exits with 127.
 +
 +    P_WAIT = 0
 +    P_NOWAIT = P_NOWAITO = 1
@@ -751,20 +752,21 @@
  # Use is_wasm32 as a generic check for WebAssembly platforms.
  is_wasm32 = is_emscripten or is_wasi
  
-@@ -624,6 +637,12 @@
+@@ -624,6 +637,13 @@
  def requires_fork():
      return unittest.skipUnless(has_fork_support, "requires working os.fork()")
  
 +def requires_preexec_fn():
 +    """Skip tests of subprocess's preexec_fn, which runs in the child fork()
-+    makes, before its program: without fork() (Veda starts a program in one
-+    step), subprocess refuses one."""
-+    return unittest.skipUnless(hasattr(os, "fork"), "requires os.fork() for preexec_fn")
++    makes, before exec() starts its program: without exec() (Veda starts a
++    program in one step), subprocess refuses one."""
++    return unittest.skipUnless(hasattr(os, "fork") and hasattr(os, "execv"),
++                               "requires os.fork() and os.execv() for preexec_fn")
 +
  has_subprocess_support = not (
      # WASM and Apple mobile platforms do not support subprocesses.
      is_emscripten
-@@ -3402,8 +3421,9 @@
+@@ -3402,8 +3422,9 @@
          _linked_to_musl = (0, 0, 0)
          return _linked_to_musl
  
@@ -967,18 +969,6 @@
      def test_hardlink(self):
          # 'a = 0' code produces the same bytecode for the 3 optimization
          # levels. All three .pyc files must have the same inode (hardlinks).
---- a/Lib/test/test_concurrent_futures/util.py
-+++ b/Lib/test/test_concurrent_futures/util.py
-@@ -105,6 +105,9 @@
-             self.skipTest("require unix system")
-         if support.check_sanitizer(thread=True):
-             self.skipTest("TSAN doesn't support threads after fork")
-+        # Without fork() (as on Veda), processes are spawned.
-+        if "fork" not in multiprocessing.get_all_start_methods():
-+            self.skipTest("fork start method is not available")
-         return super().get_context()
- 
-     def create_event(self):
 --- a/Lib/test/test_dbm_sqlite3.py
 +++ b/Lib/test/test_dbm_sqlite3.py
 @@ -98,6 +98,7 @@
@@ -1259,25 +1249,42 @@
              f.write(b'x' * PAGESIZE * 3)
 --- a/Lib/test/_test_multiprocessing.py
 +++ b/Lib/test/_test_multiprocessing.py
-@@ -6113,6 +6113,9 @@
-             # Whether these work or not, they remain available on macOS.
-             self.assertIn('fork', methods)
-             self.assertIn('forkserver', methods)
-+        elif not hasattr(os, 'fork'):
-+            # Without fork() (as on Veda), processes are spawned alone.
-+            self.assertEqual(methods, ['spawn'])
-         else:
-             # POSIX
-             self.assertIn('fork', methods)
-@@ -6142,6 +6145,7 @@
-     @warnings_helper.ignore_fork_in_thread_deprecation_warnings()
-     @unittest.skipIf(sys.platform == "win32",
+@@ -797,7 +797,10 @@
+             self.skipTest('test not appropriate for {}'.format(self.TYPE))
+ 
+         sm = multiprocessing.get_start_method()
+-        N = 5 if sm == 'spawn' else 100
++        # On Veda the copies of a file that children hold count among the
++        # files its opener may have open (some 250): a hundred children,
++        # each with the tests' output, would take them from every test.
++        N = 5 if sm == 'spawn' or support.is_veda else 100
+ 
+         # Try to overwhelm the forkserver loop with events
+         procs = [self.Process(target=self._test_sleep, args=(0.01,))
+@@ -6144,8 +6147,12 @@
                       "Only Spawn on windows so no risk of mixing")
-+    @support.requires_fork()
      @only_run_in_spawn_testsuite("avoids redundant testing.")
      def test_mixed_startmethod(self):
++        # Those of spawn and forkserver that there are (Veda has no
++        # forkserver).
++        methods = [m for m in ("spawn", "forkserver")
++                   if m in multiprocessing.get_all_start_methods()]
          # Fork-based locks cannot be used with spawned process
-@@ -6193,6 +6197,7 @@
+-        for process_method in ["spawn", "forkserver"]:
++        for process_method in methods:
+             queue = multiprocessing.get_context("fork").Queue()
+             process_ctx = multiprocessing.get_context(process_method)
+             p = process_ctx.Process(target=close_queue, args=(queue,))
+@@ -6154,7 +6161,7 @@
+                 p.start()
+ 
+         # non-fork-based locks can be used with all other start methods
+-        for queue_method in ["spawn", "forkserver"]:
++        for queue_method in methods:
+             for process_method in multiprocessing.get_all_start_methods():
+                 queue = multiprocessing.get_context(queue_method).Queue()
+                 process_ctx = multiprocessing.get_context(process_method)
+@@ -6193,6 +6200,7 @@
  
      @unittest.skipIf(os.name == "nt", "requires POSIX")
      @support.requires_non_root_user
@@ -1285,7 +1292,7 @@
      @support.subTests("mode", [
          os.R_OK,  # read-only directory
          os.R_OK | os.X_OK, # read-only directory
-@@ -6228,6 +6233,7 @@
+@@ -6228,6 +6236,7 @@
  
      @unittest.skipIf(os.name == "nt", "requires POSIX")
      @support.requires_non_root_user
@@ -1293,7 +1300,7 @@
      def test_default_start_method_without_usable_tempdir(self):
          # Neither importing multiprocessing nor determining the default
          # start method may fail when tempfile finds no usable temporary
-@@ -7382,6 +7388,8 @@
+@@ -7382,6 +7391,8 @@
          self.assertEqual(rc, 0)
          self.assertFalse(err, msg=err.decode('utf-8'))
  
@@ -1353,7 +1360,18 @@
          affinity2 = os.process_cpu_count()
 --- a/Lib/test/test_os/test_posix.py
 +++ b/Lib/test/test_os/test_posix.py
-@@ -1108,11 +1108,13 @@
+@@ -218,6 +218,10 @@
+     def test_waitid(self):
+         pid = os.fork()
+         if pid == 0:
++            if not hasattr(posix, 'execve'):
++                # A process runs the program it was started with (as on
++                # Veda): the child ends as the program would.
++                os._exit(0)
+             os.chdir(os.path.split(sys.executable)[0])
+             posix.execve(sys.executable, [sys.executable, '-c', 'pass'], os.environ)
+         else:
+@@ -1108,11 +1112,13 @@
              self.check_chmod(posix.chmod, f.fileno())
  
      @unittest.skipUnless(hasattr(posix, 'lchmod'), 'test needs os.lchmod()')
@@ -1367,7 +1385,7 @@
      def test_lchmod_dir(self):
          target = self.tempdir()
          self.check_chmod(posix.lchmod, target)
-@@ -1328,6 +1330,7 @@
+@@ -1328,6 +1334,7 @@
      @unittest.skipUnless(hasattr(os, 'getegid'), "test needs os.getegid()")
      @unittest.skipUnless(hasattr(os, 'popen'), "test needs os.popen()")
      @support.requires_subprocess()
@@ -1375,7 +1393,7 @@
      def test_getgroups(self):
          with os.popen('id -G 2>/dev/null') as idg:
              groups = idg.read().strip()
-@@ -1495,7 +1498,15 @@
+@@ -1495,7 +1502,15 @@
          if len(mask) > 1:
              # Empty masks are forbidden
              mask.pop()
@@ -1392,7 +1410,7 @@
          self.assertEqual(posix.sched_getaffinity(0), mask)
  
          try:
-@@ -1837,6 +1848,7 @@
+@@ -1837,6 +1852,7 @@
  
      @unittest.skipUnless(hasattr(os, 'readlink') and (os.readlink in os.supports_dir_fd),
                           "test needs dir_fd support in os.readlink()")
@@ -1400,7 +1418,7 @@
      def test_readlink_dir_fd(self):
          with self.prepare() as (dir_fd, name, fullname):
              os.symlink('symlink', fullname)
-@@ -1852,7 +1864,8 @@
+@@ -1852,7 +1868,8 @@
              posix.stat(fullname2) # should not raise exception
              posix.rename(fullname2, fullname)
  
@@ -2103,7 +2121,7 @@
  
 +#else  /* __veda__ */
 +
-+/* Veda has no fork(): a program starts in one step, from its file, with
++/* Veda has no exec(): a program starts in one step, from its file, with
 + * posix_spawn(), which says why one did not. What child_exec() does in a
 + * forked child before exec() is done by the spawn's file actions and
 + * attributes instead, in the order child_exec() does it, and a program
@@ -2300,7 +2318,7 @@
 +    if (preexec_fn != Py_None) {
 +        PyObject *exc_args = Py_BuildValue("(is)", ENOTSUP,
 +            "preexec_fn is not supported on Veda, which starts programs "
-+            "without fork()");
++            "in one step, without exec()");
 +        if (exc_args != NULL) {
 +            PyErr_SetObject(PyExc_OSError, exc_args);
 +            Py_DECREF(exc_args);

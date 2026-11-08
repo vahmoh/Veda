@@ -438,18 +438,20 @@ What the patch changes:
   `configure`, generated from it by Autoconf 2.72; `config.sub`,
   `Misc/platform_triplet.c`): `x86_64-veda` or `aarch64-veda`, its modules built into the
   interpreter, without the functions musl has that Veda does not carry
-  out (`fork`, `exec*`, links, pseudo-terminals, `if_nameindex`), its
+  out (`exec*`, links, pseudo-terminals, `if_nameindex`), its
   shared libraries linked as GNU/Linux's (`LDSHARED`, `CCSHARED`,
   `LINKFORSHARED`); programs started with `posix_spawn`
-  (`Modules/_posixsubprocess.c`, `Lib/os.py`'s `spawn*`, `multiprocessing`
-  spawning alone); the interpreter's own path from the loader
+  (`Modules/_posixsubprocess.c`, `Lib/os.py`'s `spawn*`); the
+  interpreter's own path from the loader
   (`Modules/getpath.c`), UTF-8 as the locale's encoding
   (`Include/pyport.h`), Linux's abstract socket names
   (`Modules/socketmodule.c`), the thread names' limit, the basic
   interactive interpreter in Veda's Terminal (`Lib/_pyrepl/main.py`),
   virtual environments as copies (`Lib/venv`), the asyncio shell without
   the tools that read other processes' memory, `multiprocessing`'s heap
-  in `/dev/shm` (`Lib/multiprocessing/heap.py`), libraries found by
+  in `/dev/shm` (`Lib/multiprocessing/heap.py`) and no `forkserver`, whose
+  processes their parent could not signal
+  (`Lib/multiprocessing/context.py`), libraries found by
   `ctypes` where the dynamic linker finds them (`Lib/ctypes/util.py`); and
   CPython's tests,
   which skip what Veda has not by what they need

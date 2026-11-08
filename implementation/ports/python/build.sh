@@ -272,7 +272,7 @@ PYTHON_MODULES=(
 # traceback says for the ModuleNotFoundError of its import (JSON, written
 # into the build: CPython's --with-missing-stdlib-config). The image leaves
 # out tkinter and IDLE, which stand on Tk, and pty, whose every function
-# needs a pseudo-terminal or fork().
+# needs a pseudo-terminal.
 MISSING_MODULES='{
   "_curses": "curses is not available on Veda: its Terminal cannot move the cursor yet",
   "_curses_panel": "curses is not available on Veda: its Terminal cannot move the cursor yet",
