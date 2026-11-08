@@ -546,12 +546,18 @@ impl AddressSpace {
         let Some(frame) = frame else { return Fault::OutOfMemory };
         // A copy replaces the frame the page had: no processor may read the
         // old one through what its TLB remembers once the copy is written.
-        let replaced = paging::translate(self.root, va).is_some_and(|(at, _)| page_align_down(at) != frame);
+        // Nor may one still take the page for read-only once a write made
+        // it writable with the frame it had (one no other VMO holds any
+        // more, as after a fork whose copy has written or ended): the
+        // kernel writes the pages it has validated (`ensure_range`) with no
+        // fault to resolve, and a fault in kernel mode is fatal.
+        let stale = paging::translate(self.root, va)
+            .is_some_and(|(at, was)| page_align_down(at) != frame || (flags.writable && !was.writable));
         if paging::map(self.root, va, frame, flags, true).is_err() {
             return Fault::OutOfMemory;
         }
         drop(map);
-        if replaced {
+        if stale {
             crate::architecture::tlb::shootdown_space(self.root, va, PAGE_SIZE);
         }
         Fault::Resolved

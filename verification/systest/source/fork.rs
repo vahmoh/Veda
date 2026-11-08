@@ -213,6 +213,15 @@ pub fn test_fork() -> TestResult {
         check(send(mine.raw(), 0), "the copy told to end")?;
         let ended = child.0.wait(signals::TERMINATED, runtime::time::now_ns() + 20_000_000_000).map_err(s)?;
         check(ended & signals::TERMINATED != 0 && child.info().map_err(s)?.exit_code == 0, "the copy ended well")?;
+        // A page this process has not written since the copy, whose frame
+        // no one else holds now, is read-only still, as a TLB may remember
+        // it once read: the kernel writes a system call's answer there all
+        // the same.
+        let page = private + 3 * PAGE;
+        check(peek(page) == 1, "this process's memory is its own")?;
+        let basic = abi::info_topic::HANDLE_BASIC;
+        let answered = call(nr::OBJECT_INFO, [event.raw() as usize, basic, page, 16, 0, 0]).is_ok();
+        check(answered && peek(page + PAGE) == 1, "the kernel writes where the copy's memory was shared")?;
         let back = left();
         check(
             back + PRIVATE_LEN / 2 >= before,

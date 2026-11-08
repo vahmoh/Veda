@@ -170,10 +170,14 @@ key, and **Install Veda** does nothing yet. A disk's system has no menu.
   own (private memory, and VMOs that nothing reaches but its mappings: no
   handle, no other address space, no guest, no device given its pages) is
   copied on write: each page is one frame for both until either writes
-  it, which then has a copy, the others keeping the frame. `memory::cow`
-  counts, for each frame, the VMOs beyond the first that hold it (a frame
-  of counts for each 1024 frames of memory, made as the first of them is
-  shared), and frees a frame as the last lets it go. Other memory is the
+  it, which then has a copy, the others keeping the frame (the last to
+  hold it takes it as it is). Either way no processor's TLB keeps the
+  page read-only: the kernel writes the user memory it has checked
+  without a fault to resolve, and one in kernel mode is fatal.
+  `memory::cow` counts, for each frame, the VMOs beyond the first that
+  hold it (a frame of counts for each 1024 frames of memory, made as the
+  first of them is shared), and frees a frame as the last lets it go.
+  Other memory is the
   same VMO in the copy, if the handle it was mapped with could have given
   it to the copy (`TRANSFER`), and is not there otherwise, so that a copy
   has no memory its parent could not have given it; POSIX's shared
