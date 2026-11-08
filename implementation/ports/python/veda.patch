@@ -1254,9 +1254,9 @@
  
          sm = multiprocessing.get_start_method()
 -        N = 5 if sm == 'spawn' else 100
-+        # On Veda the copies of a file that children hold count among the
-+        # files its opener may have open (some 250): a hundred children,
-+        # each with the tests' output, would take them from every test.
++        # On Veda a hundred children alive at once grow the kernel's heap,
++        # which keeps what it grew to: a later test that takes much memory
++        # (test_http_cookies) then runs short in the 2 GiB the tests have.
 +        N = 5 if sm == 'spawn' or support.is_veda else 100
  
          # Try to overwhelm the forkserver loop with events

@@ -1477,6 +1477,71 @@ static void check_fork(void)
 	CHECK("fork while another thread allocates", churns && copies == 20, "%d of 20 copies worked", copies);
 }
 
+/* The VFS counts what a program's children hold as the program's own: a
+   file a child has of its parent's is a copy of the parent's connection
+   to it, among the connections the program may have, of which copies
+   never take the last quarter. A parent's children hold more copies of
+   its files than a program had connections in all before (255), and once
+   they hold all the copies they may, fork fails (EMFILE) rather than
+   open: the parent opens a hundred files more. */
+static void check_children_holding_files(void)
+{
+	enum { FILES = 16, MOST = 100, MORE = 100 };
+	char paths[FILES][24];
+	int fds[FILES], opened = 0, release[2] = { -1, -1 };
+	for (; opened < FILES; opened++) {
+		snprintf(paths[opened], sizeof paths[opened], "held-%d-XXXXXX", opened);
+		if ((fds[opened] = mkstemp(paths[opened])) < 0)
+			break;
+	}
+	if (opened < FILES || pipe(release)) {
+		CHECK("a parent whose children hold its files opens files", 0, "%d of %d files open", opened, FILES);
+	} else {
+		fflush(stdout);
+		pid_t children[MOST];
+		int made = 0, refused = 0;
+		while (made < MOST) {
+			pid_t pid = fork();
+			if (pid == 0) {
+				/* It holds the files until the parent closes the pipe. */
+				char c;
+				close(release[1]);
+				_exit(read(release[0], &c, 1) == 0 ? 0 : 1);
+			}
+			if (pid < 0) {
+				refused = errno;
+				break;
+			}
+			children[made++] = pid;
+		}
+		if (made < MOST)
+			printf("# fork failed once %d children held %d copies of their parent's files\n", made,
+			       made * FILES);
+		int others[MORE], more = 0;
+		while (more < MORE && (others[more] = open(paths[0], O_RDONLY)) >= 0)
+			more++;
+		CHECK("a parent whose children hold its files opens files", made * FILES > 255 && more == MORE,
+		      "%d children holding %d copies, %d of %d files opened then", made, made * FILES, more, MORE);
+		CHECK("copies of files stop fork, not open", made == MOST || refused == EMFILE,
+		      "fork failed after %d children (errno %d)", made, refused);
+		for (int i = 0; i < more; i++)
+			close(others[i]);
+		close(release[1]);
+		int ended = 0;
+		for (int i = 0; i < made; i++) {
+			int status = -1;
+			ended += waitpid(children[i], &status, 0) == children[i] && WIFEXITED(status) &&
+				 WEXITSTATUS(status) == 0;
+		}
+		CHECK("children holding their parent's files end", ended == made, "%d of %d", ended, made);
+		close(release[0]);
+	}
+	for (int i = 0; i < opened; i++) {
+		close(fds[i]);
+		unlink(paths[i]);
+	}
+}
+
 /* Memory classes (<veda/memory.h>): what the system ends first when
  * memory runs out. A process moves only towards the most expendable, as
  * a child of its moves itself; a child that ended by itself was not ended
@@ -3800,6 +3865,7 @@ int main(int argc, char **argv)
 	check_signals();
 	check_processes();
 	check_fork();
+	check_children_holding_files();
 	check_asynchronous_signals();
 	check_signals_in_the_c_library();
 	check_file_locks();

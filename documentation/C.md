@@ -193,7 +193,7 @@ program the Terminal runs.
 | Limit | Value |
 |-------|-------|
 | Descriptors a started program inherits | 62 kernel objects (files, pipes, the terminal) at most, none numbered 256 or more (`EMFILE`): open what children need not have with `O_CLOEXEC` |
-| Files open at once | Some 250 per program, its quarter of what the VFS holds open (`EMFILE`); descriptors of other kinds, 1024 in all |
+| Files open at once | Some 1000 per program, its quarter of what the VFS holds open (`EMFILE`), its children's among them: the files a child opens, and a copy of each file of the program's it has (`fork` and `posix_spawn` give it them). Copies take some 750 at most: past them `fork` and `posix_spawn` fail with `EMFILE`, and the program still opens files. A program the Terminal runs counts with the Terminal, which speaks for it. Descriptors of other kinds, 1024 in all |
 | A file | 2 GiB (`ENOSPC` past it, as on a full disk), kept in memory whole: a file seeked past its end takes the space it skips |
 | Shared memory objects | 8192, and as many names, at once; each 2 GiB at most (`ENOSPC`) |
 | The main thread's stack | 8 MiB, or more if the executable asks (`-Wl,-z,stack-size=N`), up to 512 MiB; guard pages below |
@@ -217,8 +217,11 @@ program the Terminal runs.
   files share their offset and `flock` locks, pipes, the terminal and
   sockets are the same; an `eventfd`, a `timerfd` or an `epoll` instance
   is a copy of its own (the count, the timer, the interest list as they
-  were). It has the parent's signal handlers, ignored signals and mask,
-  working directory and limits, and none of its pending signals, timers
+  were). Each file it has is a copy of the parent's connection to it,
+  which counts among the program's open files: past some 750 copies,
+  `fork` fails with `EMFILE` until children end ([Limits](#limits)). It
+  has the parent's signal handlers, ignored signals and mask, working
+  directory and limits, and none of its pending signals, timers
   (`alarm`, `setitimer`, `timer_create`), record locks or children, as
   on Linux; it may signal its parent, which waits for it and hears of
   its end (`SIGCHLD`). Its descriptions' status flags (`O_NONBLOCK`,

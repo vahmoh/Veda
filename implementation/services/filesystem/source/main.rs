@@ -90,8 +90,10 @@
 //! counts as a connection of its program.
 //!
 //! **Limits.** No path is longer than `proto::fs::MAX_PATH`. A program
-//! holds a bounded number of connections, and all of them together stay
-//! within what the kernel waits on at once (`filesystem::access`).
+//! holds a bounded number of connections, its children's among them, of
+//! which the duplicates of its open files take three quarters at most, and
+//! all of them together stay few enough for the VFS to go through each
+//! time it waits (`filesystem::access`).
 //! Files grow only while memory is left for the rest of the system, and in
 //! `/home` while they fit on the home disk.
 
@@ -221,7 +223,8 @@ struct Description {
     target: Target,
     flags: u32,
     offset: u64,
-    /// The program that opened it, whose connections its connections are.
+    /// The program that opened it, which its connections count against:
+    /// the first as its own, the others as duplicates.
     owner: u64,
     /// Its file's modification time may be set through it: not when a
     /// confined connection opened it in a place it only reads.
@@ -712,9 +715,18 @@ impl Fs {
     }
 }
 
+/// A connection to an open file: the VFS's end.
+struct FileConn {
+    channel: Channel,
+    desc: Shared,
+    /// It was duplicated from another (`file::duplicate`), and counts as
+    /// such against its description's owner.
+    duplicate: bool,
+}
+
 /// File connections created while handling a request, for the service
 /// loop to wait on.
-type NewFiles = Vec<(Channel, Shared)>;
+type NewFiles = Vec<FileConn>;
 
 /// The file systems listed in the root besides the writable one's entries,
 /// in the order of their names.
@@ -931,11 +943,11 @@ impl Session<'_> {
         Ok(())
     }
 
-    /// Makes a connection for an open file description, counted against
-    /// the program that opened it.
+    /// Makes the first connection of an open file description, counted
+    /// against the program that opened it.
     fn connect_file(&mut self, desc: Shared) -> Result<Channel, FsError> {
         let (ours, theirs) = Channel::create().map_err(|_| FsError::NoSpace)?;
-        self.new_files.push((ours, desc));
+        self.new_files.push(FileConn { channel: ours, desc, duplicate: false });
         Ok(theirs)
     }
 }
@@ -1723,15 +1735,17 @@ impl file::Server for FileSession<'_> {
     }
 
     fn duplicate(&mut self) -> Result<Channel, FsError> {
+        // Counted against the program that opened the file, whoever asks:
+        // a file's connection says nothing of who holds it.
         let owner = self.desc.borrow().owner;
-        self.fs.connections.admit(owner)?;
+        self.fs.connections.admit_duplicate(owner)?;
         match Channel::create() {
             Ok((ours, theirs)) => {
-                self.new_files.push((ours, self.desc.clone()));
+                self.new_files.push(FileConn { channel: ours, desc: self.desc.clone(), duplicate: true });
                 Ok(theirs)
             }
             Err(_) => {
-                self.fs.connections.release(owner);
+                self.fs.connections.release_duplicate(owner);
                 Err(FsError::NoSpace)
             }
         }
@@ -1933,10 +1947,6 @@ fn main() -> i32 {
         view: Option<View>,
         refusals: u32,
     }
-    struct FileConn {
-        channel: Channel,
-        desc: Shared,
-    }
     const FILE_KEY: u64 = 1 << 62;
     const LOCK_WAIT_KEY: u64 = 1 << 61;
     let mut clients: BTreeMap<u64, Client> = BTreeMap::new();
@@ -1993,7 +2003,11 @@ fn main() -> i32 {
                     && let Some(conn) = files.remove(&id)
                 {
                     let desc = conn.desc.borrow();
-                    fs.connections.release(desc.owner);
+                    if conn.duplicate {
+                        fs.connections.release_duplicate(desc.owner);
+                    } else {
+                        fs.connections.release(desc.owner);
+                    }
                     // The last connection closes the open file, and its
                     // locks go.
                     if Rc::strong_count(&conn.desc) == 1 {
@@ -2060,8 +2074,8 @@ fn main() -> i32 {
                     println!("{} (process {}), confined, had {} taken back", c.who.name, c.who.koid, back.path);
                 }
             }
-            for (channel, desc) in new_files.drain(..) {
-                files.insert(next_id, FileConn { channel, desc });
+            for conn in new_files.drain(..) {
+                files.insert(next_id, conn);
                 next_id += 1;
             }
         }

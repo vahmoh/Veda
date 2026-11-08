@@ -25,8 +25,17 @@
 //!
 //! **Connections.** Every connection, a client's or an open file's, is a
 //! handle in the VFS's one wait set; [`Connections`] keeps their number
-//! where the kernel waits on all of them together, and keeps any one
-//! program from taking most of them.
+//! small enough for the VFS to go through them all each time it waits, and
+//! keeps any one program from taking most of them. A program is a client
+//! as the registry knows it: what init started, with every process that
+//! speaks for it through a copy of its registry channel, as a POSIX
+//! program's children do, forked or started. Their connections are its
+//! own, and so are the duplicates of the files it opened that they hold
+//! (`fork` and `posix_spawn` give a child one of each file it has), or
+//! that any other process holds: a file's connections count against the
+//! program that opened it, as the VFS cannot tell who holds one.
+//! Duplicates never take the last quarter of a program's connections:
+//! whatever its children hold, it opens files still.
 
 use alloc::collections::BTreeMap;
 
@@ -88,22 +97,38 @@ pub fn fixed(comps: &[&str]) -> bool {
     matches!(comps, [] | [HOME] | [HOME, USER] | [HOME, PRIVATE] | [HOME, PACKAGES] | [TMP])
 }
 
-/// Connections the VFS serves at once, of all kinds. Each is a handle in its
-/// one wait set, and the kernel waits on at most `abi::WAIT_MANY_MAX`
-/// handles together (a `ipc::WaitSet` with more polls them), so this limit
-/// follows the wait set's: a kernel wait port, which would take any number
-/// of handles, would lift it. The listener for new clients takes one.
-pub const MAX_CONNECTIONS: usize = abi::WAIT_MANY_MAX - 1;
+/// Connections the VFS serves at once, of all kinds (the listener for new
+/// clients is one more). Each is a handle in its one wait set, which keeps
+/// them registered with a port (that takes `abi::PORT_MAX_REGISTRATIONS`),
+/// but goes through them all as it waits, to see what changed since the
+/// last wait: with this many, some half a millisecond's work on a PC.
+pub const MAX_CONNECTIONS: usize = 4096;
+const _: () = assert!(MAX_CONNECTIONS < abi::PORT_MAX_REGISTRATIONS);
 
-/// Connections of one program (its client connections and the open files
-/// it opened): a quarter of all, so that no program can take them all.
+/// Connections of one program, its children's among them: its client
+/// connections, the open files it opened and their duplicates, and its
+/// requests waiting for locks. A quarter of all, so that no program can
+/// take them all.
 pub const MAX_PER_PROGRAM: usize = MAX_CONNECTIONS / 4;
+
+/// The duplicates of open files among a program's connections, at most
+/// (`file::duplicate`: one for each file a child has of its parent's,
+/// forked or started, and for each descriptor sent with `SCM_RIGHTS`): all
+/// but a quarter, which the program keeps for what it opens.
+pub const MAX_DUPLICATES_PER_PROGRAM: usize = MAX_PER_PROGRAM - MAX_PER_PROGRAM / 4;
 
 /// How many connections each program has, by process id.
 #[derive(Debug, Default)]
 pub struct Connections {
-    per_program: BTreeMap<u64, usize>,
+    per_program: BTreeMap<u64, Held>,
     total: usize,
+}
+
+/// A program's connections: all of them, and the duplicates among them.
+#[derive(Debug, Default)]
+struct Held {
+    all: usize,
+    duplicates: usize,
 }
 
 impl Connections {
@@ -112,30 +137,59 @@ impl Connections {
         Connections::default()
     }
 
-    /// Counts a new connection of program `koid`, or refuses it with
+    /// Counts a new connection of program `koid` (a client's, an open
+    /// file's first, a request's waiting for a lock), or refuses it with
     /// `TooMany` when the program, or the VFS, has as many as it may.
     pub fn admit(&mut self, koid: u64) -> Result<(), FsError> {
+        self.count(koid, false)
+    }
+
+    /// Counts a duplicate of the connection of a file that program `koid`
+    /// opened, or refuses it with `TooMany` when the program has as many
+    /// duplicates or connections as it may, or the VFS as many connections.
+    pub fn admit_duplicate(&mut self, koid: u64) -> Result<(), FsError> {
+        self.count(koid, true)
+    }
+
+    fn count(&mut self, koid: u64, duplicate: bool) -> Result<(), FsError> {
         let mine = self.per_program.entry(koid).or_default();
-        if self.total >= MAX_CONNECTIONS || *mine >= MAX_PER_PROGRAM {
-            if *mine == 0 {
+        let room = mine.all < MAX_PER_PROGRAM && (!duplicate || mine.duplicates < MAX_DUPLICATES_PER_PROGRAM);
+        if self.total >= MAX_CONNECTIONS || !room {
+            if mine.all == 0 {
                 self.per_program.remove(&koid);
             }
             return Err(FsError::TooMany);
         }
-        *mine += 1;
+        mine.all += 1;
+        mine.duplicates += usize::from(duplicate);
         self.total += 1;
         Ok(())
     }
 
-    /// Forgets a connection of program `koid` that closed.
+    /// Forgets a connection of program `koid` that closed, which
+    /// [`admit`](Self::admit) counted.
     pub fn release(&mut self, koid: u64) {
-        if let Some(n) = self.per_program.get_mut(&koid) {
-            *n -= 1;
-            if *n == 0 {
-                self.per_program.remove(&koid);
-            }
-            self.total -= 1;
+        self.forget(koid, false);
+    }
+
+    /// Forgets a duplicate of program `koid` that closed.
+    pub fn release_duplicate(&mut self, koid: u64) {
+        self.forget(koid, true);
+    }
+
+    fn forget(&mut self, koid: u64, duplicate: bool) {
+        let Some(mine) = self.per_program.get_mut(&koid) else { return };
+        // What was never counted changes nothing.
+        let of_that_kind = if duplicate { mine.duplicates } else { mine.all - mine.duplicates };
+        if of_that_kind == 0 {
+            return;
         }
+        mine.all -= 1;
+        mine.duplicates -= usize::from(duplicate);
+        if mine.all == 0 {
+            self.per_program.remove(&koid);
+        }
+        self.total -= 1;
     }
 
     /// The connections open now.
@@ -227,6 +281,42 @@ mod tests {
         // Releasing what was never admitted changes nothing.
         let total = c.total();
         c.release(9_999);
+        assert_eq!(c.total(), total);
+    }
+
+    #[test]
+    fn duplicates_leave_a_program_room_to_open_files() {
+        let mut c = Connections::new();
+        // Its children hold as many duplicates of its files as they may...
+        for _ in 0..MAX_DUPLICATES_PER_PROGRAM {
+            c.admit_duplicate(1).unwrap();
+        }
+        assert_eq!(c.admit_duplicate(1), Err(FsError::TooMany));
+        // ...and it opens files still, up to its share.
+        for _ in MAX_DUPLICATES_PER_PROGRAM..MAX_PER_PROGRAM {
+            c.admit(1).unwrap();
+        }
+        assert_eq!(c.admit(1), Err(FsError::TooMany));
+        // A file closing makes room for a file, not a duplicate; a duplicate
+        // closing, for a duplicate.
+        c.release(1);
+        assert_eq!(c.admit_duplicate(1), Err(FsError::TooMany));
+        assert_eq!(c.admit(1), Ok(()));
+        c.release_duplicate(1);
+        assert_eq!(c.admit_duplicate(1), Ok(()));
+        // Another program's are its own; one that opened all it may has no
+        // room for duplicates.
+        for _ in 0..MAX_PER_PROGRAM {
+            c.admit(2).unwrap();
+        }
+        assert_eq!(c.admit_duplicate(2), Err(FsError::TooMany));
+        // Releasing what was never admitted, of either kind, changes
+        // nothing.
+        c.admit_duplicate(3).unwrap();
+        let total = c.total();
+        c.release(3);
+        c.release_duplicate(2);
+        c.release_duplicate(9_999);
         assert_eq!(c.total(), total);
     }
 }

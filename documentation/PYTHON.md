@@ -196,10 +196,11 @@ Python's terms:
   alone (C's limit): with some hundred spawned processes at once (a
   `Pool(200)`), the next one's are past it, and it cannot be started
   (`OSError`, `EMFILE`); a forked child has them as they are.
-- **Some 250 open files a program**, the copies its children hold among
-  them (C's limit): a program with some 250 children at once, forked or
-  started, each holding a file it opened (its output, a log), opens no
-  more (`OSError`, `EMFILE`) until they end.
+- **Some 1000 open files a program**, its children's among them (C's
+  limit): each file a child has of the program's (its output, a log),
+  forked or started, is a copy, and copies take some 750 at most. Past
+  them `os.fork` and starting a process fail (`OSError`, `EMFILE`) until
+  children end, and the program still opens files.
 - **No shell.** `/system/bin/sh` is not there yet: `shell=True`,
   `os.system` and `os.popen` fail (`FileNotFoundError` for `/bin/sh`).
   The Terminal's commands are its own.
