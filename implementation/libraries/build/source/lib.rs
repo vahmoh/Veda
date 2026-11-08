@@ -5,9 +5,11 @@
 //! [`user_program`] gives the linker (LLVM's, in its ELF flavour) what
 //! makes a `no_std` binary a Veda program: a position-independent ELF64
 //! executable without a C runtime ([`LINK_ARGS`]), which its loader places
-//! at a random address and relocates; on ARM64's soft-float target, whose
-//! `core` is not position-independent, one whose read-only data its loader
-//! relocates too ([`arm64::SOFT_FLOAT_LINK_ARGS`]).
+//! at a random address and relocates. On ARM64, whose targets Rust links
+//! at a fixed address, it is linked position-independent all the same
+//! ([`arm64::LINK_ARGS`]); on its soft-float target, whose `core` is not
+//! position-independent, as one whose read-only data its loader relocates
+//! too ([`arm64::SOFT_FLOAT_LINK_ARGS`]).
 //!
 //! What depends on the architecture (its user target) is in
 //! `implementation/libraries/build/source/architectures/<architecture>/`.
@@ -20,7 +22,8 @@ pub mod amd64;
 pub mod arm64;
 
 /// The linker's arguments for a Veda program, beyond the target's (a static
-/// position-independent executable):
+/// executable, position-independent on AMD64; on ARM64,
+/// [`arm64::LINK_ARGS`] makes it so):
 ///
 /// * it starts at `runtime`'s entry point, which takes the bootstrap
 ///   channel;
@@ -30,27 +33,25 @@ pub mod arm64;
 ///   an address of its own).
 pub const LINK_ARGS: &[&str] = &["--entry=_rt_start", "-zpack-relative-relocs", "--icf=all"];
 
-/// Whether `target` is one Veda programs are built for: the user target,
-/// or the soft-float one of a program that leaves the vector registers
-/// alone.
-fn is_user_target(target: &str) -> bool {
-    [amd64::TARGET, arm64::TARGET, amd64::SOFT_FLOAT_TARGET, arm64::SOFT_FLOAT_TARGET].contains(&target)
+/// The linker's arguments for a Veda program built for `target`, beyond
+/// the target's; none if Veda programs are not built for it. They are built
+/// for the user target, or for the soft-float one if they leave the vector
+/// registers alone.
+fn link_args(target: &str) -> Vec<&'static str> {
+    match target {
+        amd64::TARGET | amd64::SOFT_FLOAT_TARGET => LINK_ARGS.to_vec(),
+        arm64::TARGET => [LINK_ARGS, arm64::LINK_ARGS].concat(),
+        arm64::SOFT_FLOAT_TARGET => [LINK_ARGS, arm64::LINK_ARGS, arm64::SOFT_FLOAT_LINK_ARGS].concat(),
+        _ => Vec::new(),
+    }
 }
 
-/// Emits the linker arguments for a Veda user-space executable, and those
-/// that make it position-independent on ARM64's soft-float target. Call
-/// this from the `build.rs` of every program crate.
+/// Emits the linker's arguments for a Veda user-space executable, those of
+/// the target it is built for. Call this from the `build.rs` of every
+/// program crate.
 pub fn user_program() {
     println!("cargo:rerun-if-changed=build.rs");
-    let target = std::env::var("TARGET").unwrap_or_default();
-    if is_user_target(&target) {
-        for arg in LINK_ARGS {
-            println!("cargo:rustc-link-arg-bins={arg}");
-        }
-    }
-    if target == arm64::SOFT_FLOAT_TARGET {
-        for arg in arm64::SOFT_FLOAT_LINK_ARGS {
-            println!("cargo:rustc-link-arg-bins={arg}");
-        }
+    for arg in link_args(&std::env::var("TARGET").unwrap_or_default()) {
+        println!("cargo:rustc-link-arg-bins={arg}");
     }
 }

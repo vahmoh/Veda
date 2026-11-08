@@ -14,14 +14,23 @@ pub const TARGET: &str = "aarch64-unknown-linux-musl";
 /// freestanding and soft-float, as the kernel's.
 pub const SOFT_FLOAT_TARGET: &str = "aarch64-unknown-none-softfloat";
 
+/// The linker's arguments for a program for [`TARGET`] or
+/// [`SOFT_FLOAT_TARGET`], beyond [`LINK_ARGS`](crate::LINK_ARGS): it is
+/// linked position-independent (`-pie`), as Rust links neither target's
+/// programs. [`TARGET`]'s code is position-independent, its `core` and
+/// `alloc` too, but Rust's specification of the target lacks
+/// `static-position-independent-executables` (AMD64's has it), so rustc
+/// links a static program for it `-static` alone: at LLVM's linker's fixed
+/// address, 0x200000.
+pub const LINK_ARGS: &[&str] = &["-pie"];
+
 /// The linker's arguments for a program for [`SOFT_FLOAT_TARGET`], beyond
-/// [`LINK_ARGS`](crate::LINK_ARGS). That target is the kernel's, which Rust
-/// links at a fixed address, and its `core` and `alloc` are compiled for
-/// one: their constants that hold addresses (a trait object's table, where
-/// a panic is) are in read-only data. Such a program is linked
-/// position-independent all the same (`-pie`), for its loader to place at a
-/// random address, its read-only data relocated too (`-z notext`, which
-/// marks it `DF_TEXTREL`): the loader relocates those pages in a copy of
-/// its own before the program runs, and maps them read-only
-/// (`elf::Elf::relocate`).
-pub const SOFT_FLOAT_LINK_ARGS: &[&str] = &["-pie", "-znotext"];
+/// [`LINK_ARGS`]. That target is the kernel's, which Rust links at a fixed
+/// address, and its `core` and `alloc` are compiled for one: their
+/// constants that hold addresses (a trait object's table, where a panic
+/// is) are in read-only data. Such a program is linked position-independent
+/// all the same, for its loader to place at a random address, its read-only
+/// data relocated too (`-z notext`, which marks it `DF_TEXTREL`): the loader
+/// relocates those pages in a copy of its own before the program runs, and
+/// maps them read-only (`elf::Elf::relocate`).
+pub const SOFT_FLOAT_LINK_ARGS: &[&str] = &["-znotext"];

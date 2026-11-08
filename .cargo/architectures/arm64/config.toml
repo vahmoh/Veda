@@ -26,7 +26,8 @@ rustflags = [
 # Rust ships hard-float) and linked by LLVM's linker, which Rust ships.
 # Nothing of Linux or musl is in them: no start files or C library
 # (`link-self-contained=no`); `runtime` starts them, and `build` gives the
-# linker the rest (see implementation/libraries/build). The POSIX layer and
+# linker the rest, position independence among it, which Rust leaves out on
+# this target (see implementation/libraries/build). The POSIX layer and
 # the media decoder's Rust half are built for it too, as static libraries
 # that C programs link. The driver VM's Linux programs, on this target too,
 # are built apart, with musl: implementation/guests/linux/.cargo/config.toml.

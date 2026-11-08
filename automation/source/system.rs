@@ -298,16 +298,21 @@ fn add_all(initrd: &mut initrd::builder::Builder, licensed: &mut BTreeSet<String
 }
 
 /// The executable at `path` as the system ships it, checked: of `kind`, if
-/// given (a Veda program has `runtime`'s note, a POSIX program none), and
-/// without its symbols and section headers (`elf::strip`), which the
-/// build's own copy keeps for debugging.
+/// given (a Veda program has `runtime`'s note, a POSIX program none; a Veda
+/// program is position-independent, as `build` links it, for its loader to
+/// place at a random address), and without its symbols and section headers
+/// (`elf::strip`), which the build's own copy keeps for debugging.
 fn shipped(path: &Path, kind: Option<elf::Kind>) -> Result<Vec<u8>> {
     let mut file = util::read(path)?;
     let invalid = |e: elf::ElfError| format!("{}: {e}", path.display());
-    let found = elf::Elf::parse_for(&file, architecture::current().machine).map_err(invalid)?.kind();
+    let executable = elf::Elf::parse_for(&file, architecture::current().machine).map_err(invalid)?;
+    let found = executable.kind();
     match kind {
         Some(elf::Kind::Veda) if found != elf::Kind::Veda => {
             return Err(format!("{}: not a Veda program (it lacks the note `runtime` gives one)", path.display()));
+        }
+        Some(elf::Kind::Veda) if !executable.is_position_independent() => {
+            return Err(format!("{}: a Veda program at a fixed address (not position-independent)", path.display()));
         }
         Some(elf::Kind::Posix) if found != elf::Kind::Posix => {
             return Err(format!(
